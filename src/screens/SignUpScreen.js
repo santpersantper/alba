@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Dimensions, Image, ActivityIndicator, Alert
@@ -19,7 +19,20 @@ const { height } = Dimensions.get('window');
 export default function SignUpScreen({ navigation }) {
   const scrollRef = useRef(null);
 
-const { request, response, promptAsync } = useSpotifyAuth(SPOTIFY_CLIENT_ID);
+  const fallbackSpotifyAuth = useMemo(() => ({
+    request: null,
+    response: null,
+    promptAsync: () => {
+      Alert.alert(
+        'Spotify unavailable',
+        'Spotify integration is not configured. Please contact support.'
+      );
+    },
+  }), []);
+
+  const { request, response, promptAsync } = SPOTIFY_CLIENT_ID
+    ? useSpotifyAuth(SPOTIFY_CLIENT_ID)
+    : fallbackSpotifyAuth;
   // page 1
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');           
@@ -43,10 +56,6 @@ const { request, response, promptAsync } = useSpotifyAuth(SPOTIFY_CLIENT_ID);
   const [goodreads, setGoodreads] = useState(''); 
 
   const [submitting, setSubmitting] = useState(false);
-
-  const SPOTIFY_CLIENT_ID =
-    process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID ??
-    Constants.expoConfig?.extra?.expoPublic?.SPOTIFY_CLIENT_ID;
 
   const [fontsLoaded] = useFonts({
     Poppins: require('../../assets/fonts/Poppins-Regular.ttf'),
