@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Alba",
+    "slug": "Alba",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": { "supportsTablet": true },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": { "favicon": "./assets/favicon.png" },
+    "scheme": "alba",
+    "extra": {
+      "expoPublic": {
+        "SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBob2Vwa2FjYnJ0b2xxbWx3a3Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA2MDUxMjcsImV4cCI6MjA3NjE4MTEyN30.ZtrCsy3ReW0ctykXqt9YWy14oevyzWZSdYALYPDX8fo",
+        "SPOTIFY_CLIENT_ID": "a9df23109a2c413cb4dc8bc91619f4a6"
+      }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-asset",
+      "expo-secure-store"
+    ]
+  }
+}
