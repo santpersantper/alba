@@ -1,0 +1,535 @@
+import React, { createContext, useContext, useEffect, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Localization from "expo-localization";
+
+const STORAGE_KEY = "alba_language";
+
+const STRINGS = {
+  en: {
+    group_info_title: "Group info",
+    search_members_placeholder: "Search members",
+    group_exit_success: "You left this group.",
+    group_report_success: "Thanks for your report.",
+    exit_group_button: "Exit group",
+    report_group_button: "Report group",
+    report_group_title: "Report group",
+    report_group_placeholder: "Tell us briefly what is wrong",
+    cancel_button: "Cancel",
+    submit_button: "Send",    
+    delete_group_button: "Delete group",
+
+    /* ---------- CommunitySettings ---------- */
+    community_settings_title: "Community Settings",
+    appearance_section_title: "Appearance",
+    night_auto: "Night mode: automatic after sunset",
+    night_on: "Night mode: always on",
+    night_off: "Night mode: always off",
+    show_local_news: "Show local news / articles",
+    profile_visible_to_all: "Make your profile visible to anyone",
+    allow_dms_anyone: "Allow DMs from anyone",
+    saved_posts_button: "See my saved posts",
+
+    language_section_title: "Language",
+    language_en: "English",
+    language_it: "Italian",
+
+    /* ---------- Tabs / screens ---------- */
+    community_tab_title: "Community",
+
+    /* ---------- CreatePostScreen ---------- */
+    create_post_header_title: "Create Post",
+    create_post_title_label: "Title",
+    create_post_description_placeholder: "Your post's text",
+    create_post_any_date: "Any date",
+    create_post_any_time: "Any time",
+    create_post_add_media_button: "Add Media",
+    create_post_post_type_title: "Post Type",
+    create_post_post_type_event: "Event",
+    create_post_post_type_ad: "Ad",
+    create_post_post_type_article: "Article",
+    create_post_post_type_profile: "Profile Post",
+    create_post_post_type_product: "Product",
+    create_post_location_placeholder: "Location",
+
+    create_post_error_title_required: "Title is required.",
+    create_post_error_not_authenticated: "Not authenticated.",
+    create_post_error_location_denied: "Location permission denied.",
+    create_post_error_media_permission:
+      "Permission required to access media library.",
+    create_post_error_media_required: "Please add at least one photo or video.",
+    create_post_error_event_fields_required:
+      "For events, date, time and location are required.",
+    create_post_success_title: "Success",
+    create_post_success_message: "Post created!",
+    create_post_fail_title: "Failed to create post",
+
+    /* ---------- Generic actions (used in Post / EventPanel / AdPanel) ---------- */
+    actions_tickets: "Tickets",
+    actions_join_chat: "Join event chat",
+    actions_share: "Share",
+    actions_save: "Save",
+    actions_buy: "Buy",
+    actions_message_seller: "Message seller",
+
+    /* ---------- Post captions ---------- */
+    caption_read_more: "Read more",
+
+    /* ---------- Post menu / confirm ---------- */
+    menu_translate: "Translate",
+    menu_report: "Report",
+    menu_save: "Save",
+    menu_saved: "Saved",
+    menu_delete: "Delete",
+    confirm_delete_title: "Are you sure you want to delete your post?",
+    confirm_yes: "Yes",
+    confirm_no: "No",
+
+    filter_any_date: "Any date",
+    filter_any_time: "Any time",
+    filter_morning_range: "Morning (6-12)",
+    filter_afternoon_range: "Afternoon (12-20)",
+    filter_night_range: "Night (20-6)",
+
+    /* ---------- EventPanel ---------- */
+    event_checkbox_group_chat: "Create public event group chat",
+    event_checkbox_ticketing: "Allow in-app ticketing",
+    event_ticket_general: "General",
+    event_ticket_vip: "VIP",
+    event_ticket_name: "Ticket name",
+    event_free_label: "Free",
+    event_cost_label: "Cost:",
+    event_required_info_title: "Required buyer info",
+    event_required_info_placeholder: "Example: name, age, etc.",
+    event_add_ticket_button: "Add ticket type",
+    event_actions_title: "Select actions",
+    event_action_allow_subgroups: "Allow users to create sub-groups",
+    event_action_allow_invites: "Allow users to invite others to chat",
+
+    /* ---------- AdPanel ---------- */
+    ad_checkbox_target_interested: "Target to interested users only",
+    ad_checkbox_iap: "Allow in-app purchases",
+    ad_product_name_placeholder: "Product name",
+    ad_cost_label: "Cost:",
+    ad_required_info_title: "Required buyer info",
+    ad_required_info_placeholder: "Example: name, age, etc.",
+    ad_add_product_button: "Add product",
+
+    /* ---------- Labels / CommunityScreen ---------- */
+    label_sports: "Sports",
+    label_parties: "Parties",
+    label_cultural: "Cultural events",
+    label_music: "Music",
+    label_science_tech: "Science & Tech",
+    label_culinary: "Culinary",
+    label_english_speaking: "English-speaking",
+
+    labels_add_button: "+ Add",
+    labels_new_label_placeholder: "New label",
+
+    community_any_date: "Any date",
+    community_any_time: "Any time",
+    community_time_morning: "Morning",
+    community_time_afternoon: "Afternoon",
+    community_time_night: "Night",
+    community_time_morning_range: "Morning (6–12)",
+    community_time_afternoon_range: "Afternoon (12–20)",
+    community_time_night_range: "Night (20–6)",
+    community_no_events_for_filters: "No events for this date/time.",
+
+    /* ---------- Verification flow ---------- */
+    verification_pre_title: "Get verified",
+    verification_pre_body:
+      "To keep our Community organic and genuine, we require all users to go through facial verification before they talk to others.",
+    verification_pre_button_start: "Start",
+    verification_pre_button_upload: "Upload profile picture",
+
+    verification_face_title: "Face verification",
+    verification_face_body:
+      "We’ll compare your face from different angles with your profile picture to confirm that it’s really you.",
+    verification_face_button_dev_complete: "I'm done – mark me as verified",
+
+    avatar_invalid_title: "Profile picture",
+    avatar_invalid_message:
+      "Please upload a profile picture where your face is visible.",
+
+    /* ---------- Chat / blocking ---------- */
+    chat_user_blocked_snippet: "User blocked.",
+    chat_single_blocked_body:
+      "This user is blocked. To see their messages, you have to unblock them.",
+    chat_single_unblock_cta: "Unblock",
+    chat_single_unblock_confirm_title:
+      "Are you sure you want to unblock this user?",
+    chat_single_unblock_confirm_no: "No",
+    chat_single_unblock_confirm_yes: "Yes",
+
+    group_message_member: 'Message this user',
+    group_make_admin: 'Make this user admin',
+    group_remove_member: 'Remove this user',
+    group_subgroups_title: 'Subgroups',
+    group_members_title: 'Members',
+    group_add_subgroup_button: 'Add subgroup',
+    group_invite_user_button: 'Invite users',
+    group_new_subgroup_placeholder: 'New subgroup',
+
+    create_post_post_type_feed: 'Feed Post',
+    chat_search_people_title: 'Users',
+    chat_search_message_button: 'Message',
+    loading_text: 'Loading',
+
+    signup_name_placeholder: 'Firstname Lastname',
+    signup_email_placeholder: 'Email',
+    signup_username_placeholder: 'username',
+    signup_password_placeholder: 'Password',
+    signup_age_placeholder: 'Age',
+    signup_age_picker_title: 'Age',
+    signup_picker_done: 'Done',
+    signup_gender_placeholder: 'Gender',
+    signup_gender_picker_title: 'Gender',
+    signup_city_placeholder: 'City',
+    signup_button_label: 'Sign up',
+
+    chat_search_no_matching_users: 'No matching users.',
+    logout_title: 'Log out',
+    logout_confirm: 'Are you sure you want to log out?',
+
+    // ✅ Community area slider
+    settings_area_title: "Select Community area",
+    settings_area_helper:
+      "You will only get events, people and ads within this distance of your location",
+    settings_meters: "meters",
+
+    // ✅ EventSettings / AdSettings labels
+    event_settings_tags_title: "What events do you want to see?",
+    event_settings_tags_placeholder: "Music concerts, sports, climbing, etc.",
+    ad_settings_tags_title: "What ads do you want to see?",
+    ad_settings_tags_placeholder: "Food places near Piola, vintage markets",
+
+    signup_have_account_prefix: "Already have an account?",
+    login_button_label: 'Log in',
+
+    event_settings_title: 'Event Settings',
+    edit_event_post: 'Edit event post',
+    change_date_time: 'Change date and time',
+    ticket_holders: 'Ticket holders',
+    unconfirmed: 'Unconfirmed',
+    dm_whole_list: 'DM whole list',
+    invite_previous_event: 'Invite users from previous event',
+    invite_users: 'Invite users',
+    delete_event: 'Delete event',    
+    change_location: "Change location",
+    not_on_alba_yet: "not on Alba yet",
+
+    past_events: "Past events",    
+    delete_event_confirm: "Do you want to delete this event?",
+    remove_user_confirm: "Do you want to remove this user?",
+    open_attendees_list: "Open attendees list",
+    close_attendees_list: "Close attendees list",    
+    select_all: 'Select all',
+    invite: 'Invite',
+    invite_default_message: "let's go to this event",
+
+    my_tickets_title: 'My tickets',
+    no_qr_found: 'No QR tickets found for this event yet.'
+  },
+
+  it: {
+
+    group_info_title: "Informazione gruppo",
+    search_members_placeholder: "Cerca membri",
+    group_exit_success: "Hai lasciato questo gruppo.",
+    group_report_success: "Grazie per la tua segnalazione.",
+    exit_group_button: "Uscire dal gruppo",
+    report_group_button: "Segnalare gruppo",
+    report_group_title: "Segnalare gruppo",
+    report_group_placeholder: "Perché segnalare questo gruppo",
+    cancel_button: "Annullare",
+    submit_button: "Inviare",
+    delete_group_button: "Cancellare gruppo",
+
+    /* ---------- CommunitySettings ---------- */
+    community_settings_title: "Impostazioni Community",
+    appearance_section_title: "Aspetto",
+    night_auto: "Modalità notte: automatica dopo il tramonto",
+    night_on: "Modalità notte: sempre attiva",
+    night_off: "Modalità notte: sempre disattivata",
+    show_local_news: "Mostra notizie / articoli locali",
+    profile_visible_to_all: "Rendi il tuo profilo visibile a tutti",
+    allow_dms_anyone: "Permetti messaggi privati da chiunque",
+    saved_posts_button: "Vedi i miei post salvati",
+
+    language_section_title: "Lingua",
+    language_en: "Inglese",
+    language_it: "Italiano",
+
+    /* ---------- Tabs / screens ---------- */
+    community_tab_title: "Community",
+
+    /* ---------- CreatePostScreen ---------- */
+    create_post_header_title: "Crea post",
+    create_post_title_label: "Titolo",
+    create_post_description_placeholder: "Testo del tuo post",
+    create_post_any_date: "Qualsiasi data",
+    create_post_any_time: "Qualsiasi ora",
+    create_post_add_media_button: "Aggiungi foto/video",
+    create_post_post_type_title: "Tipo di post",
+    create_post_post_type_event: "Evento",
+    create_post_post_type_ad: "Annuncio",
+    create_post_post_type_article: "Articolo",
+    create_post_post_type_profile: "Post profilo",
+    create_post_post_type_product: "Prodotto",
+    create_post_location_placeholder: "Posizione",
+
+    create_post_error_title_required: "Il titolo è obbligatorio.",
+    create_post_error_not_authenticated: "Non sei autenticato.",
+    create_post_error_location_denied: "Permesso posizione negato.",
+    create_post_error_media_permission:
+      "Serve il permesso per accedere alla libreria.",
+    create_post_error_media_required:
+      "Aggiungi almeno una foto o un video.",
+    create_post_error_event_fields_required:
+      "Per gli eventi, data, orario e posizione sono obbligatori.",
+    create_post_success_title: "Fatto",
+    create_post_success_message: "Post creato!",
+    create_post_fail_title: "Errore nella creazione del post",
+
+    /* ---------- Generic actions ---------- */
+    actions_tickets: "Biglietti",
+    actions_join_chat: "Chat dell'evento",
+    actions_share: "Condividi",
+    actions_save: "Salva",
+    actions_buy: "Compra",
+    actions_message_seller: "Scrivi al venditore",
+
+    /* ---------- Post captions ---------- */
+    caption_read_more: "Mostra altro",
+
+    /* ---------- Post menu / confirm ---------- */
+    menu_translate: "Traduci",
+    menu_report: "Segnala",
+    menu_save: "Salva",
+    menu_saved: "Salvato",
+    menu_delete: "Elimina",
+    confirm_delete_title: "Sei sicuro di voler eliminare il post?",
+    confirm_yes: "Sì",
+    confirm_no: "No",
+
+    filter_any_date: "Qualsiasi data",
+    filter_any_time: "Qualsiasi orario",
+    filter_morning_range: "Mattina (6–12)",
+    filter_afternoon_range: "Pomeriggio (12–20)",
+    filter_night_range: "Sera / notte (20–6)",
+
+    /* ---------- EventPanel ---------- */
+    event_checkbox_group_chat: "Crea una chat pubblica per l'evento",
+    event_checkbox_ticketing: "Permetti la biglietteria in app",
+    event_ticket_general: "Generale",
+    event_ticket_vip: "VIP",
+    event_ticket_name: "Nome biglietto",
+    event_free_label: "Gratis",
+    event_cost_label: "Costo:",
+    event_required_info_title: "Dati richiesti all’acquirente",
+    event_required_info_placeholder: "Esempio: nome, età, ecc.",
+    event_add_ticket_button: "Aggiungi tipo di biglietto",
+    event_actions_title: "Seleziona azioni",
+    event_action_allow_subgroups:
+      "Permetti agli utenti di creare sottogruppi",
+    event_action_allow_invites:
+      "Permetti agli utenti di invitare altri in chat",
+
+    /* ---------- AdPanel ---------- */
+    ad_checkbox_target_interested: "Mostra solo a utenti interessati",
+    ad_checkbox_iap: "Permetti acquisti in app",
+    ad_product_name_placeholder: "Nome prodotto",
+    ad_cost_label: "Costo:",
+    ad_required_info_title: "Dati richiesti all’acquirente",
+    ad_required_info_placeholder: "Esempio: nome, età, ecc.",
+    ad_add_product_button: "Aggiungi prodotto",
+
+    /* ---------- Labels / CommunityScreen ---------- */
+    label_sports: "Sport",
+    label_parties: "Feste",
+    label_cultural: "Eventi culturali",
+    label_music: "Musica",
+    label_science_tech: "Scienza & Tech",
+    label_culinary: "Cucina",
+    label_english_speaking: "Inglese",
+
+    labels_add_button: "+ Aggiungi",
+    labels_new_label_placeholder: "Nuova etichetta",
+
+    community_any_date: "Qualsiasi data",
+    community_any_time: "Qualsiasi orario",
+    community_time_morning: "Mattina",
+    community_time_afternoon: "Pomeriggio",
+    community_time_night: "Sera / notte",
+    community_time_morning_range: "Mattina (6–12)",
+    community_time_afternoon_range: "Pomeriggio (12–20)",
+    community_time_night_range: "Sera / notte (20–6)",
+    community_no_events_for_filters:
+      "Non ci sono eventi per questa data/orario.",
+
+    /* ---------- Verification flow ---------- */
+    verification_pre_title: "Verificati",
+    verification_pre_body:
+      "Per mantenere la Community autentica, chiediamo a tutti gli utenti di fare una breve verifica facciale prima di interagire con gli altri.",
+    verification_pre_button_start: "Inizia",
+    verification_pre_button_upload: "Carica foto profilo",
+
+    verification_face_title: "Verifica facciale",
+    verification_face_body:
+      "Confronteremo il tuo volto da diverse angolazioni con la foto profilo per confermare che sei davvero tu.",
+    verification_face_button_dev_complete: "Ho finito – segnami verificato",
+
+    avatar_invalid_title: "Foto profilo",
+    avatar_invalid_message:
+      "Carica una foto profilo in cui il tuo volto sia ben visibile.",
+
+    /* ---------- Chat / blocking ---------- */
+    chat_user_blocked_snippet: "Utente bloccato.",
+    chat_single_blocked_body:
+      "Questo utente è bloccato. Per vedere i suoi messaggi devi sbloccarlo.",
+    chat_single_unblock_cta: "Sblocca",
+    chat_single_unblock_confirm_title:
+      "Sei sicuro di voler sbloccare questo utente?",
+    chat_single_unblock_confirm_no: "No",
+    chat_single_unblock_confirm_yes: "Sì",
+
+    group_message_member: 'Invia un messaggio',
+    group_make_admin: 'Rendere amministratore',
+    group_remove_member: 'Rimuovi questo utente',
+    cancel: 'Annullare',
+    group_subgroups_title: 'Sottogruppi',
+    group_members_title: 'Membri',
+    group_add_subgroup_button: 'Aggiungere sottogruppo',
+    group_invite_user_button: 'Invitare utenti',
+    group_new_subgroup_placeholder: 'Nuovo sottogruppo',
+
+    create_post_post_type_feed: 'Post Feed',
+    chat_search_people_title: 'Utenti',
+    chat_search_message_button: 'Invia',
+    loading_text: 'Caricamento',
+
+    signup_name_placeholder: 'Nome Cognome',
+    signup_email_placeholder: 'Email',
+    signup_username_placeholder: 'nomeutente',
+    signup_password_placeholder: 'Password',
+    signup_age_placeholder: 'Età',
+    signup_age_picker_title: 'Età',
+    signup_picker_done: 'Fatto',
+    signup_gender_placeholder: 'Genere',
+    signup_gender_picker_title: 'Genere',
+    signup_city_placeholder: 'Città',
+    signup_button_label: 'Iscriviti',
+
+    chat_search_no_matching_users: 'Nessun utente corrispondente.',
+
+        // ✅ Community area slider
+    settings_area_title: "Seleziona area Community",
+    settings_area_helper:
+      "Vedrai solo eventi, utenti e annunci entro questa distanza dalla tua posizione",
+    settings_meters: "metri",
+
+    // ✅ EventSettings / AdSettings labels
+    event_settings_tags_title: "Quali eventi vuoi vedere?",
+    event_settings_tags_placeholder: "Concerti, sport, arrampicata, ecc.",
+    ad_settings_tags_title: "Quali annunci vuoi vedere?",
+    ad_settings_tags_placeholder: "Cibo vicino a Piola, mercatini vintage",
+
+    signup_have_account_prefix: "Hai già un account?",
+    login_button_label: 'Accedi',
+
+    event_settings_title: 'Impostazioni Evento',
+    edit_event_post: 'Modifica post evento',
+    change_date_time: 'Modifica data e ora',
+    ticket_holders: 'Biglietto comprato',
+    unconfirmed: 'Non confermati',
+    dm_whole_list: 'Messaggia intera lista',
+    invite_previous_event: 'invitare utenti da evento precedente',
+    invite_users: 'Invitare utenti',
+    delete_event: 'Elimina evento',
+    change_location: "Cambiare ubicazione",    
+    not_on_alba_yet: "non usa Alba",
+
+    past_events: "Eventi passati",
+    delete_event_confirm: "Vuoi eliminare quest'evento?",
+    remove_user_confirm: "Vuoi rimuovere quest'utente?",
+    open_attendees_list: "Aprire lista di partecipanti",
+    close_attendees_list: "Chiudere lista di partecipanti",
+    select_all: 'Selezionare tutti',
+    invite: 'Invitare',    
+    invite_default_message: "andiamo a questo evento?",
+
+    my_tickets_title: 'I miei biglietti',
+    no_qr_found: 'Nessun biglietto QR trovato per questo evento.'
+  }
+};
+
+const LanguageContext = createContext({
+  language: "en",
+  setLanguage: () => {},
+  t: (key) => key,
+});
+
+function detectDeviceLanguage() {
+  try {
+    const locales = Localization.getLocales?.() || [];
+    const code = (locales[0]?.languageCode || "").toLowerCase();
+    return code === "it" ? "it" : "en";
+  } catch {
+    return "en";
+  }
+}
+
+export const LanguageProvider = ({ children }) => {
+  const [language, setLanguageState] = useState("en");
+
+  // Load from storage on mount; if none, use device language
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(STORAGE_KEY);
+
+        if (!mounted) return;
+
+        if (stored === "en" || stored === "it") {
+          setLanguageState(stored);
+          return;
+        }
+
+        const deviceLang = detectDeviceLanguage();
+        setLanguageState(deviceLang);
+        AsyncStorage.setItem(STORAGE_KEY, deviceLang).catch(() => {});
+      } catch (e) {
+        console.warn("Language load error", e);
+        const deviceLang = detectDeviceLanguage();
+        if (mounted) setLanguageState(deviceLang);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Persist whenever language changes
+  useEffect(() => {
+    AsyncStorage.setItem(STORAGE_KEY, language).catch((e) =>
+      console.warn("Language save error", e)
+    );
+  }, [language]);
+
+  const setLanguage = (next) => {
+    if (next === "en" || next === "it") setLanguageState(next);
+  };
+
+  const t = (key) => STRINGS[language]?.[key] || STRINGS.en?.[key] || key || "";
+
+  return (
+    <LanguageContext.Provider value={{ language, setLanguage, t }}>
+      {children}
+    </LanguageContext.Provider>
+  );
+};
+
+export const useAlbaLanguage = () => useContext(LanguageContext);
