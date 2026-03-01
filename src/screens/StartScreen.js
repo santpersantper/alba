@@ -160,7 +160,7 @@ export default function StartScreen({ navigation }) {
         ]}
       >
         <Text style={styles.btnText}>
-          {loading ? 'Logging in…' : 'log in'}
+          {loading ? 'logging in…' : 'log in'}
         </Text>
       </TouchableOpacity>
 

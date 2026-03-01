@@ -48,7 +48,6 @@ export default {
       expoPublic: {
         SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
         SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
-        SPOTIFY_CLIENT_ID: process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID,
         STRIPE_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY,
         // In production use your actual server domain, e.g. https://api.alba.app
         API_URL: process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000",
