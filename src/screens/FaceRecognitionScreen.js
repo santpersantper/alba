@@ -17,10 +17,23 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import Constants from "expo-constants";
 
-const BACKEND_VERIFY_URLS = [
-  "https://qe6bqd3ri0.execute-api.eu-north-1.amazonaws.com/verify",
-];
+// Lambda endpoint — read from env so the URL is not baked into the binary.
+// Set EXPO_PUBLIC_LAMBDA_VERIFY_URL in .env.local / EAS Secrets.
+const LAMBDA_VERIFY_URL =
+  process.env.EXPO_PUBLIC_LAMBDA_VERIFY_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.LAMBDA_VERIFY_URL ??
+  "";
+
+const BACKEND_VERIFY_URLS = LAMBDA_VERIFY_URL ? [LAMBDA_VERIFY_URL] : [];
+
+// Express server /verify-face endpoint — uses service-role key to write is_verified.
+const _API_BASE =
+  process.env.EXPO_PUBLIC_API_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
+  "http://localhost:3000";
+const VERIFY_FACE_URL = `${_API_BASE}/verify-face`;
 
 
 function short(s, n = 220) {
@@ -211,17 +224,31 @@ export default function FaceRecognitionScreen() {
       }
 
 
-      // 6) mark verified
-      log("Step 6: update profiles.is_verified");
-      const { error: upErr } = await supabase
-        .from("profiles")
-        .update({
-          is_verified: true,
-          verified_at: new Date().toISOString(),
-        })
-        .eq("id", user.id);
+      // 6) Mark verified via server endpoint (service-role key on server-side).
+      // We never write is_verified directly from the client — the RLS policy blocks it,
+      // and this server endpoint independently controls the write.
+      log("Step 6: POST /verify-face to server");
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) throw new Error("Session expired. Please log in again.");
 
-      if (upErr) throw upErr;
+      const verifyRes = await fetchWithTimeout(
+        VERIFY_FACE_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ userId: user.id }),
+        },
+        15000
+      );
+
+      if (!verifyRes.ok) {
+        const errText = await verifyRes.text().catch(() => "");
+        throw new Error(`Server verification failed: ${verifyRes.status} ${errText}`);
+      }
 
       log("SUCCESS → reset to Community");
       navigation.reset({ index: 0, routes: [{ name: "Community" }] });

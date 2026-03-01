@@ -1,6 +1,7 @@
 // routes/face.js
 import express from "express";
 import { RekognitionClient, DetectFacesCommand } from "@aws-sdk/client-rekognition";
+import { createClient } from "@supabase/supabase-js";
 
 const router = express.Router();
 
@@ -11,6 +12,26 @@ const rekognition = new RekognitionClient({
   // - or IAM role (EC2/ECS/Lambda)
 });
 
+// Supabase admin client to verify Bearer tokens without trusting the client
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } }
+);
+
+// ── Auth middleware: validate Supabase JWT, attach req.user
+async function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Authentication required." });
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data?.user) return res.status(401).json({ error: "Invalid or expired session." });
+
+  req.user = data.user;
+  next();
+}
+
 router.post("/verify", async (req, res) => {
   // keep your existing /verify here (or import it)
   return res.status(501).json({ error: "verify not implemented in this file" });
@@ -18,10 +39,11 @@ router.post("/verify", async (req, res) => {
 
 /**
  * POST /api/face/detect-avatar
- * Body: { imageBase64: string }  // base64 WITHOUT data:image/... prefix recommended
+ * Requires a valid Supabase session (Bearer token).
+ * Body: { imageBase64: string }
  * Returns: { faceDetected: boolean, faceCount: number, confidence?: number }
  */
-router.post("/detect-avatar", async (req, res) => {
+router.post("/detect-avatar", requireAuth, async (req, res) => {
   try {
     const { imageBase64 } = req.body || {};
     if (!imageBase64 || typeof imageBase64 !== "string") {
@@ -47,8 +69,6 @@ router.post("/detect-avatar", async (req, res) => {
     const faces = Array.isArray(out.FaceDetails) ? out.FaceDetails : [];
     const faceCount = faces.length;
 
-    // If there is at least one face, consider it detected.
-    // Optionally require a minimum confidence:
     const topConfidence =
       faceCount > 0 ? Number(faces[0]?.Confidence ?? 0) : 0;
 

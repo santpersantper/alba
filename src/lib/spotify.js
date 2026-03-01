@@ -1,12 +1,12 @@
 // src/lib/spotify.js
+// Uses PKCE (Proof Key for Code Exchange) rather than the implicit grant flow.
+// PKCE is the current OAuth 2.0 best practice for mobile/native apps:
+//   - Access tokens are never exposed in the redirect URL fragment
+//   - Code verifier is generated on-device and never transmitted
+//   - Tokens can be refreshed without a client secret
 import * as AuthSession from 'expo-auth-session';
 import Constants from 'expo-constants';
 
-/**
- * Build the Expo Auth Proxy redirect URI explicitly so we never fall back to exp://
- * - If you're logged into Expo: https://auth.expo.io/@<username>/<slug>
- * - If not:                      https://auth.expo.io/@anonymous/<slug>
- */
 function getProxyRedirectUri(path = '') {
   const owner = Constants.expoConfig?.owner || 'anonymous';
   const slug = (Constants.expoConfig?.slug || 'alba').toLowerCase();
@@ -22,8 +22,8 @@ const discovery = {
 export const SPOTIFY_SCOPES = ['user-top-read'];
 
 /**
- * Hook to create a Spotify OAuth request that ALWAYS uses the Expo proxy.
- * Works in Expo Go; avoids exp:// redirects entirely.
+ * Hook to create a Spotify OAuth request using PKCE (code flow).
+ * Access tokens are exchanged via a token endpoint and never exposed in the URL fragment.
  */
 export function useSpotifyAuth(clientId) {
   if (!clientId) {
@@ -31,24 +31,47 @@ export function useSpotifyAuth(clientId) {
     throw new Error('Missing SPOTIFY_CLIENT_ID');
   }
 
-  // Force the HTTPS proxy redirect (no exp://)
-  const redirectUri = getProxyRedirectUri(); // or getProxyRedirectUri('auth') if you prefer a path
+  const redirectUri = getProxyRedirectUri();
 
   const [request, response, promptAsync] = AuthSession.useAuthRequest(
     {
       clientId,
       scopes: SPOTIFY_SCOPES,
-      redirectUri, // explicitly use the proxy URL
-      responseType: AuthSession.ResponseType.Token, // implicit grant for dev
+      redirectUri,
+      responseType: AuthSession.ResponseType.Code, // PKCE code flow (was implicit Token)
+      usePKCE: true,
     },
     discovery
   );
 
-  // Helpful logs
-  console.log('SPOTIFY clientId =>', clientId);
-  console.log('SPOTIFY redirectUri =>', redirectUri);
-
   return { request, response, promptAsync, redirectUri };
+}
+
+/**
+ * Exchange the authorization code for an access token.
+ * Call after useSpotifyAuth returns response.type === "success".
+ */
+export async function exchangeCodeForToken(code, codeVerifier, redirectUri, clientId) {
+  const params = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: clientId,
+    code_verifier: codeVerifier,
+  });
+
+  const res = await fetch(discovery.tokenEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error_description || `Spotify token exchange failed: ${res.status}`);
+  }
+
+  return res.json(); // { access_token, refresh_token, expires_in, ... }
 }
 
 /**

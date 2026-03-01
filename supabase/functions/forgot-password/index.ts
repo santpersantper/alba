@@ -1,10 +1,20 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+// Restrict CORS to the app's custom scheme and any web frontend domain.
+// Add your web domain to the ALLOWED_ORIGINS secret in Supabase dashboard if needed.
+// e.g.  supabase secrets set ALLOWED_ORIGINS="alba://,https://app.yourdomain.com"
+const rawAllowed = Deno.env.get("ALLOWED_ORIGINS") ?? "alba://";
+const allowedOrigins = new Set(rawAllowed.split(",").map((o: string) => o.trim()));
+
+function corsHeaders(origin: string | null) {
+  // Allow native app calls (no origin) and explicitly listed origins only
+  const allowed = !origin || allowedOrigins.has(origin) ? (origin ?? "*") : "";
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+  };
+}
 
 const WORDS = [
   "apple","beach","cloud","delta","eagle","flame","grove","hotel",
@@ -19,8 +29,11 @@ function randomPassword(): string {
 }
 
 Deno.serve(async (req) => {
+  const origin = req.headers.get("origin");
+  const headers = corsHeaders(origin);
+
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers });
   }
 
   try {
@@ -29,7 +42,7 @@ Deno.serve(async (req) => {
     if (!email || typeof email !== "string") {
       return new Response(JSON.stringify({ error: "Email required" }), {
         status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
       });
     }
 
@@ -52,14 +65,14 @@ Deno.serve(async (req) => {
         users.find(
           (u) => u.email?.toLowerCase() === email.trim().toLowerCase()
         ) ?? null;
-      if (!targetUser && users.length < 1000) break; // no more pages
+      if (!targetUser && users.length < 1000) break;
       page++;
     }
 
-    // Always return ok — never reveal whether the email exists
+    // Always return ok — never reveal whether the email exists (prevents user enumeration)
     if (!targetUser) {
       return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
       });
     }
 
@@ -71,10 +84,6 @@ Deno.serve(async (req) => {
     );
     if (updateErr) throw updateErr;
 
-    // Send email via Resend (https://resend.com — free tier: 3000 emails/month)
-    // Set RESEND_API_KEY and EMAIL_FROM in your Supabase project secrets:
-    //   supabase secrets set RESEND_API_KEY=re_...
-    //   supabase secrets set EMAIL_FROM="Alba <noreply@yourdomain.com>"
     const resendKey = Deno.env.get("RESEND_API_KEY");
     const emailFrom =
       Deno.env.get("EMAIL_FROM") ?? "Alba <noreply@yourdomain.com>";
@@ -114,21 +123,18 @@ Deno.serve(async (req) => {
         console.error("[forgot-password] Resend error:", resp.status, body);
       }
     } else {
-      // Fallback: log password to edge function logs (development only — remove in production)
-      console.warn(
-        "[forgot-password] RESEND_API_KEY not set — generated password:",
-        newPassword
-      );
+      // RESEND_API_KEY not set — warn without leaking the generated password.
+      console.warn("[forgot-password] RESEND_API_KEY not configured. Password was generated but not delivered.");
     }
 
     return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...headers, "Content-Type": "application/json" },
     });
   } catch (err) {
     console.error("[forgot-password] error:", err);
     return new Response(JSON.stringify({ error: "Internal error" }), {
       status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: { ...headers, "Content-Type": "application/json" },
     });
   }
 });

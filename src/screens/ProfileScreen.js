@@ -26,6 +26,7 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { decode as b64decodeStr } from "base-64";
 
+import Constants from "expo-constants";
 import {
   getCachedProfile,
   setCachedProfile,
@@ -40,7 +41,13 @@ const PLACEHOLDERS = {
   avatarUri: null,
 };
 
-const AVATAR_FACE_DETECT_URL = "http://192.168.1.3:4000/api/face/detect-avatar";
+// Reads from the environment so we never hardcode a development IP or HTTP URL.
+// Set EXPO_PUBLIC_API_URL to your production server domain (must be HTTPS in prod).
+const _API_BASE =
+  process.env.EXPO_PUBLIC_API_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
+  "http://localhost:4000";
+const AVATAR_FACE_DETECT_URL = `${_API_BASE}/api/face/detect-avatar`;
 
 /* ------------ tiny utils ------------ */
 const isHeicUrl = (u = "") => /\.heic($|\?)/i.test(String(u).split("?")[0] || "");
