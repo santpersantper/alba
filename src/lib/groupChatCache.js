@@ -4,7 +4,7 @@ import { supabase } from "./supabase";
 
 /* ---------------- cache keys ---------------- */
 const CACHE_VER = 2;
-const CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7d
+const CACHE_MAX_AGE_MS = 1000 * 60 * 5; // 5 min — keeps profile names fresh
 
 const msgKey = (chatId) => `alba_groupchat_msgs_v${CACHE_VER}:${chatId}`;
 const profKey = (chatId) => `alba_groupchat_profiles_v${CACHE_VER}:${chatId}`;

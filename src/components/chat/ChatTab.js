@@ -1,17 +1,9 @@
 // components/chat/ChatTab.js
-import React, { useMemo } from "react";
+import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Image as ExpoImage } from "expo-image"; // ✅ disk caching
 import { useAlbaTheme } from "../../theme/ThemeContext";
 
-function parseDateTime(dateStr, timeStr) {
-  if (!dateStr || !timeStr) return null;
-  try {
-    return new Date(`${dateStr}T${timeStr}`);
-  } catch {
-    return null;
-  }
-}
 
 export default function ChatTab({
   type = "single",
@@ -22,18 +14,13 @@ export default function ChatTab({
   lastSender = "other",
   lastDate,
   lastTime,
-  lastOpenedAt,
   displayTime,
+  unreadCount = 0,
   onPress,
 }) {
   const { theme, isDark } = useAlbaTheme();
 
-  const sentAt = useMemo(() => parseDateTime(lastDate, lastTime), [lastDate, lastTime]);
-  const openedAt = useMemo(() => (lastOpenedAt ? new Date(lastOpenedAt) : null), [lastOpenedAt]);
-
-  const isIncoming = lastSender !== "me";
-  const isRead = !isIncoming || (openedAt && sentAt && openedAt >= sentAt);
-  const isUnread = isIncoming && !isRead;
+  const isUnread = unreadCount > 0;
 
   const fallbackLetters = (initials || name?.[0] || "?").slice(0, 2);
 

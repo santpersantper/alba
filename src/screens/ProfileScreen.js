@@ -1,5 +1,6 @@
 // screens/ProfileScreen.js
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   View,
   Text,
@@ -158,6 +159,9 @@ export default function ProfileScreen({ navigation, route }) {
   const [prettyCity, setPrettyCity] = useState(null);
 
   const [showFullBio, setShowFullBio] = useState(false);
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioEditValue, setBioEditValue] = useState("");
+  const [savingBio, setSavingBio] = useState(false);
 
   // ✅ render sources can be remote OR file://
   const [coverRenderable, setCoverRenderable] = useState(null);
@@ -200,46 +204,48 @@ export default function ProfileScreen({ navigation, route }) {
     };
   }, []);
 
-  /* ---------------- PROFILE BOOT: cache immediately ---------------- */
-  useEffect(() => {
-    let alive = true;
+  /* ---------------- PROFILE BOOT: refresh on every focus ---------------- */
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
 
-    // 1) cache-first UI (instant)
-    (async () => {
-      try {
-        const cached = await getCachedProfile({ userId: wantUserId, username: wantUsername, isMe });
-        if (!alive) return;
+      // 1) cache-first UI (instant)
+      (async () => {
+        try {
+          const cached = await getCachedProfile({ userId: wantUserId, username: wantUsername, isMe });
+          if (!alive) return;
 
-        if (cached) {
-          setFetched((prev) => ({
-            ...(prev || {}),
-            ...cached,
-            username: cached.username ?? wantUsername ?? prev?.username ?? null,
-          }));
+          if (cached) {
+            setFetched((prev) => ({
+              ...(prev || {}),
+              ...cached,
+              username: cached.username ?? wantUsername ?? prev?.username ?? null,
+            }));
+          }
+          setBooting(false);
+        } catch {
+          if (!alive) return;
+          setBooting(false);
         }
-        setBooting(false);
-      } catch {
-        if (!alive) return;
-        setBooting(false);
-      }
-    })();
+      })();
 
-    // 2) background refresh + also warms image cache in profileCache
-    (async () => {
-      try {
-        const me = await getMe().catch(() => null);
-        if (alive && me?.id) setAuthId(me.id);
+      // 2) background refresh + also warms image cache in profileCache
+      (async () => {
+        try {
+          const me = await getMe().catch(() => null);
+          if (alive && me?.id) setAuthId(me.id);
 
-        const row = await preloadProfileData({ userId: wantUserId, username: wantUsername, isMe });
-        if (!alive) return;
-        if (row) setFetched(row);
-      } catch {}
-    })();
+          const row = await preloadProfileData({ userId: wantUserId, username: wantUsername, isMe });
+          if (!alive) return;
+          if (row) setFetched(row);
+        } catch {}
+      })();
 
-    return () => {
-      alive = false;
-    };
-  }, [params.userId, params.username]);
+      return () => {
+        alive = false;
+      };
+    }, [params.userId, params.username])
+  );
 
   // blocked users (background)
   useEffect(() => {
@@ -399,6 +405,26 @@ export default function ProfileScreen({ navigation, route }) {
   };
 
   const cancelUnblock = () => setUnblockModalVisible(false);
+
+  const handleSaveBio = async () => {
+    if (!display.id) return;
+    setSavingBio(true);
+    try {
+      const newBio = bioEditValue.trim() || null;
+      const { error } = await supabase.from("profiles").update({ bio: newBio }).eq("id", display.id);
+      if (error) throw error;
+      setFetched((prev) => (prev ? { ...prev, bio: newBio } : prev));
+      await setCachedProfile(
+        { userId: display.id, username: display.username, isMe: true },
+        { ...fetched, id: display.id, username: display.username, bio: newBio }
+      );
+      setEditingBio(false);
+    } catch {
+      showToast("Couldn't save bio.");
+    } finally {
+      setSavingBio(false);
+    }
+  };
 
   // ✅ pictures: prefer local disk cache instantly; otherwise remote
   useEffect(() => {
@@ -779,16 +805,73 @@ export default function ProfileScreen({ navigation, route }) {
             <Text style={[styles.name, { color: theme.text }]}>{firstName}</Text>
             <Text style={[styles.location, { color: theme.secondaryText }]}>{locationText}</Text>
 
-            {!!bioText && (
-              <Text
-                style={[styles.bio, { color: theme.secondaryText }]}
-                onPress={() => shouldShowReadMore && setShowFullBio((v) => !v)}
-              >
-                {displayedBio}
-                {!showFullBio && shouldShowReadMore && (
-                  <Text style={[styles.readMore, { color: theme.text }]}>{" "}Read more</Text>
-                )}
-              </Text>
+            {isSelf ? (
+              editingBio ? (
+                <View style={{ marginTop: 8 }}>
+                  <TextInput
+                    style={[styles.bio, { color: theme.text, borderWidth: 1, borderColor: theme.border, borderRadius: 8, padding: 8, textAlignVertical: "top", minHeight: 70 }]}
+                    multiline
+                    value={bioEditValue}
+                    onChangeText={setBioEditValue}
+                    placeholder="Write something about yourself..."
+                    placeholderTextColor={theme.secondaryText}
+                    autoFocus
+                    maxLength={200}
+                  />
+                  <View style={{ flexDirection: "row", justifyContent: "center", gap: 10, marginTop: 8 }}>
+                    <TouchableOpacity
+                      onPress={() => setEditingBio(false)}
+                      style={{ paddingHorizontal: 16, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: theme.border }}
+                    >
+                      <Text style={{ color: theme.text, fontFamily: "Poppins", fontSize: 13 }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleSaveBio}
+                      disabled={savingBio}
+                      style={{ paddingHorizontal: 16, paddingVertical: 6, borderRadius: 8, backgroundColor: "#12A7E0" }}
+                    >
+                      <Text style={{ color: "#fff", fontFamily: "Poppins", fontSize: 13 }}>{savingBio ? "Saving..." : "Save"}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <View style={{ flexDirection: "row", alignItems: "flex-start", marginTop: 8 }}>
+                  {bioText ? (
+                    <Text
+                      style={[styles.bio, { color: theme.secondaryText, marginTop: 0, flex: 1 }]}
+                      onPress={() => shouldShowReadMore && setShowFullBio((v) => !v)}
+                    >
+                      {displayedBio}
+                      {!showFullBio && shouldShowReadMore && (
+                        <Text style={[styles.readMore, { color: theme.text }]}>{" "}Read more</Text>
+                      )}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.bio, { color: theme.secondaryText, opacity: 0.55, marginTop: 0, flex: 1 }]}>
+                      Add a bio...
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => { setBioEditValue(bioText); setEditingBio(true); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={{ paddingLeft: 6, paddingTop: 2 }}
+                  >
+                    <Feather name="edit-2" size={11} color={theme.secondaryText} style={{ opacity: 0.6 }} />
+                  </TouchableOpacity>
+                </View>
+              )
+            ) : (
+              !!bioText && (
+                <Text
+                  style={[styles.bio, { color: theme.secondaryText }]}
+                  onPress={() => shouldShowReadMore && setShowFullBio((v) => !v)}
+                >
+                  {displayedBio}
+                  {!showFullBio && shouldShowReadMore && (
+                    <Text style={[styles.readMore, { color: theme.text }]}>{" "}Read more</Text>
+                  )}
+                </Text>
+              )
             )}
 
             {/* Actions */}

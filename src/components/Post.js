@@ -304,6 +304,8 @@ export default function Post(props) {
 
   const basePost = props.post || props.item || {};
   const effectivePostId = postId || basePost.id;
+  // DB spreads use snake_case (author_id); explicit props use camelCase (authorId)
+  const resolvedAuthorId = authorId || props.author_id || basePost.author_id || null;
 
   const navigation = useNavigation();
   const { isDark } = useAlbaTheme();
@@ -319,6 +321,8 @@ export default function Post(props) {
   const [avatarForHeader, setAvatarForHeader] = useState(
     userPicUri || fallbackAvatar
   );
+  // Resolved from profileCache by UUID so it stays current even if posts.user is stale
+  const [resolvedUsername, setResolvedUsername] = useState(displayUsername);
 
   useEffect(() => {
     let mounted = true;
@@ -327,12 +331,19 @@ export default function Post(props) {
         const current = userPicUri || fallbackAvatar;
         if (typeof current === "string" && current.startsWith("file://")) {
           if (mounted) setAvatarForHeader(current);
-          return;
+          // Still resolve username even when avatar is already local
         }
 
-        const cached =
-          (await getCachedProfile({ userId: authorId })) ||
+        let cached =
+          (await getCachedProfile({ userId: resolvedAuthorId })) ||
           (await getCachedProfile({ username: displayUsername }));
+
+        // If cache is stale / missing, fetch fresh (updates cache for next render too)
+        if (!cached && resolvedAuthorId) {
+          cached = await preloadProfileData({ userId: resolvedAuthorId });
+        }
+
+        if (cached?.username && mounted) setResolvedUsername(cached.username);
 
         const local = cached?.avatar_local || null;
         if (local && mounted) {
@@ -351,7 +362,7 @@ export default function Post(props) {
     return () => {
       mounted = false;
     };
-  }, [userPicUri, fallbackAvatar, authorId, displayUsername]);
+  }, [userPicUri, fallbackAvatar, resolvedAuthorId, displayUsername]);
 
   /* ---------- MEDIA ARRAY ---------- */
   const rawMedia =
@@ -439,6 +450,7 @@ export default function Post(props) {
   const [shareVisible, setShareVisible] = useState(false);
   const [buyVisible, setBuyVisible] = useState(false);
 
+  const [authUserId, setAuthUserId] = useState(null);
   const [authUsername, setAuthUsername] = useState(null);
   const [isVerified, setIsVerified] = useState(false);
 
@@ -455,6 +467,7 @@ export default function Post(props) {
             .eq("id", uid)
             .maybeSingle();
           if (mounted) {
+            setAuthUserId(uid);
             setAuthUsername(prof?.username || null);
             setIsVerified(!!prof?.is_verified);
 
@@ -489,7 +502,11 @@ export default function Post(props) {
 
   const canDelete = !!(
     canDeleteOverride ||
-    (authUsername &&
+    // UUID comparison — immune to username changes
+    (authUserId && resolvedAuthorId && authUserId === resolvedAuthorId) ||
+    // Fallback for old posts without author_id
+    (!resolvedAuthorId &&
+      authUsername &&
       (displayUser || basePost.user) &&
       String(authUsername).toLowerCase() ===
         String(displayUser || basePost.user).toLowerCase())
@@ -505,9 +522,9 @@ export default function Post(props) {
   };
 
   const openProfile = async () => {
-    const uname = stripAt(displayUser || "");
+    const uname = resolvedUsername || stripAt(displayUser || "");
     try {
-      if (authorId) await preloadProfileData({ userId: authorId });
+      if (resolvedAuthorId) await preloadProfileData({ userId: resolvedAuthorId });
       else if (uname) await preloadProfileData({ username: uname });
     } catch {}
     navigation.navigate("Profile", { username: uname });
@@ -805,7 +822,7 @@ export default function Post(props) {
 
         <View style={{ flex: 1 }}>
           <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
-            <ThemedText style={styles.handleLine}>@{displayUser}</ThemedText>
+            <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
           </TouchableOpacity>
           {!!subtitle && <ThemedText style={styles.subtitle}>{subtitle}</ThemedText>}
         </View>

@@ -244,6 +244,8 @@ export default function SingleChatScreen({ navigation, route }) {
   const optimisticIds = useRef(new Set());
   const runRef = useRef(0);
 
+  const [peerDisplayName, setPeerDisplayName] = useState(peerName);
+
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
   const isBlocked = !isGroup && blockedUsers.includes(peerUsername);
@@ -489,7 +491,7 @@ export default function SingleChatScreen({ navigation, route }) {
     return un;
   }, [chatId, peerUsername]);
 
-  // focus: mark read + refresh blocked
+  // focus: mark read + refresh blocked + refresh peer display name
   useFocusEffect(
     useCallback(() => {
       console.log("[SingleChat][FOCUS] focus", { chatId, peerUsername });
@@ -509,10 +511,25 @@ export default function SingleChatScreen({ navigation, route }) {
         } catch (e) {
           console.log("[SingleChat][FOCUS] blocked error", safeErr(e));
         }
+
+        // Refresh peer display name so header reflects any name/username changes
+        if (!isGroup && peerUsername) {
+          try {
+            const { data: peerProfile } = await supabase
+              .from("profiles")
+              .select("name, username")
+              .eq("username", peerUsername)
+              .maybeSingle();
+            if (peerProfile) {
+              const fresh = peerProfile.name || `@${peerProfile.username}` || peerName;
+              setPeerDisplayName(fresh);
+            }
+          } catch {}
+        }
       })();
 
       return undefined;
-    }, [chatId, peerUsername, getSessionUid, loadBlockedUsers])
+    }, [chatId, peerUsername, getSessionUid, loadBlockedUsers, isGroup, peerName])
   );
 
   const persistBlockedUsers = async (next) => {
@@ -759,7 +776,7 @@ export default function SingleChatScreen({ navigation, route }) {
             hitSlop={8}
           >
             <Text style={[styles.headerTitle, { color: theme.text }]} numberOfLines={1}>
-              {peerName}
+              {peerDisplayName}
             </Text>
           </TouchableOpacity>
 

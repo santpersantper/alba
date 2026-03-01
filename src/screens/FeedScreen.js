@@ -12,7 +12,6 @@ import {
   Image,
   TextInput,
   Animated,
-  Alert,
   AppState,
 } from "react-native";
 import {
@@ -394,6 +393,8 @@ export default function FeedScreen() {
   const [elapsedDisplay, setElapsedDisplay] = useState(0);
   const timerIntervalRef = useRef(null);
   const alertSentRef = useRef(false);
+  const [timerAlertVisible, setTimerAlertVisible] = useState(false);
+  const [timerAlertMinutes, setTimerAlertMinutes] = useState(DEFAULT_ALERT_MINUTES);
   const dataRef = useRef([]);
   const isGoingToFeedSettings = useRef(false);
   const isFocusedRef = useRef(isFocused);
@@ -419,10 +420,8 @@ export default function FeedScreen() {
         const limitSecs = alertMinutesRef.current * 60;
         if (!alertSentRef.current && elapsedRef.current >= limitSecs) {
           alertSentRef.current = true;
-          Alert.alert(
-            "Time for a break!",
-            `You've been watching for ${alertMinutesRef.current} minute${alertMinutesRef.current === 1 ? "" : "s"}.`
-          );
+          setTimerAlertMinutes(alertMinutesRef.current);
+          setTimerAlertVisible(true);
         }
       }, 1000);
     };
@@ -871,9 +870,11 @@ export default function FeedScreen() {
             </TouchableOpacity>
 
             {timerEnabledRef.current && elapsedDisplay > 0 && (
-              <Text style={styles.timerText}>
-                {Math.floor(elapsedDisplay / 60)}:{String(elapsedDisplay % 60).padStart(2, "0")}
-              </Text>
+              <View style={styles.timerWrap}>
+                <Text style={styles.timerText}>
+                  {Math.floor(elapsedDisplay / 60)}:{String(elapsedDisplay % 60).padStart(2, "0")}
+                </Text>
+              </View>
             )}
 
             <TouchableOpacity
@@ -1019,6 +1020,29 @@ export default function FeedScreen() {
         </View>
       </Modal>
 
+      {/* Timer break alert */}
+      <Modal
+        visible={timerAlertVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTimerAlertVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.timerAlertCard}>
+            <Text style={styles.timerAlertTitle}>Time for a break!</Text>
+            <Text style={styles.timerAlertMessage}>
+              {`You've been watching for ${timerAlertMinutes} minute${timerAlertMinutes === 1 ? "" : "s"}.`}
+            </Text>
+            <TouchableOpacity
+              style={styles.timerAlertOkBtn}
+              onPress={() => setTimerAlertVisible(false)}
+            >
+              <Text style={styles.timerAlertOkText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Toast */}
       {toastMessage ? (
         <Animated.View
@@ -1058,12 +1082,17 @@ const styles = StyleSheet.create({
     height: 22,
     resizeMode: "contain",
   },
+  timerWrap: {
+    backgroundColor: "#000",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
   timerText: {
     color: "#fff",
     fontSize: 13,
     fontFamily: "Poppins",
     fontWeight: "700",
-    opacity: 0.9,
   },
   itemContainer: {
     width: "100%",
@@ -1326,5 +1355,41 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Poppins",
     textAlign: "center",
+  },
+
+  timerAlertCard: {
+    width: "78%",
+    backgroundColor: "#101218",
+    borderRadius: 18,
+    padding: 22,
+    alignItems: "center",
+    elevation: 4,
+  },
+  timerAlertTitle: {
+    fontFamily: "Poppins",
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#fff",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  timerAlertMessage: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    color: "#fff",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  timerAlertOkBtn: {
+    backgroundColor: "#4EBCFF",
+    paddingVertical: 10,
+    paddingHorizontal: 36,
+    borderRadius: 12,
+  },
+  timerAlertOkText: {
+    color: "#fff",
+    fontFamily: "Poppins",
+    fontWeight: "700",
+    fontSize: 15,
   },
 });

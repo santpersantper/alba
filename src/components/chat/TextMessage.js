@@ -14,7 +14,7 @@ import { supabase } from "../../lib/supabase";
 import ShareMenu from "../ShareMenu";
 import { useAlbaTheme } from "../../theme/ThemeContext"; // ✅ NEW
 
-export default function TextMessage({ id, text, time, isMe = false, onDeleted }) {
+export default function TextMessage({ id, text, time, isMe = false, onDeleted, senderName }) {
   const { theme, isDark } = useAlbaTheme(); // ✅ NEW
 
   const [menuVisible, setMenuVisible] = useState(false);
@@ -66,7 +66,7 @@ export default function TextMessage({ id, text, time, isMe = false, onDeleted })
   };
 
   // ✅ requested: other people's bubbles use theme.gray on dark mode
-  const otherBubbleBg = isDark ? theme.gray : styles.bubbleOther.backgroundColor;
+  const otherBubbleBg = isDark ? "#363C47" : styles.bubbleOther.backgroundColor;
 
   return (
     <>
@@ -95,6 +95,9 @@ export default function TextMessage({ id, text, time, isMe = false, onDeleted })
               !isMe ? { backgroundColor: otherBubbleBg } : null, // ✅ override only for "other" on dark
             ]}
           >
+            {!isMe && senderName ? (
+              <Text style={[styles.senderName, { color: isDark ? "#A8B4C4" : "#374151" }]}>{senderName}</Text>
+            ) : null}
             <Text
               style={[
                 styles.msgText,
@@ -239,6 +242,16 @@ const styles = StyleSheet.create({
   bubble: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12 },
   bubbleMe: { backgroundColor: "#74AEE7", borderTopRightRadius: 4 },
   bubbleOther: { backgroundColor: "#EAEFF4", borderTopLeftRadius: 4 },
+  senderName: {
+    fontSize: 12,
+    fontFamily: "Poppins",
+    fontWeight: "700",
+    color: "#374151",
+    marginBottom: 3,
+    paddingBottom: 3,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.1)",
+  },
   msgText: { fontSize: 14, lineHeight: 20, fontFamily: "Poppins" },
   line1: { width: "100%", flexDirection: "row", alignItems: "flex-end" },
   line2: { width: "100%", marginTop: 3 },

@@ -5,7 +5,7 @@ import * as Crypto from "expo-crypto";
 
 /* ---------------- cache keys ---------------- */
 const CACHE_VER = 2; // ✅ bump version
-const CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7d
+const CACHE_MAX_AGE_MS = 1000 * 60 * 5; // 5 min — keeps profile text (name, username) fresh
 
 const meKey = () => `alba_profile_me_v${CACHE_VER}`;
 const idKey = (userId) => `alba_profile_id_v${CACHE_VER}:${userId || "unknown"}`;

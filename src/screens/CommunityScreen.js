@@ -19,6 +19,7 @@ import {
   Platform,
   FlatList,
   TextInput,
+  Modal,
 } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Location from "expo-location";
@@ -30,6 +31,7 @@ import { supabase } from "../lib/supabase";
 import ThemedView from "../theme/ThemedView";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { useUserPreferences, PREFS_KEY } from "../hooks/useUserPreferences";
 import Post from "../components/Post";
 import TopBar from "../components/TopBar";
 import LabelsCard from "../components/LabelsCard";
@@ -38,6 +40,7 @@ import {
   readCachedFirstPostOverride,
   warmCommunityFirstPost,
 } from "../lib/communityFirstPostCache";
+import { checkVPN } from "../utils/vpnDetector";
 
 /* --------------------------- CONSTANTS ---------------------------- */
 
@@ -301,6 +304,9 @@ export default function CommunityScreen() {
   const [uid, setUid] = useState(null);
   const [savedMeta, setSavedMeta] = useState({});
 
+  const { prefs, reload: reloadPrefs } = useUserPreferences();
+  const [travelBannerDismissed, setTravelBannerDismissed] = useState(false);
+
   const [eventTags, setEventTags] = useState([]);
   const [adTags, setAdTags] = useState([]);
   const [showLocalNews, setShowLocalNews] = useState(true);
@@ -324,6 +330,8 @@ export default function CommunityScreen() {
 
   // Ad interest prompt — track rejected categories so we never ask again this session
   const [rejectedCategories, setRejectedCategories] = useState(new Set());
+
+  const [vpnBlockVisible, setVpnBlockVisible] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -448,13 +456,27 @@ export default function CommunityScreen() {
         }
       }
 
-      const coords = await getFreshCoords();
-      if (!coords) {
-        setActivePostId(null);
-        return;
-      }
+      // Read prefs fresh from AsyncStorage — the hook state on this tab screen is only
+      // initialized on mount and never re-reads when another screen updates the same key.
+      let freshPrefs = { premiumTravelerMode: false, travelerModeCityCoords: null };
+      try {
+        const raw = await AsyncStorage.getItem(PREFS_KEY);
+        if (raw) freshPrefs = { ...freshPrefs, ...JSON.parse(raw) };
+      } catch {}
 
-      const { latitude, longitude } = coords;
+      let latitude, longitude;
+      if (freshPrefs.premiumTravelerMode && freshPrefs.travelerModeCityCoords) {
+        // Traveler Mode: use selected city coords instead of real device location
+        latitude = freshPrefs.travelerModeCityCoords.lat;
+        longitude = freshPrefs.travelerModeCityCoords.lng;
+      } else {
+        const coords = await getFreshCoords();
+        if (!coords) {
+          setActivePostId(null);
+          return;
+        }
+        ({ latitude, longitude } = coords);
+      }
 
       // ✅ IMPORTANT FIX: await the profile location update so nearby_posts uses the NEW location
       const { error: upErr } = await supabase
@@ -504,12 +526,22 @@ export default function CommunityScreen() {
       topBarOpacity.setValue(1);
       lastOffset.current = 0;
 
+      // Sync prefs state from AsyncStorage on every focus so visiblePosts useMemo
+      // (ad-free filter) reflects changes made in CommunitySettings since last visit.
+      reloadPrefs();
+
       readCachedFirstPostOverride()
         .then((ov) => ov && setFirstPostOverride(ov))
         .catch(() => {});
 
       fetchNearbyPosts();
-    }, [fetchNearbyPosts, navigation, topBarOpacity])
+    }, [fetchNearbyPosts, navigation, topBarOpacity, reloadPrefs])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      checkVPN().then((detected) => setVpnBlockVisible(detected));
+    }, [])
   );
 
   const handleRefresh = useCallback(() => {
@@ -652,9 +684,14 @@ export default function CommunityScreen() {
   const visiblePosts = useMemo(() => {
     if (!posts.length) return [];
 
+    // Ad-Free: strip all Ad items before any processing so no ad_prompt cards are generated either
+    const postsInput = prefs.premiumAdFree
+      ? posts.filter((p) => p.type !== "Ad")
+      : posts;
+
     // Build list in original RPC order; ads become inline prompts when category unknown
     const promptedCategories = new Set();
-    let out = posts.reduce((acc, p) => {
+    let out = postsInput.reduce((acc, p) => {
       const type = String(p.type || "");
       if (!VISIBLE_TYPES.has(type)) return acc;
       if (type === "Article" && !showLocalNews) return acc;
@@ -796,6 +833,7 @@ export default function CommunityScreen() {
     isLabelMatch,
     scoreLabelMatch,
     adMatchesUserTags,
+    prefs.premiumAdFree,
   ]);
 
   const dateLabel = selectedDate
@@ -881,6 +919,20 @@ export default function CommunityScreen() {
         initialNumToRender={3}
         ListHeaderComponent={
           <View style={[styles.innerPadding, { paddingTop: 92 }]}>
+            {/* Traveler Mode banner — dismissable per session, does not deactivate the feature */}
+            {prefs.premiumTravelerMode && !travelBannerDismissed && (
+              <View style={styles.travelerBanner}>
+                <Text style={styles.travelerBannerText} numberOfLines={2}>
+                  {prefs.travelerModeCityCoords && prefs.travelerModeCity
+                    ? `📍 Browsing as: ${prefs.travelerModeCity}`
+                    : "📍 Traveler Mode active — select a city in Settings to get started"}
+                </Text>
+                <TouchableOpacity onPress={() => setTravelBannerDismissed(true)} hitSlop={8}>
+                  <Feather name="x" size={14} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            )}
+
             <LabelsCard
               labels={labels}
               colors={LABEL_COLORS}
@@ -1224,6 +1276,38 @@ export default function CommunityScreen() {
         <Ionicons name="ticket-outline" size={18} color="#fff" />
       </TouchableOpacity>
 
+      <Modal
+        visible={vpnBlockVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setVpnBlockVisible(false)}
+      >
+        <View style={styles.vpnOverlay}>
+          <View style={[styles.vpnCard, { backgroundColor: theme.background }]}>
+            <View style={styles.vpnHandle} />
+            <Feather name="shield-off" size={32} color="#FF4D4D" style={{ marginBottom: 12 }} />
+            <Text style={[styles.vpnTitle, { color: theme.text }]}>VPN Detected</Text>
+            <Text style={[styles.vpnBody, { color: theme.secondaryText }]}>
+              Community shows real nearby events based on your location. Please turn off your VPN to continue.
+            </Text>
+            <TouchableOpacity
+              style={styles.vpnBtn}
+              onPress={() => checkVPN().then((still) => { if (!still) setVpnBlockVisible(false); })}
+            >
+              <Text style={styles.vpnBtnText}>Try Again</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.vpnTravelerBtn}
+              onPress={() => { setVpnBlockVisible(false); navigation.navigate("Settings"); }}
+            >
+              <Text style={[styles.vpnTravelerText, { color: theme.secondaryText }]}>
+                Want to browse another city? Try Traveler Mode →
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </ThemedView>
   );
 }
@@ -1337,6 +1421,24 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
 
+  travelerBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#00A9FF",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  travelerBannerText: {
+    color: "#fff",
+    fontSize: 13,
+    fontFamily: "Poppins",
+    flex: 1,
+    marginRight: 8,
+  },
+
   adPromptCard: {
     marginTop: 8,
     marginHorizontal: 16,
@@ -1366,4 +1468,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
   },
+
+  vpnOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
+  vpnCard: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, alignItems: "center" },
+  vpnHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#ddd", marginBottom: 16 },
+  vpnTitle: { fontFamily: "Poppins", fontWeight: "700", fontSize: 20, marginBottom: 8 },
+  vpnBody: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", lineHeight: 22, marginBottom: 24, opacity: 0.75 },
+  vpnBtn: { backgroundColor: "#2F91FF", borderRadius: 14, paddingVertical: 14, paddingHorizontal: 40, marginBottom: 12 },
+  vpnBtnText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 15 },
+  vpnTravelerBtn: { paddingVertical: 8 },
+  vpnTravelerText: { fontFamily: "Poppins", fontSize: 13, textAlign: "center" },
 });

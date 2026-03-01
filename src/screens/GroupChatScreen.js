@@ -18,6 +18,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../lib/supabase";
 import { uploadChatImage } from "../lib/uploadImage";
+import { markChatReadInCache } from "../lib/chatListCache";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { Image as ExpoImage } from "expo-image";
@@ -102,15 +103,6 @@ const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, ow
   return data;
 };
 
-const markChatRead = async (chatId) => {
-  const { error } = await supabase
-    .from("messages")
-    .update({ is_read: true })
-    .eq("chat", chatId)
-    .eq("sender_is_me", false)
-    .eq("is_read", false);
-  if (error) throw error;
-};
 
 const subscribeChatInserts = (chatId, onInsert) => {
   const channel = supabase
@@ -254,9 +246,8 @@ export default function GroupChatScreen({ navigation, route }) {
         setProfilesMap(cached.profilesMap || {});
       }
 
-      // 2) fetch (only if needed)
+      // 2) always fetch fresh profiles from DB (cache gave instant render above)
       if (!members?.length) return;
-      if (cached?.profilesMap && Object.keys(cached.profilesMap).length) return;
 
       try {
         const rows = await fetchProfilesByUsernames(members);
@@ -395,11 +386,10 @@ export default function GroupChatScreen({ navigation, route }) {
   useFocusEffect(
     useCallback(() => {
       if (!chatId) return undefined;
-      (async () => {
-        try {
-          await markChatRead(chatId);
-        } catch {}
-      })();
+      // Patch cache immediately (sync) so dot clears the moment user goes back
+      markChatReadInCache(chatId);
+      // RPC marks messages read + recalculates unread_count server-side in one call
+      (async () => { try { await supabase.rpc("mark_chat_read", { p_chat_id: chatId }); } catch {} })();
       return undefined;
     }, [chatId])
   );
@@ -551,10 +541,14 @@ export default function GroupChatScreen({ navigation, route }) {
     const isSameMinuteGroup = !!next && next.minuteKey === item.minuteKey && next.senderUsername === item.senderUsername;
     const displayTime = isSameMinuteGroup ? null : item.time;
 
+    const senderDisplayName = !item.isMe && senderChanged
+      ? (profilesMap[item.senderUsername]?.firstName || undefined)
+      : undefined;
+
     let body = null;
     switch (item.type) {
       case "text":
-        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} />;
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
@@ -569,11 +563,9 @@ export default function GroupChatScreen({ navigation, route }) {
       default:
         return null;
     }
-
-    if (item.isMe) return <View style={{ marginTop: needsTopMargin ? 10 : 0 }}>{body}</View>;
+    if (item.isMe) return <View style={{ marginTop: needsTopMargin ? 1 : 0 }}>{body}</View>;
 
     const profile = item.senderUsername ? profilesMap[item.senderUsername] : null;
-    const showHeaderForThisUser = senderChanged;
     const showAvatarColumn = !!profile;
 
     const onPressAvatar = () => {
@@ -582,21 +574,7 @@ export default function GroupChatScreen({ navigation, route }) {
     };
 
     return (
-      <View style={{ marginTop: needsTopMargin ? 10 : 0 }}>
-        {showHeaderForThisUser && (
-          <Text
-            style={{
-              fontSize: 11,
-              fontFamily: "Poppins",
-              marginBottom: 5,
-              color: "#6B7280",
-            }}
-            numberOfLines={1}
-          >
-            {profile?.firstName || item.senderUsername}
-          </Text>
-        )}
-
+      <View style={{ marginTop: needsTopMargin ? 1 : 0 }}>
         <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
           {showAvatarColumn ? (
             <TouchableOpacity

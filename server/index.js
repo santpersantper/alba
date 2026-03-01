@@ -208,7 +208,8 @@ app.post("/create-payment-intent/diffusion-message", requireAuth, paymentLimiter
 /**
  * POST /verify-face
  * Called by the client after a successful Lambda face-match response.
- * Uses the service-role key to set is_verified=true server-side.
+ * Uses the service-role key to set is_verified=true, so the anon client
+ * (and any RLS policy blocking direct updates) cannot be bypassed.
  *
  * Body: { userId: string }
  */

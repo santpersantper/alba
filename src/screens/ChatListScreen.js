@@ -18,9 +18,11 @@ import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import ChatTab from "../components/chat/ChatTab";
+import DiffusionComposeBox from "../components/DiffusionComposeBox";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { useUserPreferences } from "../hooks/useUserPreferences";
 import {
   getCachedChatListData,
   preloadChatListData,
@@ -70,6 +72,7 @@ export default function ChatListScreen({ navigation }) {
   const [threads, setThreads] = useState([]);
   const [dmMap, setDmMap] = useState({});
   const [groupMap, setGroupMap] = useState({});
+  const [senderProfilesMap, setSenderProfilesMap] = useState({});
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [maxDistanceKm, setMaxDistanceKm] = useState(50);
   const [myUsername, setMyUsername] = useState(null);
@@ -79,6 +82,7 @@ export default function ChatListScreen({ navigation }) {
 
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
+  const { prefs } = useUserPreferences();
 
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -117,6 +121,7 @@ export default function ChatListScreen({ navigation }) {
     setThreads(cached.threads || []);
     setDmMap(cached.dmMap || {});
     setGroupMap(cached.groupMap || {});
+    setSenderProfilesMap(cached.senderProfilesMap || {});
     setBlockedUsers(cached.blockedUsers || []);
     setMaxDistanceKm(typeof cached.maxDistanceKm === "number" ? cached.maxDistanceKm : 50);
     setMyUsername(cached.myUsername || null);
@@ -131,6 +136,7 @@ export default function ChatListScreen({ navigation }) {
       setThreads(fresh.threads || []);
       setDmMap(fresh.dmMap || {});
       setGroupMap(fresh.groupMap || {});
+      setSenderProfilesMap(fresh.senderProfilesMap || {});
       setBlockedUsers(fresh.blockedUsers || []);
       setMaxDistanceKm(typeof fresh.maxDistanceKm === "number" ? fresh.maxDistanceKm : 50);
       setMyUsername(fresh.myUsername || null);
@@ -153,6 +159,7 @@ export default function ChatListScreen({ navigation }) {
       setThreads([]);
       setDmMap({});
       setGroupMap({});
+      setSenderProfilesMap({});
       setBlockedUsers([]);
       setReady(true);
       return;
@@ -222,7 +229,7 @@ export default function ChatListScreen({ navigation }) {
       const actorBase = th?.last_sender_is_me
         ? "You"
         : isGroup
-        ? displayName
+        ? (senderProfilesMap[th?.last_sender_username]?.firstName || th?.last_sender_username || "Someone")
         : username
         ? `@${username}`
         : "User";
@@ -233,13 +240,12 @@ export default function ChatListScreen({ navigation }) {
       if (isBlocked) {
         lastMessage = t("chat_user_blocked_snippet");
       } else if (text) {
-        lastMessage = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+        const truncated = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+        lastMessage = isGroup ? `${actorBase}: ${truncated}` : truncated;
       } else if (th?.last_post_id || th?.last_post_reference) {
         lastMessage = `${actorBase} shared a post.`;
       } else if (th?.last_media_reference) {
-        lastMessage = `${actorBase} ${
-          isVideoUrl(th.last_media_reference) ? "shared a video." : "shared a photo."
-        }`;
+        lastMessage = `${actorBase} sent a ${isVideoUrl(th.last_media_reference) ? "video" : "photo"}`;
       } else {
         lastMessage = th?.last_sent_at
           ? th?.last_sender_is_me
@@ -517,6 +523,14 @@ export default function ChatListScreen({ navigation }) {
         </View>
       )}
 
+      {/* Diffusion List — compose box (sender) and received cards (recipient) */}
+      <DiffusionComposeBox
+        currentUserId={currentUserId}
+        myUsername={myUsername}
+        prefs={prefs}
+        navigation={navigation}
+      />
+
       {!ready ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator />
@@ -542,8 +556,8 @@ export default function ChatListScreen({ navigation }) {
               lastSender={item.lastSender}
               lastDate={item.lastDate}
               lastTime={item.lastTime}
-              lastOpenedAt={"1970-01-01T00:00"}
               displayTime={item.displayTime}
+              unreadCount={item.unreadCount}
               onPress={() => openChat(item)}
             />
           )}

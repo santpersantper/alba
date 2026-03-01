@@ -11,6 +11,8 @@ import {
   FlatList,
   TextInput,
   ActivityIndicator,
+  Alert,
+  Text,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -26,6 +28,9 @@ import ThemedText from "../theme/ThemedText";
 
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import Constants from "expo-constants";
+import { useUserPreferences } from "../hooks/useUserPreferences";
+import PremiumPurchaseModal from "../components/PremiumPurchaseModal";
 
 const TABS = ["General", "Events", "Ads", "Privacy"];
 
@@ -66,6 +71,18 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Premium features
+  const { prefs, updatePrefs } = useUserPreferences();
+  const [premiumModal, setPremiumModal] = useState(null); // { featureName, description, price, endpoint } | null
+  const [cityQuery, setCityQuery] = useState("");
+  const [cityResults, setCityResults] = useState([]);
+  const [cityLoading, setCityLoading] = useState(false);
+  const cityDebounceRef = useRef(null);
+  const [diffusionRadiusUnit, setDiffusionRadiusUnit] = useState("km"); // "km" | "mi"
+  // Local string state for the radius text input — avoids clamping mid-edit
+  const [diffusionRadiusText, setDiffusionRadiusText] = useState("5");
+  const diffusionInputFocused = useRef(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -298,6 +315,94 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   const handleLogout = () => setLogoutModalVisible(true);
 
+  const handleAdFreePress = () => {
+    if (prefs.premiumAdFree) {
+      updatePrefs({ premiumAdFree: false });
+      return;
+    }
+    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
+    updatePrefs({ premiumAdFree: true });
+  };
+
+  const handleTravelerPress = () => {
+    if (prefs.premiumTravelerMode) {
+      updatePrefs({ premiumTravelerMode: false, travelerModeCity: null, travelerModeCityCoords: null });
+      return;
+    }
+    if (prefs.premiumDiffusionList) {
+      Alert.alert("Note", "Traveler Mode is now active. Diffusion Lists will be unavailable until you disable it.");
+    }
+    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
+    updatePrefs({ premiumTravelerMode: true });
+  };
+
+  const handleDiffusionPress = () => {
+    if (prefs.premiumDiffusionList) {
+      updatePrefs({ premiumDiffusionList: false });
+      return;
+    }
+    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
+    updatePrefs({ premiumDiffusionList: true });
+  };
+
+  // Called by steppers — commits immediately and syncs display text
+  const stepDiffusionRadius = (newDisplayVal) => {
+    const clamped = Math.min(50, Math.max(1, Math.round(newDisplayVal)));
+    const km = diffusionRadiusUnit === "mi" ? Math.round(clamped * 1.60934) : clamped;
+    const clampedKm = Math.min(50, Math.max(1, km));
+    updatePrefs({ diffusionRadiusKm: clampedKm });
+    setDiffusionRadiusText(String(clamped));
+  };
+
+  // Called on input blur — clamps and commits whatever the user typed
+  const commitDiffusionRadiusText = () => {
+    diffusionInputFocused.current = false;
+    const parsed = parseInt(diffusionRadiusText, 10);
+    const displayVal = Number.isFinite(parsed) ? Math.min(50, Math.max(1, parsed)) : 1;
+    const km = diffusionRadiusUnit === "mi" ? Math.round(displayVal * 1.60934) : displayVal;
+    const clampedKm = Math.min(50, Math.max(1, km));
+    updatePrefs({ diffusionRadiusKm: clampedKm });
+    setDiffusionRadiusText(String(displayVal));
+  };
+
+  // Sync display text when prefs or unit changes (but not while user is typing)
+  useEffect(() => {
+    if (diffusionInputFocused.current) return;
+    const displayVal = diffusionRadiusUnit === "mi"
+      ? Math.round(prefs.diffusionRadiusKm / 1.60934)
+      : prefs.diffusionRadiusKm;
+    setDiffusionRadiusText(String(displayVal));
+  }, [prefs.diffusionRadiusKm, diffusionRadiusUnit]);
+
+  const handleSelectCity = async (feature) => {
+    const name = feature.place_name;
+    const [lng, lat] = feature.center;
+    await updatePrefs({ travelerModeCity: name, travelerModeCityCoords: { lat, lng } });
+    setCityQuery("");
+    setCityResults([]);
+  };
+
+  // City search debounce — 400ms, Mapbox Geocoding REST API (no native SDK needed)
+  useEffect(() => {
+    if (!prefs.premiumTravelerMode) return;
+    if (cityDebounceRef.current) clearTimeout(cityDebounceRef.current);
+    if (!cityQuery.trim()) { setCityResults([]); return; }
+    cityDebounceRef.current = setTimeout(async () => {
+      setCityLoading(true);
+      try {
+        const token = Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+        const q = encodeURIComponent(cityQuery.trim());
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?types=place&limit=5&access_token=${token}`
+        );
+        const json = await res.json();
+        setCityResults(json.features || []);
+      } catch { setCityResults([]); }
+      finally { setCityLoading(false); }
+    }, 400);
+    return () => clearTimeout(cityDebounceRef.current);
+  }, [cityQuery, prefs.premiumTravelerMode]);
+
   const renderTabContent = () => {
     if (activeTab === "General") {
       return (
@@ -448,6 +553,146 @@ export default function CommunitySettingsScreen({ navigation }) {
               await updateProfile({ show_local_news: next });
             })}
           </ThemedView>
+
+          {/* ── Alba Premium ── */}
+          <View style={styles.premiumSection}>
+            <Text style={styles.premiumHeader}>Alba Premium</Text>
+
+            {/* Ad-Free checkbox */}
+            <TouchableOpacity style={styles.checkboxRow} onPress={handleAdFreePress} activeOpacity={0.7}>
+              <View style={[styles.premiumCheckbox, prefs.premiumAdFree && styles.premiumCheckboxChecked]}>
+                {prefs.premiumAdFree && <Feather name="check" size={12} color="#00A9FF" />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.premiumLabel}>Ad-Free</Text>
+                <Text style={styles.premiumSublabel}>Browse Community without ads — €2.99/month</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Traveler Mode checkbox */}
+            <TouchableOpacity style={[styles.checkboxRow, { marginTop: 12 }]} onPress={handleTravelerPress} activeOpacity={0.7}>
+              <View style={[styles.premiumCheckbox, prefs.premiumTravelerMode && styles.premiumCheckboxChecked]}>
+                {prefs.premiumTravelerMode && <Feather name="check" size={12} color="#00A9FF" />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.premiumLabel}>Traveler Mode</Text>
+                <Text style={styles.premiumSublabel}>Access Community in any city worldwide — €4.99/month</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* City search — only shown when Traveler Mode is active */}
+            {prefs.premiumTravelerMode && (
+              <View style={{ marginTop: 12 }}>
+                <TextInput
+                  style={styles.premiumInput}
+                  placeholder="Search for a city..."
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                  value={cityQuery}
+                  onChangeText={setCityQuery}
+                />
+                {cityLoading && <ActivityIndicator size="small" color="#fff" style={{ marginTop: 6 }} />}
+                {cityResults.length > 0 && (
+                  <View style={{ borderWidth: 1, borderColor: "rgba(255,255,255,0.3)", borderRadius: 8, marginTop: 4, overflow: "hidden" }}>
+                    {cityResults.map((item) => (
+                      <TouchableOpacity
+                        key={item.id}
+                        onPress={() => handleSelectCity(item)}
+                        style={{ padding: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "rgba(255,255,255,0.2)", backgroundColor: "rgba(0,0,0,0.15)" }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={{ color: "#fff", fontSize: 13, fontFamily: "Poppins" }}>
+                          {item.place_name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                <Text style={styles.premiumSublabel}>
+                  {prefs.travelerModeCity
+                    ? `Currently browsing as: ${prefs.travelerModeCity}`
+                    : "No city selected — Community will use your real location"}
+                </Text>
+              </View>
+            )}
+
+            {/* Diffusion List checkbox */}
+            <TouchableOpacity style={[styles.checkboxRow, { marginTop: 12 }]} onPress={handleDiffusionPress} activeOpacity={0.7}>
+              <View style={[styles.premiumCheckbox, prefs.premiumDiffusionList && styles.premiumCheckboxChecked]}>
+                {prefs.premiumDiffusionList && <Feather name="check" size={12} color="#00A9FF" />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.premiumLabel}>Diffusion List</Text>
+                <Text style={styles.premiumSublabel}>Broadcast a message to all Alba users nearby — €1.00 per message</Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Radius input — shown when Diffusion List is active */}
+            {prefs.premiumDiffusionList && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[styles.premiumSublabel, { fontWeight: "600", marginBottom: 8 }]}>
+                  Broadcast radius
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const cur = diffusionRadiusUnit === "mi"
+                        ? Math.round(prefs.diffusionRadiusKm / 1.60934)
+                        : prefs.diffusionRadiusKm;
+                      stepDiffusionRadius(cur - 1);
+                    }}
+                    style={styles.premiumStepper}
+                  >
+                    <Text style={styles.premiumStepperText}>−</Text>
+                  </TouchableOpacity>
+
+                  <TextInput
+                    style={styles.premiumRadiusInput}
+                    keyboardType="numeric"
+                    value={diffusionRadiusText}
+                    onChangeText={(v) => {
+                      const digits = v.replace(/[^0-9]/g, "");
+                      if (digits === "") { setDiffusionRadiusText(""); return; }
+                      const n = parseInt(digits, 10);
+                      if (n > 50) setDiffusionRadiusText("50");
+                      else if (n < 1) setDiffusionRadiusText("1");
+                      else setDiffusionRadiusText(digits);
+                    }}
+                    onFocus={() => { diffusionInputFocused.current = true; }}
+                    onBlur={commitDiffusionRadiusText}
+                  />
+
+                  <TouchableOpacity
+                    onPress={() => {
+                      const cur = diffusionRadiusUnit === "mi"
+                        ? Math.round(prefs.diffusionRadiusKm / 1.60934)
+                        : prefs.diffusionRadiusKm;
+                      stepDiffusionRadius(cur + 1);
+                    }}
+                    style={styles.premiumStepper}
+                  >
+                    <Text style={styles.premiumStepperText}>+</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setDiffusionRadiusUnit((u) => u === "km" ? "mi" : "km")}
+                    style={styles.premiumUnitToggle}
+                  >
+                    <Text style={{ color: "#fff", fontFamily: "Poppins", fontSize: 13 }}>{diffusionRadiusUnit}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={[styles.premiumSublabel, { marginTop: 4 }]}>
+                  Min 1 {diffusionRadiusUnit} · Max 50 {diffusionRadiusUnit}
+                </Text>
+
+                {/* Estimated users — placeholder formula, replace with real DB query once density data exists */}
+                <Text style={[styles.premiumSublabel, { marginTop: 6 }]}>
+                  Your message will reach approximately{" "}
+                  {Math.round(prefs.diffusionRadiusKm * prefs.diffusionRadiusKm * Math.PI * 0.8)} users
+                </Text>
+              </View>
+            )}
+          </View>
         </>
       );
     }
@@ -488,6 +733,14 @@ export default function CommunitySettingsScreen({ navigation }) {
                 return next;
               })
             )}
+            {renderCheckbox(
+              prefs.blockDiffusionMessages,
+              "Block Diffusion Messages",
+              () => updatePrefs({ blockDiffusionMessages: !prefs.blockDiffusionMessages })
+            )}
+            <ThemedText style={{ fontSize: 12, color: theme.secondaryText, fontFamily: "Poppins", marginLeft: 28, marginTop: -4, marginBottom: 4 }}>
+              You won't receive broadcast messages from other users
+            </ThemedText>
           </ThemedView>
 
           <ThemedView variant="gray" style={[styles.section, { paddingTop: 16 }]}>
@@ -634,6 +887,26 @@ export default function CommunitySettingsScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {premiumModal && (
+        <PremiumPurchaseModal
+          visible={!!premiumModal}
+          onClose={() => setPremiumModal(null)}
+          onSuccess={async () => {
+            if (premiumModal.endpoint.includes("ad-free")) {
+              await updatePrefs({ premiumAdFree: true });
+            } else {
+              await updatePrefs({ premiumTravelerMode: true });
+            }
+            setPremiumModal(null);
+          }}
+          featureName={premiumModal.featureName}
+          description={premiumModal.description}
+          price={premiumModal.price}
+          paymentEndpoint={premiumModal.endpoint}
+          userId={userId || ""}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -707,6 +980,89 @@ const styles = StyleSheet.create({
   checkboxLabel: {
     fontSize: 14,
     fontFamily: "Poppins",
+  },
+  // ── Premium (blue) section styles ──
+  premiumSection: {
+    backgroundColor: "#0077CC",
+    marginTop: 16,
+    marginBottom: 4,
+    marginHorizontal: -15, // bleed out of ScrollView's paddingHorizontal: 15
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  premiumHeader: {
+    color: "#fff",
+    fontFamily: "Poppins",
+    fontWeight: "700",
+    fontSize: 15,
+    marginBottom: 10,
+  },
+  premiumLabel: {
+    color: "#fff",
+    fontFamily: "Poppins",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  premiumSublabel: {
+    color: "rgba(255,255,255,0.8)",
+    fontFamily: "Poppins",
+    fontSize: 12,
+    marginTop: 1,
+  },
+  premiumCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.5)",
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  premiumCheckboxChecked: {
+    backgroundColor: "#fff",
+    borderColor: "#fff",
+  },
+  premiumInput: {
+    color: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.4)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontFamily: "Poppins",
+    fontSize: 14,
+    marginTop: 4,
+  },
+  premiumStepper: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 8,
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  premiumStepperText: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 22,
+  },
+  premiumRadiusInput: {
+    color: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.5)",
+    fontFamily: "Poppins",
+    fontSize: 16,
+    minWidth: 40,
+    textAlign: "center",
+    paddingVertical: 2,
+  },
+  premiumUnitToggle: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   savedPostsBtn: {
     marginTop: 24,

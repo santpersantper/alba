@@ -79,6 +79,22 @@ async function fetchMyGroupsByUsername(myUsername) {
   return data || [];
 }
 
+async function fetchSenderProfilesByUsernames(usernames) {
+  const uniq = Array.from(new Set((usernames || []).filter(Boolean)));
+  if (!uniq.length) return {};
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("username, name")
+    .in("username", uniq);
+  if (error || !data) return {};
+  const map = {};
+  for (const r of data) {
+    const full = r.name || r.username || "";
+    map[r.username] = { firstName: full.split(" ")[0] || full };
+  }
+  return map;
+}
+
 async function fetchMe(uid) {
   const { data, error } = await supabase
     .from("profiles")
@@ -134,10 +150,15 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
   const dmIds = threads.filter((x) => !x.is_group).map((x) => x.chat_id).filter(Boolean);
   const groupIds = threads.filter((x) => !!x.is_group).map((x) => x.chat_id).filter(Boolean);
 
-  const [dmMap, groupMap, myGroups] = await Promise.all([
+  const senderUsernames = threads
+    .filter((x) => x.is_group && !x.last_sender_is_me && x.last_sender_username)
+    .map((x) => x.last_sender_username);
+
+  const [dmMap, groupMap, myGroups, senderProfilesMap] = await Promise.all([
     fetchProfilesByIds(dmIds),
     fetchGroupsByIds(groupIds),
     me.username ? fetchMyGroupsByUsername(me.username).catch(() => []) : Promise.resolve([]),
+    fetchSenderProfilesByUsernames(senderUsernames),
   ]);
 
   const mergedGroupMap = { ...groupMap };
@@ -162,6 +183,7 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
     threads,
     dmMap,
     groupMap: mergedGroupMap,
+    senderProfilesMap: senderProfilesMap || {},
     blockedUsers: me.blocked_users || [],
     maxDistanceKm,
     myUsername: me.username || null,
@@ -181,4 +203,29 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
 export function isCacheFresh(uid) {
   if (mem.uid !== uid || !mem.data) return false;
   return Date.now() - (mem.ts || 0) <= CACHE_TTL_MS;
+}
+
+/** Call this when unread state changes (e.g. opening a chat) so ChatListScreen re-fetches on next focus. */
+export function invalidateChatListCache() {
+  mem.ts = 0;
+}
+
+/**
+ * Immediately zero the unread count for a chat in the in-memory cache so the
+ * dot clears the moment the user returns to ChatListScreen, without waiting for
+ * a DB round-trip. Also forces a stale-cache flag so a real refresh follows.
+ */
+export function markChatReadInCache(chatId) {
+  if (!chatId || !mem.data?.threads) return;
+  mem.data = {
+    ...mem.data,
+    threads: mem.data.threads.map((t) =>
+      t.chat_id === chatId
+        ? { ...t, unread_count: 0, last_is_read: true }
+        : t
+    ),
+  };
+  // Do NOT reset mem.ts here — that would trigger refreshInBackground which
+  // races against the RPC and overwrites the patched value with stale DB data.
+  // The chat_threads Realtime subscription will refresh once the RPC commits.
 }

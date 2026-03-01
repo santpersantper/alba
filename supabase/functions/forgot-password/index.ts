@@ -124,6 +124,7 @@ Deno.serve(async (req) => {
       }
     } else {
       // RESEND_API_KEY not set — warn without leaking the generated password.
+      // Configure the secret before going to production.
       console.warn("[forgot-password] RESEND_API_KEY not configured. Password was generated but not delivered.");
     }
 
