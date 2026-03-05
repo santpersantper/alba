@@ -24,19 +24,29 @@ ios/
     AlbaDeviceActivityReport.entitlements
 ```
 
+**Bundle IDs:**
+- Main app: `com.albaapp.alba`
+- DeviceActivity Monitor extension: `com.albaapp.alba.AlbaDeviceActivityExtension`
+- DeviceActivityReport extension: `com.albaapp.alba.AlbaDeviceActivityReport`
+
 ---
 
 ## Prerequisites
 
 1. **Generate the `ios/` folder** (run this on a Mac):
    ```bash
-   npx expo run:ios
+   npx expo prebuild --platform ios
    ```
-   This creates `ios/Alba/`, `ios/AlbaTests/`, `ios/Podfile`, etc.
+   This creates `ios/Alba/`, `ios/Alba.xcodeproj`, `ios/Podfile`, etc.
+   The main app's `Alba.entitlements` file is **automatically created** with FamilyControls
+   and the App Group already set — because `app.config.js` has `ios.entitlements` configured.
+
+   > Alternatively `npx expo run:ios` does a prebuild + build in one step, but `prebuild` alone
+   > lets you inspect and adjust the Xcode project before building.
 
 2. **Set iOS deployment target to 16.0**
 
-   In `ios/Podfile`, update the first line:
+   After prebuild, open `ios/Podfile` and ensure the first line reads:
    ```ruby
    platform :ios, '16.0'
    ```
@@ -90,8 +100,7 @@ cd ios && pod install && cd ..
 1. **File → New → Target**
 2. Search **"Device Activity Monitor Extension"** → select it
 3. Product Name: `AlbaDeviceActivityExtension`
-4. Bundle Identifier: `com.anonymous.Alba.AlbaDeviceActivityExtension`
-   *(replace `com.anonymous.Alba` with your real bundle ID)*
+4. Bundle Identifier: `com.albaapp.alba.AlbaDeviceActivityExtension`
 5. Language: **Swift** → **Finish**
 6. Xcode generates a default `.swift` file — **delete it**
 7. Right-click the new `AlbaDeviceActivityExtension` group → **Add Files**
@@ -103,12 +112,12 @@ cd ios && pod install && cd ..
 
 ## Step 3b — Add the `AlbaDeviceActivityReport` target (Report — per-app data)
 
-This extension is what actually provides per-app minute counts.
+This extension provides per-app minute counts.
 
 1. **File → New → Target**
 2. Search **"Device Activity Report Extension"** → select it
 3. Product Name: `AlbaDeviceActivityReport`
-4. Bundle Identifier: `com.anonymous.Alba.AlbaDeviceActivityReport`
+4. Bundle Identifier: `com.albaapp.alba.AlbaDeviceActivityReport`
 5. Language: **Swift** → **Finish**
 6. Delete the generated `.swift` file
 7. Right-click the new `AlbaDeviceActivityReport` group → **Add Files**
@@ -120,14 +129,20 @@ This extension is what actually provides per-app minute counts.
 
 ## Step 4 — Add capabilities to the main `Alba` target
 
+> **The FamilyControls entitlement and App Group are already in `ios/Alba/Alba.entitlements`**
+> because `app.config.js` configures them via `ios.entitlements`. Expo's prebuild writes them
+> automatically. You only need to **verify** they are present in Xcode and add any missing ones.
+
 Select the `Alba` target → **Signing & Capabilities** tab:
 
-| Capability | How to add |
+| Capability | Status |
 |---|---|
-| **Family Controls** | + Capability → "Family Controls" |
-| **App Groups** | + Capability → "App Groups" → add `group.com.alba.app.screentime` |
-| **Push Notifications** | + Capability → "Push Notifications" |
-| **In-App Purchase** | + Capability → "In-App Purchase" |
+| **Family Controls** | ✅ Auto-added by Expo prebuild (verify it appears) |
+| **App Groups** (`group.com.alba.app.screentime`) | ✅ Auto-added by Expo prebuild (verify it appears) |
+| **Push Notifications** | Add manually if not present: + Capability → "Push Notifications" |
+| **In-App Purchase** | Add manually if not present: + Capability → "In-App Purchase" |
+
+If Family Controls or App Groups are missing from the Signing & Capabilities UI (even though they're in the `.entitlements` file), click **+ Capability** and add them — Xcode will sync with the entitlements file automatically.
 
 ---
 
@@ -145,7 +160,7 @@ Select the `Alba` target → **Signing & Capabilities** tab:
 
 ## Step 6 — Verify the main app entitlements file
 
-Xcode creates `ios/Alba/Alba.entitlements` automatically. Confirm it contains:
+Expo's prebuild creates `ios/Alba/Alba.entitlements`. Confirm it contains:
 
 ```xml
 <key>com.apple.developer.family-controls</key>
@@ -155,6 +170,8 @@ Xcode creates `ios/Alba/Alba.entitlements` automatically. Confirm it contains:
   <string>group.com.alba.app.screentime</string>
 </array>
 ```
+
+If it doesn't, add the keys manually or re-run `npx expo prebuild --platform ios`.
 
 ---
 
@@ -171,7 +188,7 @@ FamilyControls **does not work on the iOS Simulator**. A physical iPhone on iOS 
 2. iOS system permission dialog appears → user taps Allow
 3. `FamilyActivityPicker` sheet opens automatically → user selects Instagram, TikTok, X, etc.
 4. User taps Done → selection saved, monitoring starts
-5. Usage data is polled every 60 seconds via `getUsageData()`
+5. Usage data is polled every 60 seconds via `refreshReport()` → `getUsageData()`
 
 **To let users change their tracked apps later**, call `requestAppSelection()` from the
 `useScreenTime` hook (e.g. add a "Change tracked apps" row in a settings screen).
@@ -180,16 +197,13 @@ FamilyControls **does not work on the iOS Simulator**. A physical iPhone on iOS 
 
 ## Step 8 — App Store distribution
 
-Submit the **Family Controls (Distribution)** capability request at:
-https://developer.apple.com/contact/request/family-controls-distribution
+✅ **Family Controls (Distribution) capability has already been approved by Apple.**
 
-Required fields:
-- **App Apple ID**: numeric ID from App Store Connect (your app page → App Information)
-- **Bundle ID**: your app's bundle ID
-- **Category**: Personal device usage management
-- **Description**: "Users monitor and voluntarily reduce their own social media screen time through goal-setting and streak tracking"
+When submitting to the App Store, ensure you select the correct provisioning profiles that
+include the Family Controls entitlement. In App Store Connect, confirm that
+`com.apple.developer.family-controls` is listed under your app's capabilities.
 
-This approval is only needed for public App Store releases. Development and TestFlight builds work without it.
+Development and TestFlight builds work without any additional steps.
 
 ---
 

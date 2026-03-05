@@ -30,7 +30,25 @@ export default {
     },
     ios: {
       supportsTablet: true,
-      bundleIdentifier: "com.alba.app",
+      bundleIdentifier: "com.albaapp.alba",
+      infoPlist: {
+        CFBundleURLTypes: [
+          {
+            CFBundleURLSchemes: [
+              // Reversed iOS OAuth client ID — required for Google Sign-In redirect
+              "com.googleusercontent.apps.1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi",
+            ],
+          },
+        ],
+        // Suppress App Store encryption export compliance warning
+        ITSAppUsesNonExemptEncryption: false,
+      },
+      // FamilyControls + App Group entitlements — auto-written to ios/Alba/Alba.entitlements
+      // by `npx expo prebuild`. No manual Xcode entitlements step needed for the main target.
+      entitlements: {
+        "com.apple.developer.family-controls": true,
+        "com.apple.security.application-groups": ["group.com.alba.app.screentime"],
+      },
     },
     android: {
       adaptiveIcon: {
@@ -55,12 +73,16 @@ export default {
         // AWS Lambda face-verification endpoint — never hardcode the URL in source
         LAMBDA_VERIFY_URL: process.env.EXPO_PUBLIC_LAMBDA_VERIFY_URL,
       },
+      "eas": {
+        "projectId": "e60b55c9-7893-4d92-a121-0f23c058f513"
+      }
     },
     plugins: [
       "expo-font",
       "expo-asset",
       "expo-secure-store",
       "expo-video",
+      "expo-web-browser",
       [
         "@stripe/stripe-react-native",
         {
