@@ -356,6 +356,12 @@ function applyBuildSettings(proj, target, settings) {
  * and registers each extension as a PBXTargetDependency. This is required so
  * CocoaPods can detect the host-extension relationship and so Xcode embeds
  * the .appex bundles in the final .ipa.
+ *
+ * Uses proj.addBuildPhase() instead of manual object construction.
+ * Manual construction of PBXCopyFilesBuildPhase produces serialization formats
+ * (e.g. dstPath with embedded quote chars) that some xcode npm versions write
+ * as `KEY = ;` — an empty value that causes the pbxproj parser to throw
+ * "Expected '(' but ';' found", breaking withIosEntitlementsBaseMod.
  */
 function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   const objects = proj.hash.project.objects;
@@ -363,34 +369,31 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   const mainTarget = nativeTargets[mainTargetUuid];
   if (!mainTarget) return;
 
-  // Ensure section maps exist
-  objects["PBXCopyFilesBuildPhase"] = objects["PBXCopyFilesBuildPhase"] || {};
+  // Let the xcode library create the phase so it handles serialization correctly.
+  // addBuildPhase also automatically pushes the phase into mainTarget.buildPhases.
+  const phaseResult = proj.addBuildPhase(
+    [],
+    "PBXCopyFilesBuildPhase",
+    "Embed App Extensions",
+    mainTargetUuid,
+    { dstSubfolderSpec: 13, dstPath: "" }
+  );
+  const copyPhaseUuid = phaseResult?.uuid;
+  const copyPhaseFiles =
+    objects["PBXCopyFilesBuildPhase"]?.[copyPhaseUuid]?.files;
+
   objects["PBXBuildFile"] = objects["PBXBuildFile"] || {};
   objects["PBXTargetDependency"] = objects["PBXTargetDependency"] || {};
   objects["PBXContainerItemProxy"] = objects["PBXContainerItemProxy"] || {};
 
-  // Create the Embed App Extensions copy phase
-  const copyPhaseUuid = proj.generateUuid();
-  const copyPhase = {
-    isa: "PBXCopyFilesBuildPhase",
-    buildActionMask: 2147483647,
-    dstPath: '""',          // xcode lib writes values verbatim; '""' → dstPath = "";
-    dstSubfolderSpec: 13,   // PlugIns — where app extensions live in the bundle
-    files: [],
-    name: '"Embed App Extensions"', // space-containing string must carry its own quotes
-    runOnlyForDeploymentPostprocessing: 0,
-  };
-  objects["PBXCopyFilesBuildPhase"][copyPhaseUuid] = copyPhase;
-  objects["PBXCopyFilesBuildPhase"][`${copyPhaseUuid}_comment`] =
-    "Embed App Extensions";
-
   for (const extTarget of extTargets) {
     const extNative = extTarget.pbxNativeTarget;
     const extUuid = extTarget.uuid;
-    const extName = extNative.name;
+    // xcode npm may store names with surrounding pbxproj quote chars — strip them.
+    const extName = stripPbxString(extNative.name);
     const productRef = extNative.productReference;
 
-    if (productRef) {
+    if (productRef && copyPhaseUuid && copyPhaseFiles) {
       // Build file for the .appex product (no ATTRIBUTES — avoids duplicate
       // code-sign tasks in Xcode 26's stricter build system validation)
       const bfUuid = proj.generateUuid();
@@ -401,7 +404,7 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
       };
       objects["PBXBuildFile"][`${bfUuid}_comment`] =
         `${extName}.appex in Embed App Extensions`;
-      copyPhase.files.push({
+      copyPhaseFiles.push({
         value: bfUuid,
         comment: `${extName}.appex in Embed App Extensions`,
       });
@@ -428,13 +431,15 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
     mainTarget.dependencies = mainTarget.dependencies || [];
     mainTarget.dependencies.push({ value: depUuid, comment: "PBXTargetDependency" });
   }
+  // Note: addBuildPhase already added the phase UUID to mainTarget.buildPhases.
+}
 
-  // Add the copy phase to the main target's build phases
-  mainTarget.buildPhases = mainTarget.buildPhases || [];
-  mainTarget.buildPhases.push({
-    value: copyPhaseUuid,
-    comment: "Embed App Extensions",
-  });
+/** Strip surrounding pbxproj quote chars that xcode npm stores on some string values. */
+function stripPbxString(s) {
+  const str = String(s || "");
+  return str.startsWith('"') && str.endsWith('"') && str.length >= 2
+    ? str.slice(1, -1)
+    : str;
 }
 
 /**
