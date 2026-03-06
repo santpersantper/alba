@@ -447,51 +447,70 @@ function stripPbxString(s) {
  * Podfile into a single block, then appends CODE_SIGNING_ALLOWED = NO so
  * Xcode 14+ doesn't try to sign CocoaPods resource-bundle targets.
  *
- * Multiple plugins (stripe, reanimated, …) each append their own post_install
- * block. CocoaPods rejects Podfiles with more than one such block. Because
- * withScreenTime is the last plugin, by the time this runs the Podfile is
- * fully assembled and all other post_install blocks are already present.
+ * Uses a line-by-line parser instead of a regex. The regex approach was
+ * unreliable because RN 0.81's Podfile template can add trailing chars,
+ * varying whitespace, or comments on the opening/closing lines that cause
+ * the pattern to miss blocks — leaving multiple hooks which CocoaPods rejects.
  *
- * The regex matches `post_install do |installer|` through the first `^end`
- * at column 0, which is always the closing keyword for the outer block
- * (inner `end` statements are indented).
+ * Rule: any line whose first non-space chars are `post_install do |installer|`
+ * opens a block; the first subsequent line starting with `end` (at any
+ * indentation that matches the opening line) closes it.  Since post_install
+ * is always top-level in a Podfile its opening and closing are at column 0.
  */
 function mergePostInstallHooks(podfile) {
-  const re = /^post_install do \|installer\|\n([\s\S]*?)^end$/gm;
+  const SIGNING_FIX = [
+    "  installer.pods_project.targets.each do |target|",
+    "    target.build_configurations.each do |config|",
+    "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
+    "    end",
+    "  end",
+  ].join("\n");
 
+  const lines = podfile.split("\n");
+  const outputLines = [];
   const bodies = [];
-  const stripped = podfile.replace(re, (_, body) => {
-    bodies.push(body.trimEnd());
-    return "";
-  });
+  let inBlock = false;
+  let bodyLines = [];
 
-  if (bodies.length === 0) {
-    // No existing post_install block — create one with just the signing fix
-    const signingFix = [
-      "  installer.pods_project.targets.each do |target|",
-      "    target.build_configurations.each do |config|",
-      "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
-      "    end",
-      "  end",
-    ].join("\n");
-    return podfile.trimEnd() + "\n\npost_install do |installer|\n" + signingFix + "\nend\n";
+  for (const line of lines) {
+    // Opening: top-level post_install block (line starts with post_install)
+    if (!inBlock && /^post_install do \|installer\|/.test(line)) {
+      inBlock = true;
+      bodyLines = [];
+      continue; // consume the opening line
+    }
+
+    if (inBlock) {
+      // Closing: a line starting with `end` at column 0
+      if (/^end\b/.test(line)) {
+        bodies.push(bodyLines.join("\n").trimEnd());
+        inBlock = false;
+        bodyLines = [];
+      } else {
+        bodyLines.push(line);
+      }
+      continue; // consume all lines inside the block (including closing end)
+    }
+
+    outputLines.push(line);
   }
 
-  // Append signing fix if no existing block already sets it
-  const alreadyFixed = bodies.some((b) => b.includes("CODE_SIGNING_ALLOWED"));
-  if (!alreadyFixed) {
-    bodies.push(
-      [
-        "  installer.pods_project.targets.each do |target|",
-        "    target.build_configurations.each do |config|",
-        "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
-        "    end",
-        "  end",
-      ].join("\n")
+  if (bodies.length === 0) {
+    // No post_install block found — add one (handles truly empty Podfiles)
+    if (podfile.includes("CODE_SIGNING_ALLOWED")) return podfile;
+    return (
+      podfile.trimEnd() +
+      "\n\npost_install do |installer|\n" +
+      SIGNING_FIX +
+      "\nend\n"
     );
   }
 
+  // Append signing fix once if none of the merged bodies already include it
+  const alreadyFixed = bodies.some((b) => b.includes("CODE_SIGNING_ALLOWED"));
+  if (!alreadyFixed) bodies.push(SIGNING_FIX);
+
   const mergedBlock =
     "post_install do |installer|\n" + bodies.join("\n") + "\nend";
-  return stripped.trimEnd() + "\n\n" + mergedBlock + "\n";
+  return outputLines.join("\n").trimEnd() + "\n\n" + mergedBlock + "\n";
 }
