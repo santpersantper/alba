@@ -155,52 +155,78 @@ module.exports = function withScreenTime(config) {
       // than one. Since withScreenTime runs last in the plugins array we can
       // read the fully-assembled Podfile, merge every post_install block into
       // a single block, and append the CODE_SIGNING_ALLOWED fix.
-      podfile = mergePostInstallHooks(podfile);
+      // Wrap Podfile changes in try-catch so that any regex/IO failure here
+      // does NOT prevent the extension files below from being written.
+      try {
+        podfile = mergePostInstallHooks(podfile);
+        fs.writeFileSync(podfilePath, podfile);
+      } catch (e) {
+        console.warn("[withScreenTime] Podfile post_install merge failed:", e?.message || e);
+      }
 
-      fs.writeFileSync(podfilePath, podfile);
-
-      // ── Recreate extension entitlements files ─────────────────────────────
-      // EAS Build clears the entire ios/ directory during prebuild, wiping any
-      // extension subdirectory files that were committed to git. We recreate
-      // the entitlements files here so Xcode can find them at build time.
+      // ── Recreate extension support files ──────────────────────────────────
+      // EAS Build clears the entire ios/ directory during prebuild. We must
+      // recreate the entitlements AND Info.plist files for both extension
+      // targets here, unconditionally, so Xcode can find them at build time.
+      // These are always overwritten — never skipped — to ensure fresh content.
       const iosRoot = config.modRequest.platformProjectRoot;
 
-      const extEntitlements = [
-        {
-          dir: "AlbaDeviceActivityExtension",
-          filename: "AlbaDeviceActivityExtension.entitlements",
-          content: `<?xml version="1.0" encoding="UTF-8"?>
+      const APP_GROUP = "group.com.alba.app.screentime";
+      const entitlementsPlist = (appGroup) => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>group.com.alba.app.screentime</string>
+        <string>${appGroup}</string>
     </array>
 </dict>
+</plist>`;
+
+      const extFiles = [
+        {
+          dir: "AlbaDeviceActivityExtension",
+          files: {
+            "AlbaDeviceActivityExtension.entitlements": entitlementsPlist(APP_GROUP),
+            "Info.plist": `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.deviceactivity.monitor-extension</string>
+    </dict>
+</dict>
 </plist>`,
+          },
         },
         {
           dir: "AlbaDeviceActivityReport",
-          filename: "AlbaDeviceActivityReport.entitlements",
-          content: `<?xml version="1.0" encoding="UTF-8"?>
+          files: {
+            "AlbaDeviceActivityReport.entitlements": entitlementsPlist(APP_GROUP),
+            "Info.plist": `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.application-groups</key>
-    <array>
-        <string>group.com.alba.app.screentime</string>
-    </array>
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.deviceactivity.ui-extension</string>
+    </dict>
 </dict>
 </plist>`,
+          },
         },
       ];
 
-      for (const { dir, filename, content } of extEntitlements) {
+      for (const { dir, files } of extFiles) {
         const dirPath = path.join(iosRoot, dir);
         if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-        const filePath = path.join(dirPath, filename);
-        if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, content);
+        for (const [filename, content] of Object.entries(files)) {
+          // Always write — never skip — so stale/missing files are fixed every run.
+          fs.writeFileSync(path.join(dirPath, filename), content);
+        }
       }
       return config;
     },
@@ -286,10 +312,18 @@ function addFileToTarget(proj, filename, groupKey, targetUuid) {
     const phaseUuid =
       typeof phaseRef === "object" ? phaseRef.value : phaseRef;
     if (sourcesPhases[phaseUuid]) {
-      sourcesPhases[phaseUuid].files.push({
-        value: buildFileUuid,
-        comment: `${filename} in Sources`,
-      });
+      // Guard against duplicate Sources entries (Xcode 16 "unexpected duplicate
+      // tasks" error). Skip if this file is already listed in the phase.
+      const phase = sourcesPhases[phaseUuid];
+      const alreadyListed = (phase.files || []).some(
+        (f) => f.comment && f.comment.includes(filename)
+      );
+      if (!alreadyListed) {
+        phase.files.push({
+          value: buildFileUuid,
+          comment: `${filename} in Sources`,
+        });
+      }
       break;
     }
   }

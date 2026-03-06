@@ -8,21 +8,21 @@
       "credentialsSource": "local",
       "developmentClient": true,
       "distribution": "internal",
-      "prebuildCommand": "npx expo prebuild --platform ios",
+      "prebuildCommand": "npx expo prebuild --clean --platform ios",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
       }
     },
     "preview": {
       "distribution": "internal",
-      "prebuildCommand": "npx expo prebuild --platform ios",
+      "prebuildCommand": "npx expo prebuild --clean --platform ios",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
       }
     },
     "production": {
       "autoIncrement": true,
-      "prebuildCommand": "npx expo prebuild --platform ios",
+      "prebuildCommand": "npx expo prebuild --clean --platform ios",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
       }
