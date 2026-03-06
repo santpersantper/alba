@@ -1,9 +1,16 @@
 require("dotenv").config();
+const Sentry = require("@sentry/node");
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const Stripe = require("stripe");
 const { createClient } = require("@supabase/supabase-js");
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || "production",
+  tracesSampleRate: 0.1,
+});
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const app = express();
@@ -117,6 +124,7 @@ app.post("/create-payment-intent", requireAuth, paymentLimiter, async (req, res)
 
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (err) {
+    Sentry.captureException(err);
     console.error("[/create-payment-intent] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -143,6 +151,7 @@ app.post("/create-payment-intent/premium-ad-free", requireAuth, paymentLimiter, 
     );
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (err) {
+    Sentry.captureException(err);
     console.error("[/create-payment-intent/premium-ad-free] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -169,6 +178,7 @@ app.post("/create-payment-intent/premium-traveler", requireAuth, paymentLimiter,
     );
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (err) {
+    Sentry.captureException(err);
     console.error("[/create-payment-intent/premium-traveler] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -200,6 +210,7 @@ app.post("/create-payment-intent/diffusion-message", requireAuth, paymentLimiter
     );
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (err) {
+    Sentry.captureException(err);
     console.error("[/create-payment-intent/diffusion-message] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -239,6 +250,7 @@ app.post("/verify-face", requireAuth, verifyFaceLimiter, async (req, res) => {
     console.log(`[/verify-face] User ${uid} marked as verified.`);
     res.json({ ok: true });
   } catch (err) {
+    Sentry.captureException(err);
     console.error("[/verify-face] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -304,6 +316,9 @@ app.post("/webhook", (req, res) => {
 
   res.json({ received: true });
 });
+
+// Sentry error handler must be registered after all routes
+Sentry.setupExpressErrorHandler(app);
 
 app.listen(PORT, () => {
   console.log(`Alba payment server running on port ${PORT}`);

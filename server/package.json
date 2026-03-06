@@ -5,6 +5,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@sentry/node": "^8.0.0",
     "@supabase/supabase-js": "^2.75.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

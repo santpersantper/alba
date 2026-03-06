@@ -20,6 +20,7 @@ import {
   useIsFocused,
 } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
 import {
   FEED_TIMER_ENABLED_KEY,
   FEED_TIMER_ALERT_MINUTES_KEY,
@@ -34,11 +35,16 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 
 import {
   readCachedFirstFeedVideoOverride,
   cacheFirstFeedVideoFromList,
 } from "../lib/feedFirstVideoCache";
+import {
+  getCachedVideoUrl,
+  cacheVideosInBackground,
+} from "../lib/feedVideoCache";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const PUBLIC_BUCKET = "public";
@@ -63,6 +69,7 @@ function resolveVideoUrl(storagePath) {
 function FeedItem({
   item,
   isActive,
+  isPreloading,
   isSaved,
   isScreenFocused,
   itemHeight,
@@ -80,9 +87,13 @@ function FeedItem({
   onAvatarPress,
   onDelete,
 }) {
-  const player = useVideoPlayer(item.videoUrl, (playerInstance) => {
-    playerInstance.loop = true;
-  });
+  const { t } = useAlbaLanguage();
+  // Only create a loaded player for the active item and the one immediately after
+  // (so swiping forward is instant). All other items get null — no buffering.
+  const player = useVideoPlayer(
+    isActive || isPreloading ? item.videoUrl : null,
+    (playerInstance) => { playerInstance.loop = true; }
+  );
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -150,7 +161,7 @@ function FeedItem({
             style={styles.readMoreText}
             onPress={() => setShowFullCaption(true)}
           >
-            Read more
+            {t("caption_read_more")}
           </Text>
         )}
       </>
@@ -262,7 +273,7 @@ function FeedItem({
                 color="#333"
                 style={{ marginRight: 8 }}
               />
-              <Text style={styles.menuText}>Report</Text>
+              <Text style={styles.menuText}>{t("feed_report_menu")}</Text>
             </TouchableOpacity>
 
             <View style={styles.menuDivider} />
@@ -280,7 +291,7 @@ function FeedItem({
                 color="#333"
                 style={{ marginRight: 8 }}
               />
-              <Text style={styles.menuText}>Block user</Text>
+              <Text style={styles.menuText}>{t("feed_block_menu")}</Text>
             </TouchableOpacity>
 
             {item.canDelete && <View style={styles.menuDivider} />}
@@ -300,7 +311,7 @@ function FeedItem({
                   style={{ marginRight: 8 }}
                 />
                 <Text style={[styles.menuText, { color: "#d23b3b" }]}>
-                  Delete
+                  {t("feed_delete_menu")}
                 </Text>
               </TouchableOpacity>
             )}
@@ -323,7 +334,7 @@ function FeedItem({
           />
           <View style={styles.confirmCard}>
             <Text style={styles.confirmTitle}>
-              Are you sure you want to delete this post?
+              {t("feed_delete_title")}
             </Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
@@ -333,13 +344,13 @@ function FeedItem({
                   onDelete && onDelete(item.id);
                 }}
               >
-                <Text style={styles.confirmBtnText}>Yes</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_yes")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]}
                 onPress={() => setConfirmOpen(false)}
               >
-                <Text style={styles.confirmBtnText}>No</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_no")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -353,6 +364,7 @@ export default function FeedScreen() {
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
+  const { t } = useAlbaLanguage();
 
   const listRef = useRef(null);
 
@@ -376,6 +388,7 @@ export default function FeedScreen() {
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportText, setReportText] = useState("");
   const [reportTargetUserId, setReportTargetUserId] = useState(null);
+  const [reportTargetItem, setReportTargetItem] = useState(null);
 
   // block confirm modal state
   const [blockModalVisible, setBlockModalVisible] = useState(false);
@@ -566,17 +579,33 @@ export default function FeedScreen() {
 
           let blocked = [];
           let myUsername = null;
+          let feedTags = [];
+          let feedEmbedding = null;
+          let feedRadiusKm = null;
 
           if (user) {
             const { data: profile, error: profileError } = await supabase
               .from("profiles")
-              .select("blocked_users, username")
+              .select("blocked_users, username, saved_feed_videos, feed_tags, feed_preference_embedding, feed_radius_km")
               .eq("id", user.id)
               .single();
 
             if (!profileError && profile) {
               blocked = profile.blocked_users || [];
               myUsername = profile.username || null;
+              feedTags = profile.feed_tags || [];
+              feedRadiusKm = profile.feed_radius_km || null;
+              // embedding is stored as a string like "[0.1, 0.2, ...]" — parse it
+              if (profile.feed_preference_embedding) {
+                try {
+                  feedEmbedding = typeof profile.feed_preference_embedding === "string"
+                    ? JSON.parse(profile.feed_preference_embedding)
+                    : profile.feed_preference_embedding;
+                } catch {}
+              }
+              if (Array.isArray(profile.saved_feed_videos)) {
+                setSavedIds(new Set(profile.saved_feed_videos.map(String)));
+              }
             } else if (profileError) {
               console.warn("Error loading profile in FeedScreen:", profileError);
             }
@@ -595,11 +624,62 @@ export default function FeedScreen() {
             return prev;
           });
 
-          const { data: rows, error } = await supabase
-            .from("feed_videos")
-            .select("id, user_id, username, caption, video_storage_path, created_at")
-            .order("created_at", { ascending: false })
-            .limit(30);
+          // Personalized feed: use RPC when any preference is set
+          const hasPersonalization = feedEmbedding || feedTags.length > 0 || feedRadiusKm;
+
+          let rows = null;
+          let error = null;
+
+          if (hasPersonalization && user) {
+            let userLat = null;
+            let userLng = null;
+
+            if (feedRadiusKm) {
+              try {
+                const { status } = await Location.requestForegroundPermissionsAsync();
+                if (status === "granted") {
+                  const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                  userLat = pos.coords.latitude;
+                  userLng = pos.coords.longitude;
+                }
+              } catch {}
+            }
+
+            const { data: rpcRows, error: rpcError } = await supabase.rpc("get_personalized_feed", {
+              uid: user.id,
+              query_embedding: feedEmbedding || null,
+              preferred_tags: feedTags.length > 0 ? feedTags : [],
+              user_lat: userLat,
+              user_lng: userLng,
+              radius_km: feedRadiusKm || null,
+              match_count: 30,
+            });
+
+            rows = rpcRows;
+            error = rpcError;
+
+            // If personalized RPC returned nothing (tags/radius too strict, or no
+            // embeddings yet), fall back to the plain chronological feed so the
+            // user never sees an empty screen just because preferences are set.
+            if (!error && (!rows || rows.length === 0)) {
+              const { data: fallbackRows, error: fallbackError } = await supabase
+                .from("feed_videos")
+                .select("id, user_id, username, caption, video_storage_path, created_at")
+                .order("created_at", { ascending: false })
+                .limit(30);
+              rows = fallbackRows;
+              error = fallbackError;
+            }
+          } else {
+            const { data: tableRows, error: tableError } = await supabase
+              .from("feed_videos")
+              .select("id, user_id, username, caption, video_storage_path, created_at")
+              .order("created_at", { ascending: false })
+              .limit(30);
+
+            rows = tableRows;
+            error = tableError;
+          }
 
           if (error) {
             console.error("Error loading feed videos:", error);
@@ -608,7 +688,7 @@ export default function FeedScreen() {
 
           if (!isActive) return;
 
-          const mapped =
+          const rawMapped =
             (rows || [])
               .filter((row) => !blocked.includes(row.user_id))
               .map((row) => {
@@ -624,6 +704,20 @@ export default function FeedScreen() {
                 };
               })
               .filter(Boolean) || [];
+
+          // Swap in local cached URLs where available — avoids CDN round-trips
+          const mapped = await Promise.all(
+            rawMapped.map(async (item) => {
+              const localUrl = await getCachedVideoUrl(item.id, item.videoUrl);
+              return localUrl ? { ...item, videoUrl: localUrl } : item;
+            })
+          );
+
+          // Queue background downloads for the first 5 remote (uncached) videos
+          const toCache = mapped
+            .filter((item) => !String(item.videoUrl).startsWith("file://"))
+            .slice(0, 5);
+          cacheVideosInBackground(toCache).catch(() => {});
 
           // ✅ KEY FIX:
           // If we're currently showing a cached first video (file://) and it matches
@@ -690,7 +784,7 @@ export default function FeedScreen() {
 
         if (error) {
           console.warn("Error deleting feed video:", error);
-          showToast("Couldn't delete this post.");
+          showToast(t("feed_couldnt_delete"));
           return;
         }
 
@@ -699,7 +793,7 @@ export default function FeedScreen() {
 
         if (filtered.length === 0) {
           setCurrentIndex(0);
-          showToast("Post deleted.");
+          showToast(t("feed_deleted_toast"));
           return;
         }
 
@@ -714,10 +808,10 @@ export default function FeedScreen() {
           }
         }
 
-        showToast("Post deleted.");
+        showToast(t("feed_deleted_toast"));
       } catch (e) {
         console.warn("Unexpected error deleting feed video:", e);
-        showToast("Couldn't delete this post.");
+        showToast(t("feed_couldnt_delete"));
       }
     },
     [data, currentIndex, showToast]
@@ -740,14 +834,22 @@ export default function FeedScreen() {
     }
   };
 
-  const handleToggleSave = (id) => {
+  const handleToggleSave = useCallback((id) => {
     setSavedIds((prev) => {
       const copy = new Set(prev);
       if (copy.has(id)) copy.delete(id);
       else copy.add(id);
+      const newIds = Array.from(copy);
+      if (meId) {
+        supabase
+          .from("profiles")
+          .update({ saved_feed_videos: newIds })
+          .eq("id", meId)
+          .then(() => {});
+      }
       return copy;
     });
-  };
+  }, [meId]);
 
   const handleTap = () => {
     setBarVisible((prev) => !prev);
@@ -768,8 +870,7 @@ export default function FeedScreen() {
   const applyBlockUser = async (userId) => {
     if (!userId) return;
 
-    console.log("You've blocked this user.");
-    showToast("You've blocked this user.");
+    showToast(t("feed_blocked_toast"));
 
     const updatedBlocked = Array.from(new Set([...(blockedUserIds || []), userId]));
     setBlockedUserIds(updatedBlocked);
@@ -827,20 +928,50 @@ export default function FeedScreen() {
   };
 
   const handleReportUser = (userId) => {
+    const item = data.find((d) => d.userId === userId) || null;
     setReportTargetUserId(userId);
+    setReportTargetItem(item);
     setReportText("");
     setReportModalVisible(true);
   };
 
-  const handleSendReport = () => {
+  const handleSendReport = async () => {
     setReportModalVisible(false);
+    const item = reportTargetItem;
+    const text = reportText.trim();
     setReportText("");
-    showToast("You reported this user.");
+    setReportTargetItem(null);
+
+    try {
+      await supabase.from("reports").insert({
+        reported_by: meId,
+        reason: `Feed video by @${item?.username ?? "unknown"}: "${(item?.caption ?? "").slice(0, 80)}" — ${text || "no reason"}`,
+      });
+    } catch {}
+
+    try {
+      await supabase.functions.invoke("send-report", {
+        body: {
+          type: "feed_video",
+          reported_by_id: meId,
+          reported_by_username: meUsername,
+          reason: text,
+          context: {
+            video_id: item?.id,
+            video_caption: item?.caption,
+            video_poster_username: item?.username,
+          },
+        },
+      });
+    } catch {}
+
+    showToast(t("feed_reported_toast"));
   };
 
   const handleCancelReport = () => {
     setReportModalVisible(false);
     setReportText("");
+    setReportTargetItem(null);
   };
 
   const currentItem = data[currentIndex];
@@ -891,11 +1022,11 @@ export default function FeedScreen() {
 
         {showInitialLoader ? (
           <View style={styles.emptyState}>
-            <Text style={{ color: "#fff" }}>Loading videos…</Text>
+            <Text style={{ color: "#fff" }}>{t("feed_loading")}</Text>
           </View>
         ) : data.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={{ color: "#fff" }}>No videos yet</Text>
+            <Text style={{ color: "#fff" }}>{t("feed_no_videos")}</Text>
           </View>
         ) : (
           <FlatList
@@ -913,6 +1044,7 @@ export default function FeedScreen() {
               <FeedItem
                 item={item}
                 isActive={index === currentIndex}
+                isPreloading={index === currentIndex + 1}
                 isSaved={savedIds.has(item.id)}
                 isScreenFocused={isFocused}
                 itemHeight={viewHeight}
@@ -958,14 +1090,14 @@ export default function FeedScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.reportCard}>
             <Text style={styles.reportTitle}>
-              Why do you want to report this user?
+              {t("feed_report_title")}
             </Text>
             <TextInput
               style={styles.reportInput}
               multiline
               value={reportText}
               onChangeText={setReportText}
-              placeholder="Describe the issue..."
+              placeholder={t("feed_report_placeholder")}
               placeholderTextColor="#999"
             />
             <View style={styles.reportButtonsRow}>
@@ -973,14 +1105,14 @@ export default function FeedScreen() {
                 style={[styles.reportBtn, styles.reportCancelBtn]}
                 onPress={handleCancelReport}
               >
-                <Text style={styles.reportBtnText}>Cancel</Text>
+                <Text style={styles.reportBtnText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.reportBtn, styles.reportSendBtn]}
                 onPress={handleSendReport}
               >
                 <Text style={[styles.reportBtnText, { color: "#fff" }]}>
-                  Send
+                  {t("submit_button")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -998,21 +1130,21 @@ export default function FeedScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.blockCard}>
             <Text style={styles.blockTitle}>
-              Are you sure you want to block this user?
+              {t("feed_block_title")}
             </Text>
             <View style={styles.blockButtonsRow}>
               <TouchableOpacity
                 style={[styles.blockBtnSmall, styles.blockNoBtn]}
                 onPress={cancelBlockUser}
               >
-                <Text style={styles.blockBtnSmallText}>No</Text>
+                <Text style={styles.blockBtnSmallText}>{t("confirm_no")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.blockBtnSmall, styles.blockYesBtn]}
                 onPress={confirmBlockUser}
               >
                 <Text style={[styles.blockBtnSmallText, { color: "#fff" }]}>
-                  Yes
+                  {t("confirm_yes")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1029,15 +1161,15 @@ export default function FeedScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.timerAlertCard}>
-            <Text style={styles.timerAlertTitle}>Time for a break!</Text>
+            <Text style={styles.timerAlertTitle}>{t("feed_break_title")}</Text>
             <Text style={styles.timerAlertMessage}>
-              {`You've been watching for ${timerAlertMinutes} minute${timerAlertMinutes === 1 ? "" : "s"}.`}
+              {t("feed_break_message").replace("{n}", timerAlertMinutes)}
             </Text>
             <TouchableOpacity
               style={styles.timerAlertOkBtn}
               onPress={() => setTimerAlertVisible(false)}
             >
-              <Text style={styles.timerAlertOkText}>OK</Text>
+              <Text style={styles.timerAlertOkText}>{t("ok_button")}</Text>
             </TouchableOpacity>
           </View>
         </View>
