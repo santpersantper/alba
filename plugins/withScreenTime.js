@@ -148,32 +148,10 @@ module.exports = function withScreenTime(config) {
       // Extension targets have zero CocoaPods dependencies — keep them out of
       // the Podfile. The Xcode project's Embed App Extensions build phase is
       // what makes Xcode bundle the .appex files into the .ipa.
-
-      // Fix for Xcode 14+: resource bundle targets are signed by default which
-      // breaks builds. Apply CODE_SIGNING_ALLOWED = NO to all pod targets
-      // (installer.pods_project only contains CocoaPods targets, never the main
-      // app or extensions, so this is safe). CocoaPods does NOT support multiple
-      // post_install hooks, so we inject inside the block Expo already generates.
-      if (!podfile.includes("CODE_SIGNING_ALLOWED")) {
-        const bundleFix = [
-          "  installer.pods_project.targets.each do |target|",
-          "    target.build_configurations.each do |config|",
-          "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
-          "    end",
-          "  end",
-        ].join("\n");
-
-        // Use a regex so we match any whitespace variant of the opening line
-        const postInstallMatch = podfile.match(/^post_install do \|installer\|.*$/m);
-        if (postInstallMatch) {
-          podfile = podfile.replace(
-            postInstallMatch[0],
-            postInstallMatch[0] + "\n" + bundleFix
-          );
-        } else {
-          podfile += "\npost_install do |installer|\n" + bundleFix + "\nend\n";
-        }
-      }
+      //
+      // Note: CODE_SIGNING_ALLOWED = NO for resource bundle targets is handled
+      // by pinning Xcode 15.4 via the `image` field in eas.json, avoiding the
+      // need to inject a post_install hook (which conflicts with other plugins).
 
       fs.writeFileSync(podfilePath, podfile);
 
