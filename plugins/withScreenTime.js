@@ -148,10 +148,14 @@ module.exports = function withScreenTime(config) {
       // Extension targets have zero CocoaPods dependencies — keep them out of
       // the Podfile. The Xcode project's Embed App Extensions build phase is
       // what makes Xcode bundle the .appex files into the .ipa.
-      //
-      // Note: CODE_SIGNING_ALLOWED = NO for resource bundle targets is handled
-      // by pinning Xcode 15.4 via the `image` field in eas.json, avoiding the
-      // need to inject a post_install hook (which conflicts with other plugins).
+
+      // Fix for Xcode 14+: resource bundle targets are signed by default which
+      // breaks builds. Multiple plugins (reanimated, stripe, …) each append
+      // their own `post_install` block; CocoaPods rejects Podfiles with more
+      // than one. Since withScreenTime runs last in the plugins array we can
+      // read the fully-assembled Podfile, merge every post_install block into
+      // a single block, and append the CODE_SIGNING_ALLOWED fix.
+      podfile = mergePostInstallHooks(podfile);
 
       fs.writeFileSync(podfilePath, podfile);
 
@@ -397,4 +401,58 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
     value: copyPhaseUuid,
     comment: "Embed App Extensions",
   });
+}
+
+/**
+ * Merges all `post_install do |installer| ... end` blocks found in the
+ * Podfile into a single block, then appends CODE_SIGNING_ALLOWED = NO so
+ * Xcode 14+ doesn't try to sign CocoaPods resource-bundle targets.
+ *
+ * Multiple plugins (stripe, reanimated, …) each append their own post_install
+ * block. CocoaPods rejects Podfiles with more than one such block. Because
+ * withScreenTime is the last plugin, by the time this runs the Podfile is
+ * fully assembled and all other post_install blocks are already present.
+ *
+ * The regex matches `post_install do |installer|` through the first `^end`
+ * at column 0, which is always the closing keyword for the outer block
+ * (inner `end` statements are indented).
+ */
+function mergePostInstallHooks(podfile) {
+  const re = /^post_install do \|installer\|\n([\s\S]*?)^end$/gm;
+
+  const bodies = [];
+  const stripped = podfile.replace(re, (_, body) => {
+    bodies.push(body.trimEnd());
+    return "";
+  });
+
+  if (bodies.length === 0) {
+    // No existing post_install block — create one with just the signing fix
+    const signingFix = [
+      "  installer.pods_project.targets.each do |target|",
+      "    target.build_configurations.each do |config|",
+      "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
+      "    end",
+      "  end",
+    ].join("\n");
+    return podfile.trimEnd() + "\n\npost_install do |installer|\n" + signingFix + "\nend\n";
+  }
+
+  // Append signing fix if no existing block already sets it
+  const alreadyFixed = bodies.some((b) => b.includes("CODE_SIGNING_ALLOWED"));
+  if (!alreadyFixed) {
+    bodies.push(
+      [
+        "  installer.pods_project.targets.each do |target|",
+        "    target.build_configurations.each do |config|",
+        "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
+        "    end",
+        "  end",
+      ].join("\n")
+    );
+  }
+
+  const mergedBlock =
+    "post_install do |installer|\n" + bodies.join("\n") + "\nend";
+  return stripped.trimEnd() + "\n\n" + mergedBlock + "\n";
 }
