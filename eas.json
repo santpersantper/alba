@@ -9,17 +9,23 @@
       "developmentClient": true,
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --platform ios",
-      "image": "macos-sonoma-14.4-xcode-15.4"
+      "ios": {
+        "image": "macos-sonoma-14.4-xcode-15.4"
+      }
     },
     "preview": {
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --platform ios",
-      "image": "macos-sonoma-14.4-xcode-15.4"
+      "ios": {
+        "image": "macos-sonoma-14.4-xcode-15.4"
+      }
     },
     "production": {
       "autoIncrement": true,
       "prebuildCommand": "npx expo prebuild --platform ios",
-      "image": "macos-sonoma-14.4-xcode-15.4"
+      "ios": {
+        "image": "macos-sonoma-14.4-xcode-15.4"
+      }
     }
   },
   "submit": {
