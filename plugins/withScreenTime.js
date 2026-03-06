@@ -150,20 +150,28 @@ module.exports = function withScreenTime(config) {
       // what makes Xcode bundle the .appex files into the .ipa.
 
       // Fix for Xcode 14+: resource bundle targets are signed by default which
-      // breaks builds. Disable code signing for bundle targets only.
-      // CocoaPods 1.x supports multiple post_install blocks so we just append.
+      // breaks builds. CocoaPods does NOT support multiple post_install hooks,
+      // so we inject the fix inside the existing block that Expo generates.
       if (!podfile.includes("CODE_SIGNING_ALLOWED")) {
-        podfile += `
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    if target.respond_to?(:product_type) && target.product_type == "com.apple.product-type.bundle"
-      target.build_configurations.each do |config|
-        config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-      end
-    end
-  end
-end
-`;
+        const bundleFix = [
+          "  installer.pods_project.targets.each do |target|",
+          "    if target.respond_to?(:product_type) && target.product_type == \"com.apple.product-type.bundle\"",
+          "      target.build_configurations.each do |config|",
+          "        config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'",
+          "      end",
+          "    end",
+          "  end",
+        ].join("\n");
+
+        if (podfile.includes("post_install do |installer|")) {
+          // Expo always generates one post_install block — insert at its top
+          podfile = podfile.replace(
+            "post_install do |installer|",
+            "post_install do |installer|\n" + bundleFix
+          );
+        } else {
+          podfile += "\npost_install do |installer|\n" + bundleFix + "\nend\n";
+        }
       }
 
       fs.writeFileSync(podfilePath, podfile);
