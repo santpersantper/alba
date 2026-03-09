@@ -959,6 +959,8 @@ export default function Post(props) {
         onClose={() => setShareVisible(false)}
         onSend={() => setShareVisible(false)}
         postId={effectivePostId}
+        isVideo={media.some(isVideoUrl)}
+        thumbnailUrl={basePost.thumbnail_url || hintArr.find((u) => u && !isVideoUrl(u)) || null}
       />
       <BuyModal visible={buyVisible} onClose={() => setBuyVisible(false)} postId={effectivePostId} />
 

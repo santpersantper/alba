@@ -79,21 +79,20 @@ export default function CommunityEventSettings() {
       try {
         const { data: auth } = await supabase.auth.getUser();
         const u = auth?.user;
+        console.log("[EventSettings] auth user:", u?.id);
         if (!u) return;
         if (!mounted) return;
         setUserId(u.id);
 
-        // support both legacy and your current column naming
         const { data, error } = await supabase
           .from("profiles")
-          .select("event_tags, max_event_distance, event_distance_m")
+          .select("event_tags")
           .eq("id", u.id)
           .maybeSingle();
 
-        if (!mounted || error || !data) return;
+        if (!mounted) return;
 
-        if (Array.isArray(data.event_tags)) {
-          // Merge BASE_LABELS at the front, then any custom tags not already present
+        if (Array.isArray(data?.event_tags)) {
           const merged = [...BASE_LABELS];
           for (const tag of data.event_tags) {
             if (!merged.some((t) => t.toLowerCase() === tag.toLowerCase())) {
@@ -105,29 +104,31 @@ export default function CommunityEventSettings() {
           setTags([...BASE_LABELS]);
         }
 
-        const dist =
-          typeof data.max_event_distance === "number"
-            ? data.max_event_distance
-            : typeof data.event_distance_m === "number"
-            ? data.event_distance_m
-            : null;
-
-        if (typeof dist === "number") setMaxDistance(dist);
-
-        // Load payout status — find a group via a post authored by this user
-        const { data: postData } = await supabase
-          .from("posts")
-          .select("group_id")
-          .eq("author_id", u.id)
-          .not("group_id", "is", null)
-          .limit(1)
+        // Find a group where this user is an admin — more reliable than going via posts.group_id
+        // (createEventGroup never back-fills posts.group_id, so the post lookup always fails).
+        const { data: profRow } = await supabase
+          .from("profiles")
+          .select("username")
+          .eq("id", u.id)
           .maybeSingle();
+        const uname = profRow?.username;
 
-        if (mounted && postData?.group_id) {
-          setGroupId(postData.group_id);
-          const { data: sessionData } = await supabase.auth.getSession();
-          const token = sessionData?.session?.access_token || "";
-          await fetchPayoutStatus(postData.group_id, token);
+        if (uname) {
+          const { data: groupData, error: groupErr } = await supabase
+            .from("groups")
+            .select("id")
+            .contains("group_admin", [uname])
+            .limit(1)
+            .maybeSingle();
+
+          console.log("[EventSettings] group lookup for", uname, "→", groupData, groupErr);
+
+          if (mounted && groupData?.id) {
+            setGroupId(groupData.id);
+            const { data: sessionData } = await supabase.auth.getSession();
+            const token = sessionData?.session?.access_token || "";
+            await fetchPayoutStatus(groupData.id, token);
+          }
         }
       } catch (e) {
         console.warn("EventSettings load error", e);

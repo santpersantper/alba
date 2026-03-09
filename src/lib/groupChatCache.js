@@ -131,6 +131,12 @@ export function mapMessageRowToItem(row) {
 
   if (row.group_id) return { ...base, type: "invite", groupId: row.group_id };
 
+  if (!row.media_reference && row.post_id && String(row.content || "").startsWith("__feed_video__:")) {
+    try {
+      const meta = JSON.parse(String(row.content).slice("__feed_video__:".length));
+      return { ...base, type: "feed_video", postId: row.post_id, thumbnailUrl: meta.thumbnailUrl || null };
+    } catch {}
+  }
   if (isBlank(row.content) && !row.media_reference && row.post_id) {
     return { ...base, type: "post", postId: row.post_id };
   }
@@ -155,7 +161,7 @@ async function fetchPostsPreview(postIds) {
   if (!ids.length) return {};
   const { data, error } = await supabase
     .from("posts")
-    .select("id, user, userpicuri, title, description, postmediauri")
+    .select("id, user, userpicuri, title, description, postmediauri, thumbnail_url")
     .in("id", ids);
 
   if (error) throw error;
@@ -171,7 +177,9 @@ async function fetchPostsPreview(postIds) {
       avatarUrl: p.userpicuri || null,
       title: (p.title || "Shared post").trim(),
       description: (p.description || "View post").trim(),
-      media: firstImg,
+      media: p.thumbnail_url || firstImg,
+      thumbnail_url: p.thumbnail_url || null,
+      postmediauri: p.postmediauri || null,
     };
   }
   return map;

@@ -28,6 +28,7 @@ import { Image as ExpoImage } from "expo-image";
 import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
 import PostMessage from "../components/chat/PostMessage";
+import FeedVideoMessage from "../components/chat/FeedVideoMessage";
 import InviteMessage from "../components/chat/InviteMessage";
 import LocationMessage from "../components/chat/LocationMessage";
 
@@ -408,7 +409,12 @@ export default function GroupChatScreen({ navigation, route }) {
 
       let item = null;
       if (row.group_id) item = { ...mapped, type: "invite", groupId: row.group_id };
-      else if ((!row.content || !row.content.trim()) && !row.media_reference && row.post_id)
+      else if (!row.media_reference && row.post_id && String(row.content || "").startsWith("__feed_video__:")) {
+        try {
+          const meta = JSON.parse(String(row.content).slice("__feed_video__:".length));
+          item = { ...mapped, type: "feed_video", postId: row.post_id, thumbnailUrl: meta.thumbnailUrl || null };
+        } catch { item = { ...mapped, type: "post", postId: row.post_id }; }
+      } else if ((!row.content || !row.content.trim()) && !row.media_reference && row.post_id)
         item = { ...mapped, type: "post", postId: row.post_id };
       else if (row.media_reference)
         item = { ...mapped, type: "media", uris: [row.media_reference], caption: row.content || "" };
@@ -690,6 +696,9 @@ export default function GroupChatScreen({ navigation, route }) {
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        break;
+      case "feed_video":
+        body = <FeedVideoMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
         break;
       case "post":
         body = <PostMessage {...item} time={displayTime} onDeleted={handleDeleted} />;

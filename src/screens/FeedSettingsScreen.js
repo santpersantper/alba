@@ -9,6 +9,8 @@ import {
   Switch,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useAlbaLanguage } from "../theme/LanguageContext";
@@ -173,7 +175,10 @@ export default function FeedSettingsScreen() {
   const accent = "#00A9FF";
 
   return (
-    <View style={[styles.container, { backgroundColor: bg }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: bg }]}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
       <View style={[styles.header, { backgroundColor: bg, borderBottomColor: borderColor }]}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
@@ -357,7 +362,7 @@ export default function FeedSettingsScreen() {
         </TouchableOpacity>
 
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

@@ -30,6 +30,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
 import PostMessage from "../components/chat/PostMessage";
+import FeedVideoMessage from "../components/chat/FeedVideoMessage";
 import InviteMessage from "../components/chat/InviteMessage";
 import LocationMessage from "../components/chat/LocationMessage";
 
@@ -201,7 +202,14 @@ function mapRowToItem(row) {
     return { ...base, type: "invite", groupId: row.group_id, groupPreview: null };
   }
 
-  // post share
+  // feed video share — thumbnail encoded in content as __feed_video__:{thumbnailUrl}
+  if (row.post_id && !row.media_reference && String(row.content || "").startsWith("__feed_video__:")) {
+    try {
+      const meta = JSON.parse(String(row.content).slice("__feed_video__:".length));
+      return { ...base, type: "feed_video", postId: row.post_id, thumbnailUrl: meta.thumbnailUrl || null };
+    } catch {}
+  }
+  // regular post share (event cards, image posts, legacy shares with empty content)
   if (row.post_id && !row.media_reference && (!row.content || !String(row.content).trim())) {
     return { ...base, type: "post", postId: row.post_id, postPreview: null };
   }
@@ -850,6 +858,9 @@ export default function SingleChatScreen({ navigation, route }) {
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        break;
+      case "feed_video":
+        body = <FeedVideoMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
         break;
       case "post":
         body = <PostMessage {...item} time={displayTime} postPreview={item.postPreview || null} onDeleted={handleDeleted} />;

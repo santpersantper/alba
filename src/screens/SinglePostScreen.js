@@ -59,7 +59,7 @@ export default function SinglePostScreen() {
 
         const { data, error } = await supabase
           .from("posts")
-          .select("id, user, userpicuri, author_id, title, description, postmediauri, actions, type, date, time, location")
+          .select("id, user, userpicuri, author_id, title, description, postmediauri, thumbnail_url, actions, type, date, time, location")
           .eq("id", postId)
           .maybeSingle();
 
@@ -86,12 +86,15 @@ export default function SinglePostScreen() {
     if (!p) return null;
 
     const media = toArray(p.postmediauri || p.postMediaUri || p.media || null);
-    const thumb = p.image || (media.length ? media[0] : null);
+    // thumbnail_url is the static poster frame for video posts — use it as fallback
+    // so the Post component always has something to display even if postmediauri is empty.
+    const thumb = p.thumbnail_url || p.image || (media.length ? media[0] : null);
     const ensuredMedia = media.length ? media : thumb ? [thumb] : [];
 
     return {
       ...p,
       postmediauri: ensuredMedia,
+      thumbnail_url: p.thumbnail_url || null,
       userpicuri: p.userpicuri || p.avatar || p.avatarUrl || null,
     };
   }, [post, postPreview]);

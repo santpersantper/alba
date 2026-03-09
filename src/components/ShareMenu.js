@@ -33,6 +33,8 @@ export default function ShareMenu({
   visible,
   onClose,
   postId,
+  thumbnailUrl,   // set by Post.js when sharing a feed video
+  isVideo,        // true when the post contains video — forces __feed_video__ content even if no thumbnail
   inviteGroup,
   onSent,
   defaultMessage,
@@ -438,9 +440,14 @@ export default function ShareMenu({
             group_id: null,
           });
         } else if (postId != null && !inviteGroup) {
+          // Encode as __feed_video__ when this is a video post, even if thumbnail is null.
+          // FeedVideoMessage will fetch the thumbnail itself when not pre-stored.
+          const videoContent = (isVideo || thumbnailUrl)
+            ? `__feed_video__:${JSON.stringify({ thumbnailUrl: thumbnailUrl || null })}`
+            : "";
           rows.push({
             ...base,
-            content: "",
+            content: videoContent,
             media_reference: null,
             post_reference: null,
             post_id: postId,
