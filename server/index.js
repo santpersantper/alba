@@ -45,6 +45,12 @@ app.use(
 app.use("/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 
+// ── Request logger (dev only — remove before production)
+app.use((req, _res, next) => {
+  console.log(`[Server] ${req.method} ${req.path} | origin: ${req.headers.origin || "none"} | auth: ${req.headers.authorization ? "present" : "missing"}`);
+  next();
+});
+
 // ── Rate limiters
 const paymentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -95,7 +101,9 @@ function assertUserIdMatch(req, res) {
 /**
  * POST /create-payment-intent
  * Body: { amount: number (cents), currency: string, eventId: string, userId: string }
- * PCI compliance: card data never touches this server — Stripe handles all tokenization.
+ * Looks up the post's group to find a connected Stripe account.
+ * If found: uses transfer_data so the organiser receives the funds minus a platform fee.
+ * If not found: falls back to a direct charge (money stays in Alba's account).
  */
 app.post("/create-payment-intent", requireAuth, paymentLimiter, async (req, res) => {
   try {
@@ -110,22 +118,154 @@ app.post("/create-payment-intent", requireAuth, paymentLimiter, async (req, res)
       return res.status(400).json({ error: "eventId is required." });
     }
 
+    // Look up the post's group → connected Stripe account
+    const { data: postRow } = await supabaseAdmin
+      .from("posts")
+      .select("group_id")
+      .eq("id", eventId)
+      .maybeSingle();
+
+    let stripeAccountId = null;
+    if (postRow?.group_id) {
+      const { data: groupRow } = await supabaseAdmin
+        .from("groups")
+        .select("stripe_account_id, stripe_onboarding_complete")
+        .eq("id", postRow.group_id)
+        .maybeSingle();
+      if (groupRow?.stripe_onboarding_complete && groupRow?.stripe_account_id) {
+        stripeAccountId = groupRow.stripe_account_id;
+      }
+    }
+
     const idempotencyKey = `pi-${String(eventId)}-${String(req.user.id)}`;
 
-    const paymentIntent = await stripe.paymentIntents.create(
-      {
-        amount,
-        currency,
-        automatic_payment_methods: { enabled: true },
-        metadata: { eventId: String(eventId), userId: String(req.user.id) },
-      },
-      { idempotencyKey }
-    );
+    // Platform fee: €0.50 per transaction (50 cents), only when routing to organiser
+    const PLATFORM_FEE_CENTS = 50;
+
+    const intentParams = {
+      amount,
+      currency,
+      automatic_payment_methods: { enabled: true },
+      metadata: { eventId: String(eventId), userId: String(req.user.id), product: "ticket" },
+      ...(stripeAccountId && {
+        application_fee_amount: Math.min(PLATFORM_FEE_CENTS, amount),
+        transfer_data: { destination: stripeAccountId },
+      }),
+    };
+
+    const paymentIntent = await stripe.paymentIntents.create(intentParams, { idempotencyKey });
 
     res.json({ clientSecret: paymentIntent.client_secret });
   } catch (err) {
     Sentry.captureException(err);
     console.error("[/create-payment-intent] error:", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * POST /connect/onboard
+ * Body: { userId: string, groupId: string }
+ * Creates (or retrieves) a Stripe Express account for the group and returns an onboarding URL.
+ */
+app.post("/connect/onboard", requireAuth, async (req, res) => {
+  try {
+    if (!assertUserIdMatch(req, res)) return;
+
+    const { groupId } = req.body;
+    if (!groupId) return res.status(400).json({ error: "groupId is required." });
+
+    // Only allow the group organiser (post author) to onboard
+    const { data: groupRow, error: groupErr } = await supabaseAdmin
+      .from("groups")
+      .select("id, stripe_account_id, stripe_onboarding_complete")
+      .eq("id", groupId)
+      .maybeSingle();
+
+    if (groupErr || !groupRow) return res.status(404).json({ error: "Group not found." });
+
+    // Verify requester authored at least one post in this group
+    const { data: postCheck } = await supabaseAdmin
+      .from("posts")
+      .select("id")
+      .eq("group_id", groupId)
+      .eq("author_id", req.user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (!postCheck) {
+      return res.status(403).json({ error: "Only the group organiser can set up payouts." });
+    }
+
+    // Reuse existing account if already created
+    let accountId = groupRow.stripe_account_id;
+    if (!accountId) {
+      const account = await stripe.accounts.create({
+        type: "express",
+        country: "IT",
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+        metadata: { groupId: String(groupId) },
+      });
+      accountId = account.id;
+      await supabaseAdmin
+        .from("groups")
+        .update({ stripe_account_id: accountId })
+        .eq("id", groupId);
+    }
+
+    const origin = process.env.APP_URL || "https://alba.app";
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${origin}/connect/refresh?groupId=${groupId}`,
+      return_url: `${origin}/connect/return?groupId=${groupId}`,
+      type: "account_onboarding",
+    });
+
+    res.json({ url: accountLink.url });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error("[/connect/onboard] error:", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /connect/status?groupId=xxx
+ * Returns the Stripe Connect onboarding status for a group.
+ */
+app.get("/connect/status", requireAuth, async (req, res) => {
+  try {
+    const { groupId } = req.query;
+    if (!groupId) return res.status(400).json({ error: "groupId is required." });
+
+    const { data: groupRow } = await supabaseAdmin
+      .from("groups")
+      .select("stripe_account_id, stripe_onboarding_complete")
+      .eq("id", groupId)
+      .maybeSingle();
+
+    if (!groupRow?.stripe_account_id) {
+      return res.json({ status: "not_started" });
+    }
+
+    // Check with Stripe whether the account has finished onboarding
+    const account = await stripe.accounts.retrieve(groupRow.stripe_account_id);
+    const complete = account.details_submitted && !account.requirements?.currently_due?.length;
+
+    if (complete && !groupRow.stripe_onboarding_complete) {
+      await supabaseAdmin
+        .from("groups")
+        .update({ stripe_onboarding_complete: true })
+        .eq("id", groupId);
+    }
+
+    res.json({
+      status: complete ? "complete" : "pending",
+      accountId: groupRow.stripe_account_id,
+    });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error("[/connect/status] error:", err.message);
     res.status(500).json({ error: "Internal server error" });
   }
 });

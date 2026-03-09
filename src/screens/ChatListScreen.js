@@ -10,6 +10,8 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  Modal,
+  Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as Location from "expo-location";
@@ -60,9 +62,7 @@ function Header({ title, onBack, theme }) {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.menuBtn} hitSlop={8}>
-        <Feather name="more-vertical" size={22} color={theme.text} />
-      </TouchableOpacity>
+      <View style={{ width: 30 }} />
     </View>
   );
 }
@@ -90,6 +90,7 @@ export default function ChatListScreen({ navigation }) {
 
   const [ready, setReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [chatMenu, setChatMenu] = useState(null); // { item } | null
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -559,6 +560,7 @@ export default function ChatListScreen({ navigation }) {
               displayTime={item.displayTime}
               unreadCount={item.unreadCount}
               onPress={() => openChat(item)}
+              onLongPress={() => setChatMenu({ item })}
             />
           )}
           ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: theme.border }]} />}
@@ -568,6 +570,109 @@ export default function ChatListScreen({ navigation }) {
           refreshing={refreshing}
         />
       )}
+      {/* Chat context menu modal */}
+      <Modal
+        visible={!!chatMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setChatMenu(null)}
+      >
+        <TouchableOpacity
+          style={styles.chatMenuOverlay}
+          activeOpacity={1}
+          onPress={() => setChatMenu(null)}
+        >
+          <View style={[styles.chatMenuCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.chatMenuName, { color: isDark ? "#fff" : "#111" }]} numberOfLines={1}>
+              {chatMenu?.item?.name}
+            </Text>
+
+            {/* Mute */}
+            <TouchableOpacity
+              style={styles.chatMenuItem}
+              onPress={async () => {
+                setChatMenu(null);
+                Alert.alert("Muted", `You will no longer receive notifications from ${chatMenu?.item?.name}.`);
+              }}
+            >
+              <Feather name="bell-off" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+              <Text style={[styles.chatMenuText, { color: isDark ? "#fff" : "#111" }]}>Mute</Text>
+            </TouchableOpacity>
+
+            {/* Report */}
+            <TouchableOpacity
+              style={styles.chatMenuItem}
+              onPress={async () => {
+                const item = chatMenu?.item;
+                setChatMenu(null);
+                try {
+                  const { data: auth } = await supabase.auth.getUser();
+                  await supabase.from("reports").insert({
+                    reported_by: auth?.user?.id || null,
+                    reason: item?.type === "group" ? `Group chat: ${item?.name}` : `DM with: ${item?.name}`,
+                    chat_id: item?.chatId || null,
+                  });
+                } catch {}
+                Alert.alert("Reported", "Thanks, we'll review this conversation.");
+              }}
+            >
+              <Feather name="alert-triangle" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+              <Text style={[styles.chatMenuText, { color: isDark ? "#fff" : "#111" }]}>Report</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.chatMenuDivider, { backgroundColor: isDark ? "#444" : "#eee" }]} />
+
+            {/* Delete */}
+            <TouchableOpacity
+              style={styles.chatMenuItem}
+              onPress={() => {
+                const item = chatMenu?.item;
+                setChatMenu(null);
+                Alert.alert(
+                  "Delete chat",
+                  `Delete your conversation with ${item?.name}? This only removes it from your view.`,
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete",
+                      style: "destructive",
+                      onPress: async () => {
+                        try {
+                          if (!currentUserId) return;
+                          await supabase
+                            .from("chat_threads")
+                            .delete()
+                            .eq("chat_id", item?.chatId)
+                            .eq("owner_id", currentUserId);
+                          setThreads((prev) => prev.filter((t) => String(t.chat_id) !== String(item?.chatId)));
+                          if (item?.type === "group") {
+                            setGroupMap((prev) => {
+                              const next = { ...prev };
+                              delete next[item?.chatId];
+                              return next;
+                            });
+                          }
+                        } catch (e) {
+                          Alert.alert("Error", "Could not delete chat.");
+                        }
+                      },
+                    },
+                  ]
+                );
+              }}
+            >
+              <Feather name="trash-2" size={18} color="#d23b3b" style={{ marginRight: 12 }} />
+              <Text style={[styles.chatMenuText, { color: "#d23b3b" }]}>Delete chat</Text>
+            </TouchableOpacity>
+
+            {/* Cancel */}
+            <TouchableOpacity style={styles.chatMenuItem} onPress={() => setChatMenu(null)}>
+              <Feather name="x" size={18} color={isDark ? "#aaa" : "#888"} style={{ marginRight: 12 }} />
+              <Text style={[styles.chatMenuText, { color: isDark ? "#aaa" : "#888" }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -629,6 +734,12 @@ const styles = StyleSheet.create({
   memberInitials: { fontFamily: "PoppinsBold", fontSize: 16 },
   memberName: { fontFamily: "Poppins", fontSize: 15 },
   memberUsername: { fontFamily: "Poppins", fontSize: 13, marginTop: 2 },
+  chatMenuOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  chatMenuCard: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 8, paddingBottom: 28, paddingHorizontal: 16 },
+  chatMenuName: { fontFamily: "PoppinsBold", fontSize: 15, textAlign: "center", paddingVertical: 10, marginBottom: 4 },
+  chatMenuItem: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
+  chatMenuText: { fontFamily: "Poppins", fontSize: 15 },
+  chatMenuDivider: { height: 1, marginVertical: 4 },
   subgroupButton: {
     paddingHorizontal: 14,
     paddingVertical: 6,

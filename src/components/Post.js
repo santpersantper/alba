@@ -22,9 +22,12 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  Linking,
+  Platform,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
-import { Video } from "expo-av";
+import { VideoView, useVideoPlayer } from "expo-video";
+import { useEvent } from "expo";
 import { Image as ExpoImage } from "expo-image";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
@@ -197,46 +200,39 @@ function ImageSlide({ uri, width, height, index }) {
 
 function VideoSlide({ uri, width, height, index, autoPlay }) {
   const [muted, setMuted] = useState(true);
-  const [loaded, setLoaded] = useState(false);
-  const videoRef = useRef(null);
+
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.muted = true;
+  });
+
+  const { status } = useEvent(player, "statusChange", { status: player.status });
+  const loaded = status === "readyToPlay";
 
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    let cancelled = false;
-
-    const run = async () => {
-      try {
-        if (autoPlay && loaded) await v.playAsync();
-        else await v.pauseAsync();
-      } catch (e) {
-        if (!cancelled) console.log("video control error", e);
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
+    if (!loaded) return;
+    try {
+      if (autoPlay) player.play();
+      else player.pause();
+    } catch (e) {
+      console.log("video control error", e);
+    }
   }, [autoPlay, loaded]);
+
+  useEffect(() => {
+    player.muted = muted;
+  }, [muted]);
 
   return (
     <View
       key={`${uri}-${index}`}
       style={[styles.mediaItem, { width, height, overflow: "hidden" }]}
     >
-      <Video
-        ref={videoRef}
-        source={{ uri }}
+      <VideoView
+        player={player}
         style={StyleSheet.absoluteFill}
-        resizeMode="cover"
-        isMuted={muted}
-        shouldPlay={false}
-        isLooping
-        useNativeControls={false}
-        onLoadStart={() => setLoaded(false)}
-        onLoad={() => setLoaded(true)}
-        onError={(e) => console.log("video error", uri, e?.nativeEvent || e)}
+        contentFit="cover"
+        nativeControls={false}
       />
 
       {!loaded && (
@@ -484,7 +480,7 @@ export default function Post(props) {
               !_adViewsTracked.has(effectivePostId)
             ) {
               _adViewsTracked.add(effectivePostId);
-              supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" }).catch(() => {});
+              supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" }).then(() => {}).catch(() => {});
             }
           }
         }
@@ -563,7 +559,7 @@ export default function Post(props) {
       if (groupIdProp) {
         const { data: g, error } = await supabase
           .from("groups")
-          .select("id, groupname, members, group_pic_link")
+          .select("id, groupname, members, group_pic_link, require_approval, pending_members")
           .eq("id", groupIdProp)
           .maybeSingle();
         if (error) throw error;
@@ -571,7 +567,7 @@ export default function Post(props) {
       } else {
         const { data: g, error } = await supabase
           .from("groups")
-          .select("id, groupname, members, group_pic_link")
+          .select("id, groupname, members, group_pic_link, require_approval, pending_members")
           .eq("groupname", desiredName)
           .order("updated_at", { ascending: false })
           .limit(1)
@@ -582,65 +578,87 @@ export default function Post(props) {
 
       if (!groupRow?.id) throw new Error(`Group not found for "${desiredName}"`);
 
-      // 2) add to groups.members (via RPC if you have it)
-      {
-        const { error: addErr } = await supabase.rpc("add_member_to_group", {
-          gid: groupRow.id,
-          uname: myUname,
-        });
-        if (addErr) {
-          const current = Array.isArray(groupRow.members) ? groupRow.members : [];
-          const next = uniqCI([...current, myUname]);
-          const { error: upErr } = await supabase
-            .from("groups")
-            .update({ members: next })
-            .eq("id", groupRow.id);
-          if (upErr) throw upErr;
-        }
-      }
+      const currentMembers = Array.isArray(groupRow.members) ? groupRow.members : [];
+      const alreadyMember = currentMembers.some(
+        (m) => String(m).toLowerCase() === myUname.toLowerCase()
+      );
 
-      // 3) add to events.unconfirmed (by post_id)
-      if (effectivePostId) {
-        try {
-          const { data: ev, error: evErr } = await supabase
-            .from("events")
-            .select("id, unconfirmed")
-            .eq("post_id", effectivePostId)
-            .maybeSingle();
+      // Check if already pending
+      const currentPending = Array.isArray(groupRow.pending_members) ? groupRow.pending_members : [];
+      const alreadyPending = currentPending.some(
+        (m) => String(m).toLowerCase() === myUname.toLowerCase()
+      );
 
-          if (!evErr && ev?.id) {
-            const currentU = Array.isArray(ev.unconfirmed) ? ev.unconfirmed : [];
-            const nextU = uniqCI([...currentU, myUname]);
-            const { error: upU } = await supabase
-              .from("events")
-              .update({ unconfirmed: nextU })
-              .eq("id", ev.id);
-            if (upU) throw upU;
+      if (!alreadyMember) {
+        // If group requires approval, add to pending instead of members
+        if (groupRow.require_approval) {
+          if (!alreadyPending) {
+            const nextPending = [...currentPending, myUname];
+            await supabase.from("groups").update({ pending_members: nextPending }).eq("id", groupRow.id);
           }
-        } catch (e) {
-          console.warn("[Post join] events.unconfirmed update failed:", e?.message || e);
+          Alert.alert("Request sent", "The group admin will review your request to join.");
+          return;
         }
+
+        // 2) add to groups.members (via RPC if you have it)
+        {
+          const { error: addErr } = await supabase.rpc("add_member_to_group", {
+            gid: groupRow.id,
+            uname: myUname,
+          });
+          if (addErr) {
+            const next = uniqCI([...currentMembers, myUname]);
+            const { error: upErr } = await supabase
+              .from("groups")
+              .update({ members: next })
+              .eq("id", groupRow.id);
+            if (upErr) throw upErr;
+          }
+        }
+
+        // 3) add to events.unconfirmed (by post_id)
+        if (effectivePostId) {
+          try {
+            const { data: ev, error: evErr } = await supabase
+              .from("events")
+              .select("id, unconfirmed")
+              .eq("post_id", effectivePostId)
+              .maybeSingle();
+
+            if (!evErr && ev?.id) {
+              const currentU = Array.isArray(ev.unconfirmed) ? ev.unconfirmed : [];
+              const nextU = uniqCI([...currentU, myUname]);
+              const { error: upU } = await supabase
+                .from("events")
+                .update({ unconfirmed: nextU })
+                .eq("id", ev.id);
+              if (upU) throw upU;
+            }
+          } catch (e) {
+            console.warn("[Post join] events.unconfirmed update failed:", e?.message || e);
+          }
+        }
+
+        // 4) system message
+        const now = new Date();
+        const sent_date = now.toISOString().slice(0, 10);
+        const sent_time = now.toTimeString().slice(0, 8);
+
+        await supabase.from("messages").insert({
+          owner_id: uid,
+          chat: groupRow.id,
+          is_group: true,
+          sender_is_me: true,
+          sender_username: myUname,
+          content: `You joined ${groupRow.groupname || desiredName}.`,
+          media_reference: null,
+          post_reference: null,
+          post_id: null,
+          is_read: true,
+          sent_date,
+          sent_time,
+        });
       }
-
-      // 4) optional system message
-      const now = new Date();
-      const sent_date = now.toISOString().slice(0, 10);
-      const sent_time = now.toTimeString().slice(0, 8);
-
-      await supabase.from("messages").insert({
-        owner_id: uid,
-        chat: groupRow.id,
-        is_group: true,
-        sender_is_me: true,
-        sender_username: myUname,
-        content: `You joined ${groupRow.groupname || desiredName}.`,
-        media_reference: null,
-        post_reference: null,
-        post_id: null,
-        is_read: true,
-        sent_date,
-        sent_time,
-      });
 
       const mergedMembers = Array.isArray(groupRow.members) ? groupRow.members : [];
       const finalMembers = uniqCI([...mergedMembers, myUname]);
@@ -681,7 +699,16 @@ export default function Post(props) {
       </ThemedText>
     );
   } else if (showFullCaption) {
-    captionContent = <ThemedText style={styles.description}>{captionText}</ThemedText>;
+    captionContent = (
+      <>
+        <ThemedText style={styles.description}>{captionText}</ThemedText>
+        {isLongCaption && (
+          <ThemedText style={styles.readMoreText} onPress={() => setShowFullCaption(false)}>
+            {t("caption_read_less") || "Read less"}
+          </ThemedText>
+        )}
+      </>
+    );
   } else {
     captionContent = (
       <>
@@ -751,7 +778,7 @@ export default function Post(props) {
           // Track contact for ad posts
           const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
           if (postTypeStr === "ad" && effectivePostId) {
-            supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" }).catch(() => {});
+            supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" }).then(() => {}).catch(() => {});
           }
           if (onPressMessage) onPressMessage();
           else goToDm();
@@ -824,7 +851,29 @@ export default function Post(props) {
           <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
             <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
           </TouchableOpacity>
-          {!!subtitle && <ThemedText style={styles.subtitle}>{subtitle}</ThemedText>}
+          {(isEventPost ? (prettyDate || timeRange || rawLocation) : rawLocation) && (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" }}>
+              {isEventPost && (prettyDate || timeRange) && (
+                <ThemedText style={styles.subtitle}>
+                  {[prettyDate, timeRange].filter(Boolean).join(", ")}{rawLocation ? ",\u00A0" : ""}
+                </ThemedText>
+              )}
+              {!!rawLocation && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    const q = encodeURIComponent(rawLocation);
+                    const url = Platform.OS === "ios" ? `maps://0,0?q=${q}` : `geo:0,0?q=${q}`;
+                    Linking.openURL(url).catch(() =>
+                      Linking.openURL(`https://maps.google.com/?q=${q}`)
+                    );
+                  }}
+                >
+                  <ThemedText style={styles.subtitle}>{rawLocation}</ThemedText>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
 
         <TouchableOpacity
@@ -1057,7 +1106,7 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 10, paddingLeft: 10, paddingRight: 10, paddingTop: 10 },
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10, backgroundColor: "#18314f" },
   handleLine: { fontSize: 14, fontWeight: "700", fontFamily: "Poppins" },
-  subtitle: { fontSize: 12, marginTop: 2, fontFamily: "Poppins" },
+  subtitle: { fontSize: 12, fontFamily: "Poppins" },
 
   title: { fontSize: 18, fontWeight: "800", marginBottom: 8, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },
   description: { fontSize: 14, marginBottom: 4, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },

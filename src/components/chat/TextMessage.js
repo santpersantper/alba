@@ -14,7 +14,7 @@ import { supabase } from "../../lib/supabase";
 import ShareMenu from "../ShareMenu";
 import { useAlbaTheme } from "../../theme/ThemeContext"; // ✅ NEW
 
-export default function TextMessage({ id, text, time, isMe = false, onDeleted, senderName }) {
+export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName }) {
   const { theme, isDark } = useAlbaTheme(); // ✅ NEW
 
   const [menuVisible, setMenuVisible] = useState(false);
@@ -134,7 +134,7 @@ export default function TextMessage({ id, text, time, isMe = false, onDeleted, s
             </TouchableOpacity>
           )}
 
-          {isMe && (
+          {(isMe || isAdmin) && (
             <TouchableOpacity style={styles.menuItem} onPress={openDeleteConfirm}>
               <Text style={[styles.menuText, { color: "#d23b3b" }]}>Delete</Text>
             </TouchableOpacity>

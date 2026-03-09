@@ -11,7 +11,7 @@
 // }
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { NativeModules, Platform } from "react-native";
+import { NativeModules, Platform, AppState } from "react-native";
 
 // ── Mock data used on Android / simulator without entitlements ──────────────
 const MOCK_DATA = {
@@ -37,7 +37,8 @@ const MOCK_DATA = {
 
 // ── Availability checks ──────────────────────────────────────────────────────
 const AlbaScreenTimeModule = NativeModules.AlbaScreenTimeModule ?? null;
-const IS_NATIVE_AVAILABLE = Platform.OS === "ios" && AlbaScreenTimeModule !== null;
+// Available on both iOS (AlbaScreenTimeModule.swift) and Android (AlbaScreenTimeModule.kt)
+const IS_NATIVE_AVAILABLE = AlbaScreenTimeModule !== null;
 
 export function useScreenTime() {
   const [authorized, setAuthorized] = useState(null); // null = unknown, true/false = known
@@ -121,10 +122,15 @@ export function useScreenTime() {
     try {
       setLoading(true);
       await AlbaScreenTimeModule.requestAuthorization();
-      setAuthorized(true);
-      await startMonitoring();
-      await refreshUsageData();
-      startPolling();
+      // On iOS the authorization dialog is synchronous — granted by the time we resume.
+      // On Android the native call opens Settings and resolves immediately; the AppState
+      // listener in the mount effect handles re-checking when the user returns.
+      if (Platform.OS !== "android") {
+        setAuthorized(true);
+        await startMonitoring();
+        await refreshUsageData();
+        startPolling();
+      }
       return true;
     } catch (e) {
       setError(e?.message ?? "Authorization failed");
@@ -139,15 +145,14 @@ export function useScreenTime() {
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
-      // Android or no native module
+    const checkAuth = async () => {
+      // No native module available at all (e.g. bare JS bundle without native build)
       if (!IS_NATIVE_AVAILABLE) {
         if (__DEV__) {
           // Development: show mock data so the screen is testable
           setAuthorized(true);
           setUsageData({ ...MOCK_DATA, lastUpdated: new Date().toISOString() });
         } else {
-          // Production Android: show "not supported" state
           setAuthorized(false);
         }
         setLoading(false);
@@ -170,11 +175,24 @@ export function useScreenTime() {
       }
     };
 
-    init();
+    checkAuth();
+
+    // On Android, requestAuthorization() opens the OS Settings screen.
+    // Re-check when the app comes back to the foreground so the UI updates
+    // immediately after the user grants Usage Access.
+    let appStateSub = null;
+    if (Platform.OS === "android" && IS_NATIVE_AVAILABLE) {
+      appStateSub = AppState.addEventListener("change", (nextState) => {
+        if (nextState === "active" && mounted) {
+          checkAuth();
+        }
+      });
+    }
 
     return () => {
       mounted = false;
       if (pollingRef.current) clearInterval(pollingRef.current);
+      if (appStateSub) appStateSub.remove();
     };
   }, [refreshUsageData, startPolling]);
 

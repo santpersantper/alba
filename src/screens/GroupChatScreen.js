@@ -12,10 +12,12 @@ import {
   Alert,
   Image,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
+import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
 import { uploadChatImage } from "../lib/uploadImage";
 import { markChatReadInCache } from "../lib/chatListCache";
@@ -27,6 +29,7 @@ import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
 import PostMessage from "../components/chat/PostMessage";
 import InviteMessage from "../components/chat/InviteMessage";
+import LocationMessage from "../components/chat/LocationMessage";
 
 // ✅ your cache helpers (exact names from the file you pasted)
 import {
@@ -104,6 +107,29 @@ const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, ow
 };
 
 
+const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id }) => {
+  const now = new Date();
+  const sent_date = now.toISOString().slice(0, 10);
+  const sent_time = now.toTimeString().slice(0, 8);
+  const { data, error } = await supabase
+    .from("messages")
+    .insert([{
+      owner_id,
+      chat: chatId,
+      is_group: true,
+      sender_username: senderUsername || "me",
+      sender_is_me: true,
+      content: `__location__:${JSON.stringify(locationData)}`,
+      is_read: true,
+      sent_date,
+      sent_time,
+    }])
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+};
+
 const subscribeChatInserts = (chatId, onInsert) => {
   const channel = supabase
     .channel(`messages-${chatId}`)
@@ -141,6 +167,8 @@ export default function GroupChatScreen({ navigation, route }) {
 
   const [profilesMap, setProfilesMap] = useState({});
   const [membersLine, setMembersLine] = useState("");
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const [text, setText] = useState("");
   const [sendingMedia, setSendingMedia] = useState(false);
@@ -148,6 +176,12 @@ export default function GroupChatScreen({ navigation, route }) {
   const [items, setItems] = useState([]);
   const listRef = useRef(null);
   const optimisticIds = useRef(new Set());
+
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [locationSearchText, setLocationSearchText] = useState("");
+  const [locationSuggestions, setLocationSuggestions] = useState([]);
+  const [locationSearching, setLocationSearching] = useState(false);
+  const locationSearchTimeout = useRef(null);
 
   const onPressBack = () => navigation?.goBack?.();
 
@@ -299,7 +333,23 @@ export default function GroupChatScreen({ navigation, route }) {
 
     (async () => {
       try {
-        await getUserId();
+        const uid = await getUserId();
+
+        // Check if current user is a group admin
+        const { data: groupRow } = await supabase
+          .from("groups")
+          .select("group_admin")
+          .eq("id", chatId)
+          .maybeSingle();
+        if (mounted && groupRow?.group_admin) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("username")
+            .eq("id", uid)
+            .maybeSingle();
+          const uname = profile?.username || myUsername;
+          setIsAdmin(Array.isArray(groupRow.group_admin) && groupRow.group_admin.includes(uname));
+        }
 
         // 1) instant cache render
         const cachedItems = await getCachedGroupMessages(chatId);
@@ -497,6 +547,94 @@ export default function GroupChatScreen({ navigation, route }) {
     }
   }, [chatId, text, pendingImage, myUsername]);
 
+  const onSendLocation = useCallback(async (locationData) => {
+    if (!chatId) return;
+    setLocationModalVisible(false);
+    setLocationSearchText("");
+    setLocationSuggestions([]);
+    const now = new Date();
+    const optimisticId = `opt-loc-${now.getTime()}`;
+    const optimistic = {
+      id: optimisticId,
+      type: "location",
+      isMe: true,
+      senderUsername: myUsername,
+      locationData,
+      minuteKey: `${now.toISOString().slice(0, 10)}_${now.toTimeString().slice(0, 5)}`,
+      time: now.toTimeString().slice(0, 5),
+    };
+    setItems((prev) => [...prev, optimistic]);
+    setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const owner_id = auth?.user?.id;
+      if (!owner_id) throw new Error("Not authenticated");
+      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, owner_id });
+      const realItem = {
+        id: row.id,
+        type: "location",
+        isMe: true,
+        senderUsername: row.sender_username || myUsername,
+        locationData,
+        minuteKey: `${row.sent_date}_${(row.sent_time || "").slice(0, 5)}`,
+        time: (row.sent_time || "").slice(0, 5),
+      };
+      setItems((prev) => prev.map((m) => (m.id === optimisticId ? realItem : m)));
+    } catch {
+      setItems((p) => p.filter((m) => m.id !== optimisticId));
+    }
+  }, [chatId, myUsername]);
+
+  const onSendCurrentLocation = useCallback(async () => {
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission needed", "Alba needs location access to share your location.");
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude: lat, longitude: lng } = loc.coords;
+      let address = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      try {
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&limit=1`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.features?.[0]?.place_name) address = json.features[0].place_name;
+      } catch {}
+      onSendLocation({ lat, lng, address });
+    } catch {
+      Alert.alert("Error", "Could not get your current location.");
+    }
+  }, [onSendLocation]);
+
+  const onLocationSearch = useCallback((text) => {
+    setLocationSearchText(text);
+    clearTimeout(locationSearchTimeout.current);
+    if (!text.trim()) { setLocationSuggestions([]); return; }
+    locationSearchTimeout.current = setTimeout(async () => {
+      try {
+        setLocationSearching(true);
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        const q = encodeURIComponent(text.trim());
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=5`;
+        const res = await fetch(url);
+        const json = await res.json();
+        setLocationSuggestions(
+          (json.features || []).map((f) => ({
+            address: f.place_name,
+            lat: f.center[1],
+            lng: f.center[0],
+          }))
+        );
+      } catch {
+        setLocationSuggestions([]);
+      } finally {
+        setLocationSearching(false);
+      }
+    }, 400);
+  }, []);
+
   const onPickGallery = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -548,7 +686,7 @@ export default function GroupChatScreen({ navigation, route }) {
     let body = null;
     switch (item.type) {
       case "text":
-        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} />;
+        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} isAdmin={isAdmin} />;
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
@@ -558,6 +696,9 @@ export default function GroupChatScreen({ navigation, route }) {
         break;
       case "invite":
         body = <InviteMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        break;
+      case "location":
+        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
         break;
       // join_banner intentionally hidden
       default:
@@ -616,6 +757,43 @@ export default function GroupChatScreen({ navigation, route }) {
     );
   };
 
+  const handleLeaveGroup = () => {
+    Alert.alert(
+      "Leave group",
+      `Are you sure you want to leave ${groupName}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Leave",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const { error } = await supabase.rpc("remove_member_from_group", {
+                gid: chatId,
+                uname: myUsername,
+              });
+              if (error) {
+                // Fallback: manual array removal
+                const { data: gr } = await supabase
+                  .from("groups")
+                  .select("members")
+                  .eq("id", chatId)
+                  .maybeSingle();
+                const next = (Array.isArray(gr?.members) ? gr.members : []).filter(
+                  (m) => String(m).toLowerCase() !== String(myUsername).toLowerCase()
+                );
+                await supabase.from("groups").update({ members: next }).eq("id", chatId);
+              }
+              navigation.goBack();
+            } catch (e) {
+              Alert.alert("Error", "Could not leave group. Try again.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -631,6 +809,7 @@ export default function GroupChatScreen({ navigation, route }) {
           avatarUri={groupAvatarUri}
           onBack={onPressBack}
           onPressTitle={handleOpenGroupInfo}
+          onPressMenu={() => setGroupMenuOpen(true)}
           theme={theme}
           isDark={isDark}
         />
@@ -651,7 +830,7 @@ export default function GroupChatScreen({ navigation, route }) {
           value={text}
           onChangeText={setText}
           onSend={onSend}
-          onAttachLocation={() => {}}
+          onAttachLocation={() => setLocationModalVisible(true)}
           onPickGallery={onPickGallery}
           onPickCamera={onPickCamera}
           pendingImage={pendingImage}
@@ -660,6 +839,150 @@ export default function GroupChatScreen({ navigation, route }) {
           theme={theme}
           isDark={isDark}
         />
+
+        <Modal
+          visible={groupMenuOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setGroupMenuOpen(false)}
+        >
+          <TouchableOpacity
+            style={styles.groupMenuOverlay}
+            activeOpacity={1}
+            onPress={() => setGroupMenuOpen(false)}
+          >
+            <View style={[styles.groupMenuCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+              <Text style={[styles.groupMenuTitle, { color: isDark ? "#fff" : "#111" }]} numberOfLines={1}>
+                {groupName}
+              </Text>
+
+              {/* Mute */}
+              <TouchableOpacity
+                style={styles.groupMenuItem}
+                onPress={() => {
+                  setGroupMenuOpen(false);
+                  Alert.alert("Muted", "You will no longer receive notifications from this group.");
+                }}
+              >
+                <Feather name="bell-off" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+                <Text style={[styles.groupMenuText, { color: isDark ? "#fff" : "#111" }]}>Mute</Text>
+              </TouchableOpacity>
+
+              {/* Report */}
+              <TouchableOpacity
+                style={styles.groupMenuItem}
+                onPress={async () => {
+                  setGroupMenuOpen(false);
+                  const { data: auth } = await supabase.auth.getUser();
+                  const reporterId = auth?.user?.id || null;
+                  try {
+                    await supabase.from("reports").insert({
+                      reported_by: reporterId,
+                      reason: `Group: ${groupName}`,
+                      chat_id: chatId || null,
+                    });
+                  } catch {}
+                  try {
+                    const { data: myProfile } = await supabase
+                      .from("profiles")
+                      .select("username")
+                      .eq("id", reporterId)
+                      .maybeSingle();
+                    await supabase.functions.invoke("send-report", {
+                      body: {
+                        type: "group_chat",
+                        reported_by_id: reporterId,
+                        reported_by_username: myProfile?.username || null,
+                        reason: `Group reported: ${groupName}`,
+                        context: { group_name: groupName, chat_id: chatId || null },
+                      },
+                    });
+                  } catch {}
+                  Alert.alert("Reported", "Thanks, we'll review this group.");
+                }}
+              >
+                <Feather name="alert-triangle" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+                <Text style={[styles.groupMenuText, { color: isDark ? "#fff" : "#111" }]}>Report</Text>
+              </TouchableOpacity>
+
+              <View style={[styles.groupMenuDivider, { backgroundColor: isDark ? "#444" : "#eee" }]} />
+
+              {/* Leave group */}
+              <TouchableOpacity
+                style={styles.groupMenuItem}
+                onPress={() => {
+                  setGroupMenuOpen(false);
+                  handleLeaveGroup();
+                }}
+              >
+                <Feather name="log-out" size={18} color="#d23b3b" style={{ marginRight: 12 }} />
+                <Text style={[styles.groupMenuText, { color: "#d23b3b" }]}>Leave group</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Location picker modal */}
+        <Modal
+          visible={locationModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+        >
+          <TouchableOpacity
+            style={styles.locOverlay}
+            activeOpacity={1}
+            onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+          />
+          <View style={[styles.locSheet, { backgroundColor: isDark ? "#1A2330" : "#FFFFFF" }]}>
+            <Text style={[styles.locSheetTitle, { color: theme.text }]}>Share Location</Text>
+
+            <TouchableOpacity
+              style={[styles.locOptionBtn, { borderColor: isDark ? "#333" : "#E0E6EF" }]}
+              onPress={onSendCurrentLocation}
+            >
+              <Ionicons name="locate" size={20} color="#4EBCFF" style={{ marginRight: 10 }} />
+              <Text style={[styles.locOptionText, { color: theme.text }]}>Send current location</Text>
+            </TouchableOpacity>
+
+            <Text style={[styles.locOrLabel, { color: isDark ? "#9CA3AF" : "#888" }]}>or search for a place</Text>
+
+            <View style={[styles.locSearchWrap, { backgroundColor: isDark ? "#2B2B2B" : "#F4F6F9", borderColor: isDark ? "#444" : "#D9E0EA" }]}>
+              <Ionicons name="search" size={16} color={isDark ? "#9CA3AF" : "#888"} style={{ marginRight: 6 }} />
+              <TextInput
+                style={[styles.locSearchInput, { color: theme.text }]}
+                placeholder="Via Valtellina 5 or Alcatraz…"
+                placeholderTextColor={isDark ? "#666" : "#AAA"}
+                value={locationSearchText}
+                onChangeText={onLocationSearch}
+                autoCorrect={false}
+              />
+              {locationSearching && <ActivityIndicator size="small" color="#4EBCFF" />}
+            </View>
+
+            {locationSuggestions.length > 0 && (
+              <View style={[styles.locSuggestionsBox, { backgroundColor: isDark ? "#1E2933" : "#FAFCFF", borderColor: isDark ? "#333" : "#D9E0EA" }]}>
+                {locationSuggestions.map((s, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={[styles.locSuggestionRow, i < locationSuggestions.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: isDark ? "#333" : "#E5E9F0" }]}
+                    onPress={() => onSendLocation(s)}
+                  >
+                    <Ionicons name="location-outline" size={14} color="#4EBCFF" style={{ marginRight: 8 }} />
+                    <Text style={[styles.locSuggestionText, { color: theme.text }]} numberOfLines={2}>{s.address}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.locCancelBtn}
+              onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+            >
+              <Text style={[styles.locCancelText, { color: isDark ? "#9CA3AF" : "#888" }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </Modal>
       </SafeAreaView>
     </KeyboardAvoidingView>
   );
@@ -674,6 +997,7 @@ function Header({
   avatarUri,
   onBack,
   onPressTitle,
+  onPressMenu,
   theme,
   isDark,
 }) {
@@ -714,7 +1038,7 @@ function Header({
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.menuBtn} hitSlop={8}>
+      <TouchableOpacity style={styles.menuBtn} hitSlop={8} onPress={onPressMenu}>
         <Feather name="more-vertical" size={22} color={theme.text} />
       </TouchableOpacity>
     </View>
@@ -789,6 +1113,12 @@ function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery
 /* --------------------------- Styles ------------------------ */
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  groupMenuOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  groupMenuCard: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 8, paddingBottom: 28, paddingHorizontal: 16 },
+  groupMenuTitle: { fontFamily: "PoppinsBold", fontSize: 15, textAlign: "center", paddingVertical: 10, marginBottom: 4 },
+  groupMenuItem: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
+  groupMenuText: { fontFamily: "Poppins", fontSize: 15 },
+  groupMenuDivider: { height: 1, marginVertical: 4 },
   headerWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -862,6 +1192,26 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins",
   },
   sendBtn: { padding: 8, borderRadius: 12 },
+
+  // Location modal
+  locOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
+  locSheet: {
+    position: "absolute",
+    left: 0, right: 0, bottom: 0,
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32,
+  },
+  locSheetTitle: { fontSize: 17, fontWeight: "700", fontFamily: "Poppins", marginBottom: 16, textAlign: "center" },
+  locOptionBtn: { flexDirection: "row", alignItems: "center", paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, marginBottom: 14 },
+  locOptionText: { fontFamily: "Poppins", fontSize: 14, fontWeight: "600" },
+  locOrLabel: { fontSize: 12, fontFamily: "Poppins", marginBottom: 8 },
+  locSearchWrap: { flexDirection: "row", alignItems: "center", borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8 },
+  locSearchInput: { flex: 1, fontFamily: "Poppins", fontSize: 13 },
+  locSuggestionsBox: { borderRadius: 10, borderWidth: 1, marginBottom: 12, overflow: "hidden" },
+  locSuggestionRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, paddingHorizontal: 12 },
+  locSuggestionText: { flex: 1, fontFamily: "Poppins", fontSize: 13 },
+  locCancelBtn: { alignItems: "center", paddingVertical: 12, marginTop: 4 },
+  locCancelText: { fontFamily: "Poppins", fontSize: 14 },
 });
 
 function platformShadow(elev = 2) {

@@ -57,124 +57,7 @@ const BASE_LABELS = [
 
 const LABEL_COLORS = ["#78C0E9", "#5BC4B8", "#7DB0FF", "#6BCB77", "#87A8FF"];
 
-/* --------------------------- FUZZY + TRANSLATION ---------------------------- */
-
-const normalizeText = (s) =>
-  String(s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const tokenize = (s) => normalizeText(s).split(" ").filter(Boolean);
-
-const trigrams = (s) => {
-  const str = normalizeText(s).replace(/\s+/g, "");
-  if (!str) return [];
-  if (str.length <= 3) return [str];
-  const out = [];
-  for (let i = 0; i < str.length - 2; i++) out.push(str.slice(i, i + 3));
-  return out;
-};
-
-const jaccard = (aArr, bArr) => {
-  if (!aArr.length || !bArr.length) return 0;
-  const a = new Set(aArr);
-  const b = new Set(bArr);
-  let inter = 0;
-  for (const x of a) if (b.has(x)) inter++;
-  const uni = a.size + b.size - inter;
-  return uni ? inter / uni : 0;
-};
-
-const editDistance1 = (a, b) => {
-  if (a === b) return true;
-  const la = a.length,
-    lb = b.length;
-  if (Math.abs(la - lb) > 1) return false;
-
-  let i = 0,
-    j = 0,
-    edits = 0;
-  while (i < la && j < lb) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-      continue;
-    }
-    edits++;
-    if (edits > 1) return false;
-
-    if (la > lb) i++;
-    else if (lb > la) j++;
-    else {
-      i++;
-      j++;
-    }
-  }
-  if (i < la || j < lb) edits++;
-  return edits <= 1;
-};
-
-const similarityScore = (labelRaw, postHayRaw) => {
-  const label = normalizeText(labelRaw);
-  if (!label) return 0;
-
-  const hay = normalizeText(postHayRaw);
-  if (!hay) return 0;
-
-  if (hay.includes(label)) return 1;
-
-  const labelTokens = tokenize(label);
-  const postTokens = tokenize(hay);
-
-  for (const lt of labelTokens) {
-    if (lt.length >= 3) {
-      for (const pt of postTokens) {
-        if (pt.startsWith(lt) || lt.startsWith(pt)) return 0.92;
-      }
-    }
-  }
-
-  for (const lt of labelTokens) {
-    if (lt.length >= 3 && lt.length <= 6) {
-      for (const pt of postTokens) {
-        if (pt.length >= 3 && pt.length <= 10 && editDistance1(lt, pt)) {
-          return 0.85;
-        }
-      }
-    }
-  }
-
-  const ltJoined = labelTokens.join("");
-  const ltTris = trigrams(ltJoined);
-
-  let best = 0;
-  for (const pt of postTokens) {
-    const s = jaccard(ltTris, trigrams(pt));
-    if (s > best) best = s;
-    if (best >= 0.6) break;
-  }
-
-  const hayTris = trigrams(hay);
-  best = Math.max(best, jaccard(ltTris, hayTris) * 0.85);
-
-  return best;
-};
-
-const LABEL_MATCH_THRESHOLD = 0.55;
-
-const buildSearchText = (p) => {
-  const labels = Array.isArray(p.labels) ? p.labels.join(" ") : "";
-  return `${p.title || ""} ${p.description || ""} ${labels}`;
-};
-
 const asAt = (s) => String(s || "").replace(/^@+/, "");
-
-/* --- translation cache helpers --- */
-const TR_CACHE_PREFIX = "alba_label_tr_v1:";
 
 const withTimeout = async (promise, ms) => {
   let t;
@@ -186,28 +69,6 @@ const withTimeout = async (promise, ms) => {
   } finally {
     clearTimeout(t);
   }
-};
-
-const translateOnce = async (text, targetLang) => {
-  const q = encodeURIComponent(String(text || ""));
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${q}`;
-
-  const res = await withTimeout(fetch(url), 2200);
-  if (!res.ok) throw new Error(`translate http ${res.status}`);
-  const json = await res.json();
-
-  const chunks = Array.isArray(json?.[0]) ? json[0] : [];
-  const out = chunks.map((c) => c?.[0]).filter(Boolean).join("");
-  return out || null;
-};
-
-const uniqNorm = (arr) => {
-  const set = new Set();
-  (arr || []).forEach((x) => {
-    const n = normalizeText(x);
-    if (n) set.add(n);
-  });
-  return Array.from(set);
 };
 
 /* --------------------------- LOCATION HELPERS ---------------------------- */
@@ -313,6 +174,8 @@ export default function CommunityScreen() {
 
   const [labels, setLabels] = useState(BASE_LABELS);
   const [activeLabel, setActiveLabel] = useState(null);
+  const [followedUserIds, setFollowedUserIds] = useState([]);
+  const [showFollowedPosts, setShowFollowedPosts] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState(null);
   const [showDateDropdown, setShowDateDropdown] = useState(false);
@@ -323,10 +186,9 @@ export default function CommunityScreen() {
   const [activePostId, setActivePostId] = useState(null);
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [semanticResults, setSemanticResults] = useState(null); // null = inactive; [{id, similarity}] = active
+  const [semanticLoading, setSemanticLoading] = useState(false);
   const [firstPostOverride, setFirstPostOverride] = useState(null);
-
-  const [activeLabelNeedles, setActiveLabelNeedles] = useState([]);
-  const activeLabelReqId = useRef(0);
 
   // Ad interest prompt — track rejected categories so we never ask again this session
   const [rejectedCategories, setRejectedCategories] = useState(new Set());
@@ -407,7 +269,7 @@ export default function CommunityScreen() {
         loadSavedFromProfile(userId),
         supabase
           .from("profiles")
-          .select("event_tags, ad_tags, show_local_news, blocked_users")
+          .select("event_tags, ad_tags, show_local_news, blocked_users, followed_users, show_followed_users_posts")
           .eq("id", userId)
           .maybeSingle(),
       ]);
@@ -420,6 +282,10 @@ export default function CommunityScreen() {
           setBlockedUsers(pref.blocked_users);
         if (typeof pref.show_local_news === "boolean")
           setShowLocalNews(pref.show_local_news);
+        const followedIds = Array.isArray(pref.followed_users) ? pref.followed_users : [];
+        setFollowedUserIds(followedIds);
+        const showFollowed = typeof pref.show_followed_users_posts === "boolean" ? pref.show_followed_users_posts : false;
+        setShowFollowedPosts(showFollowed);
 
         // Build LabelsCard from DB — event_tags is source of truth so removals persist.
         // Fall back to BASE_LABELS only for first-time users (event_tags null/empty).
@@ -501,7 +367,27 @@ export default function CommunityScreen() {
         console.warn("[Community] nearby_posts error", rpcErr);
       }
 
-      const arr = Array.isArray(data) ? data : [];
+      let arr = Array.isArray(data) ? data : [];
+
+      // If "show posts from followed users" is enabled, fetch their posts and merge
+      const followedIds = Array.isArray(pref?.followed_users) ? pref.followed_users : [];
+      const showFollowed = pref?.show_followed_users_posts === true;
+      if (showFollowed && followedIds.length > 0) {
+        try {
+          const { data: followedPostsData } = await supabase
+            .from("posts")
+            .select("*")
+            .in("author_id", followedIds)
+            .order("created_at", { ascending: false })
+            .limit(30);
+          if (Array.isArray(followedPostsData) && followedPostsData.length > 0) {
+            const existingIds = new Set(arr.map((p) => String(p.id)));
+            const newPosts = followedPostsData.filter((p) => !existingIds.has(String(p.id)));
+            arr = [...arr, ...newPosts];
+          }
+        } catch {}
+      }
+
       setPosts(arr);
       setActivePostId(arr.length ? String(arr[0].id) : null);
 
@@ -525,6 +411,7 @@ export default function CommunityScreen() {
       animationState.current = "shown";
       topBarOpacity.setValue(1);
       lastOffset.current = 0;
+      setTopActiveTab(null);
 
       // Sync prefs state from AsyncStorage on every focus so visiblePosts useMemo
       // (ad-free filter) reflects changes made in CommunitySettings since last visit.
@@ -587,88 +474,49 @@ export default function CommunityScreen() {
     [uid, labels]
   );
 
+  // Semantic search: debounce search query + active label → embed → call RPC
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      const label = activeLabel;
-      const reqId = ++activeLabelReqId.current;
+    const combined = [searchQuery.trim(), activeLabel].filter(Boolean).join(" ");
+    if (!combined || !uid) {
+      setSemanticResults(null);
+      return;
+    }
 
-      if (!label) {
-        setActiveLabelNeedles([]);
-        return;
-      }
-
-      setActiveLabelNeedles(uniqNorm([label]));
-
-      const key = `${TR_CACHE_PREFIX}${normalizeText(label)}`;
+    const timer = setTimeout(async () => {
+      setSemanticLoading(true);
       try {
-        const cached = await AsyncStorage.getItem(key);
-        if (cancelled || reqId !== activeLabelReqId.current) return;
-
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed && Array.isArray(parsed.needles) && parsed.needles.length) {
-            setActiveLabelNeedles(uniqNorm([label, ...parsed.needles]));
-            return;
-          }
+        const { data: embedData } = await supabase.functions.invoke("embed-text", {
+          body: { text: combined },
+        });
+        if (!embedData?.embedding) {
+          setSemanticResults(null);
+          return;
         }
-      } catch {}
+        const { data: results, error: rpcError } = await supabase.rpc("search_community_posts", {
+          uid,
+          query_embedding: embedData.embedding,
+          radius_m: DEFAULT_RADIUS_KM * 1000,
+          match_count: 60,
+        });
+        if (rpcError) {
+          console.warn("[Community] search_community_posts error:", rpcError);
+          setSemanticResults(null);
+          return;
+        }
+        // Only apply semantic filtering when there are actual results.
+        // Empty results (no embeddings yet, or nothing nearby) fall back to
+        // chronological display so Community never goes blank on a label click.
+        setSemanticResults(Array.isArray(results) && results.length > 0 ? results : null);
+      } catch (e) {
+        console.warn("[Community] semantic search error", e);
+        setSemanticResults(null);
+      } finally {
+        setSemanticLoading(false);
+      }
+    }, 500);
 
-      try {
-        const [en, it] = await Promise.all([
-          translateOnce(label, "en").catch(() => null),
-          translateOnce(label, "it").catch(() => null),
-        ]);
-
-        if (cancelled || reqId !== activeLabelReqId.current) return;
-
-        const needles = uniqNorm([label, en, it]);
-        setActiveLabelNeedles(needles);
-
-        AsyncStorage.setItem(
-          key,
-          JSON.stringify({ needles, cachedAt: Date.now() })
-        ).catch(() => {});
-      } catch {}
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLabel]);
-
-  const matchesSearchQuery = (p, q) => {
-    if (!q) return true;
-    const nq = normalizeText(q);
-    if (!nq) return true;
-
-    const uname = asAt(p.user || "");
-    const hay = normalizeText(`${uname} ${p.title || ""} ${p.description || ""}`);
-    const words = hay.split(" ").filter(Boolean);
-    return words.some((w) => w.startsWith(nq));
-  };
-
-  const isLabelMatch = useCallback((post, needles) => {
-    if (!needles?.length) return false;
-    const hay = buildSearchText(post);
-    for (const n of needles) {
-      if (similarityScore(n, hay) >= LABEL_MATCH_THRESHOLD) return true;
-    }
-    return false;
-  }, []);
-
-  const scoreLabelMatch = useCallback((post, needles) => {
-    if (!needles?.length) return 0;
-    const hay = buildSearchText(post);
-    let best = 0;
-    for (const n of needles) {
-      const s = similarityScore(n, hay);
-      if (s > best) best = s;
-      if (best >= 0.92) break;
-    }
-    return best;
-  }, []);
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeLabel, uid]);
 
   // Returns true if any of this ad post's labels match any of the user's ad_tags
   const adMatchesUserTags = useCallback((post, userAdTags) => {
@@ -693,7 +541,8 @@ export default function CommunityScreen() {
     const promptedCategories = new Set();
     let out = postsInput.reduce((acc, p) => {
       const type = String(p.type || "");
-      if (!VISIBLE_TYPES.has(type)) return acc;
+      const isFromFollowed = showFollowedPosts && followedUserIds.length > 0 && followedUserIds.includes(p.author_id);
+      if (!VISIBLE_TYPES.has(type) && !isFromFollowed) return acc;
       if (type === "Article" && !showLocalNews) return acc;
       if (blockedUsers.length && blockedUsers.includes(asAt(p.user))) return acc;
 
@@ -751,30 +600,17 @@ export default function CommunityScreen() {
       });
     }
 
-    const trimmedQuery = searchQuery.trim();
-    if (trimmedQuery) {
-      out = out.filter(
-        (p) => p.type === "ad_prompt" || matchesSearchQuery(p, trimmedQuery)
-      );
-    }
-
-    if (activeLabelNeedles.length) {
-      const withLabel = [];
-      const without = [];
-
-      out.forEach((p) => {
-        if (p.type === "ad_prompt") { without.push(p); return; }
-        if (isLabelMatch(p, activeLabelNeedles)) withLabel.push(p);
-        else without.push(p);
-      });
-
-      withLabel.sort((a, b) => {
-        const sa = scoreLabelMatch(a, activeLabelNeedles);
-        const sb = scoreLabelMatch(b, activeLabelNeedles);
-        return sb - sa;
-      });
-
-      out = [...withLabel, ...without];
+    if (semanticResults !== null) {
+      // Semantic search active: filter + rank by embedding similarity
+      const simMap = new Map(semanticResults.map((r) => [String(r.id), r.similarity]));
+      const SIM_THRESHOLD = 0.25;
+      out = out
+        .filter((p) => p.type === "ad_prompt" || (simMap.has(String(p.id)) && simMap.get(String(p.id)) >= SIM_THRESHOLD))
+        .sort((a, b) => {
+          if (a.type === "ad_prompt") return -1;
+          if (b.type === "ad_prompt") return 1;
+          return (simMap.get(String(b.id)) || 0) - (simMap.get(String(a.id)) || 0);
+        });
     } else {
       // Sort chronologically (newest first); ad_prompts use their ad's created_at
       out = [...out].sort((a, b) => {
@@ -828,10 +664,9 @@ export default function CommunityScreen() {
     blockedUsers,
     selectedDate,
     timeFilter,
-    searchQuery,
-    activeLabelNeedles,
-    isLabelMatch,
-    scoreLabelMatch,
+    semanticResults,
+    showFollowedPosts,
+    followedUserIds,
     adMatchesUserTags,
     prefs.premiumAdFree,
   ]);
@@ -1110,7 +945,7 @@ export default function CommunityScreen() {
                 <Feather
                   name="search"
                   size={16}
-                  color={isDark ? "#FFFFFF" : "#111111"}
+                  color="#2F91FF"
                   style={{ marginRight: 6 }}
                 />
                 <TextInput
@@ -1210,8 +1045,8 @@ export default function CommunityScreen() {
           const isActive = String(item.id) === String(activePostId);
 
           const matchLabel =
-            activeLabel && activeLabelNeedles.length
-              ? isLabelMatch(item, activeLabelNeedles)
+            activeLabel && semanticResults !== null
+              ? semanticResults.some((r) => String(r.id) === String(item.id) && r.similarity >= 0.25)
               : false;
 
           const isFirst = index === 0;

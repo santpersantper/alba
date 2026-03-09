@@ -4,7 +4,7 @@
 // 2) Required info: map Italian inputs -> canonical English keys in required_info:
 //    nome->name, età/eta->age, genere->gender, città/citta->city, email->email, nome utente/utente/username->username
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  Modal,
   Platform,
   KeyboardAvoidingView,
 } from "react-native";
@@ -28,6 +29,7 @@ import EventPanel from "../components/EventPanel";
 import AdPanel from "../components/AdPanel";
 import * as ImageManipulator from "expo-image-manipulator";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Constants from "expo-constants";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useAlbaLanguage } from "../theme/LanguageContext";
@@ -36,7 +38,7 @@ import { useAlbaLanguage } from "../theme/LanguageContext";
 function Header({ onSubmit, submitting, theme, titleText }) {
   const navigation = useNavigation();
   return (
-    <View style={[styles.header, { backgroundColor: theme.background }]}>
+    <View style={[styles.header, { backgroundColor: theme.gray }]}>
       <TouchableOpacity
         onPress={() => navigation.navigate("Community")}
         hitSlop={8}
@@ -57,15 +59,23 @@ function Header({ onSubmit, submitting, theme, titleText }) {
   );
 }
 
-function Field({ style, children, isDark }) {
+function Field({ style, children, isDark, lineOnly }) {
   return (
     <View
       style={[
         styles.fieldBase,
-        {
-          backgroundColor: isDark ? "#2B2B2B" : "#FFFFFF",
-          borderColor: isDark ? "#444A55" : "#D9D9D9",
-        },
+        lineOnly
+          ? {
+              backgroundColor: "transparent",
+              borderWidth: 0,
+              borderBottomWidth: 1,
+              borderRadius: 0,
+              borderColor: isDark ? "#555C69" : "#D9D9D9",
+            }
+          : {
+              backgroundColor: isDark ? "#2B2B2B" : "#FFFFFF",
+              borderColor: isDark ? "#444A55" : "#D9D9D9",
+            },
         style,
       ]}
     >
@@ -76,7 +86,7 @@ function Field({ style, children, isDark }) {
 
 function Input({ placeholder, value, onChangeText, multiline, theme, isDark }) {
   return (
-    <Field style={multiline ? styles.textareaWrap : undefined} isDark={isDark}>
+    <Field style={multiline ? styles.textareaWrap : undefined} isDark={isDark} lineOnly={!multiline}>
       <TextInput
         placeholder={placeholder}
         placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
@@ -125,6 +135,12 @@ function MediaThumb({ uri, isVideo }) {
 /* ---------- helpers ---------- */
 const BUCKET = "alba-media";
 const MAX_VIDEO_SECONDS = 20;
+
+const FEED_TAGS = [
+  "Music", "Art", "Food", "Travel", "Sports", "Fitness",
+  "Gaming", "Fashion", "Comedy", "Dance", "Nature", "Tech",
+  "Film", "Education", "Lifestyle", "Pets",
+];
 
 const stripDiacritics = (s) =>
   String(s || "")
@@ -212,6 +228,7 @@ export default function CreatePost() {
   const [media, setMedia] = useState([]);
   const [thumbnailUri, setThumbnailUri] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [successModal, setSuccessModal] = useState({ visible: false, title: "", message: "" });
 
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
@@ -231,6 +248,14 @@ export default function CreatePost() {
 
   // Manual location input (required for events)
   const [locationText, setLocationText] = useState("");
+  const [locationSuggestions, setLocationSuggestions] = useState([]);
+  const locationDebounceRef = useRef(null);
+
+  // Ad-specific notes
+  const [adNotes, setAdNotes] = useState("");
+
+  // Feed post tags
+  const [feedTags, setFeedTags] = useState([]);
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -463,7 +488,10 @@ export default function CreatePost() {
     setSelectedDate(null);
     setSelectedTime(null);
     setLocationText("");
+    setLocationSuggestions([]);
+    setAdNotes("");
     setThumbnailUri(null);
+    setFeedTags([]);
   };
 
   const handleSubmit = async () => {
@@ -552,27 +580,51 @@ export default function CreatePost() {
           kind: "video",
         });
 
-        const { error: feedErr } = await supabase.from("feed_videos").insert({
-          user_id: uid,
-          username: username,
-          video_storage_path: videoUrl,
-          thumbnail_path: null,
-          video_duration: mainVideo.durationSec ?? null,
-          video_width: mainVideo.width || null,
-          video_height: mainVideo.height || null,
-          filesize_bytes: mainVideo.fileSize || null,
-          caption: desc || title || null,
-          visibility: "public",
-          geo_lat: lat,
-          geo_lon: lon,
-          is_ready: true,
-          is_processed: true,
-        });
+        const caption = desc || title || null;
+
+        const { data: feedRow, error: feedErr } = await supabase
+          .from("feed_videos")
+          .insert({
+            user_id: uid,
+            username: username,
+            video_storage_path: videoUrl,
+            thumbnail_path: null,
+            video_duration: mainVideo.durationSec ?? null,
+            video_width: mainVideo.width || null,
+            video_height: mainVideo.height || null,
+            filesize_bytes: mainVideo.fileSize || null,
+            caption,
+            tags: feedTags.length > 0 ? feedTags : [],
+            visibility: "public",
+            geo_lat: lat,
+            geo_lon: lon,
+            is_ready: true,
+            is_processed: true,
+          })
+          .select("id")
+          .single();
 
         if (feedErr) throw feedErr;
 
-        Alert.alert(t("create_post_success_title"), t("create_post_success_message"));
+        // Fire-and-forget: embed the caption for semantic search
+        if (feedRow?.id && caption) {
+          (async () => {
+            try {
+              const { data: embedData } = await supabase.functions.invoke("embed-text", {
+                body: { text: caption },
+              });
+              if (embedData?.embedding) {
+                await supabase
+                  .from("feed_videos")
+                  .update({ caption_embedding: embedData.embedding })
+                  .eq("id", feedRow.id);
+              }
+            } catch {}
+          })();
+        }
+
         resetForm();
+        setSuccessModal({ visible: true, title: t("create_post_success_title"), message: t("create_post_success_message") });
         return;
       }
 
@@ -654,10 +706,15 @@ export default function CreatePost() {
         }
       }
 
+      // Merge adNotes into description for ad posts
+      const finalDesc = isAd && adNotes.trim()
+        ? [desc.trim(), adNotes.trim()].filter(Boolean).join("\n\n")
+        : desc;
+
       // Create post (without media first)
       const baseRow = {
         title,
-        description: desc,
+        description: finalDesc,
         user: username,
         userpicuri: userPicUri,
         type: typeLabel,
@@ -683,6 +740,26 @@ export default function CreatePost() {
 
       if (insErr) throw insErr;
       const postId = inserted.id;
+
+      // Fire-and-forget: embed title + description for semantic search in CommunityScreen
+      if (postId) {
+        const textToEmbed = [title, finalDesc].filter(Boolean).join(" ");
+        if (textToEmbed) {
+          (async () => {
+            try {
+              const { data: embedData } = await supabase.functions.invoke("embed-text", {
+                body: { text: textToEmbed },
+              });
+              if (embedData?.embedding) {
+                await supabase
+                  .from("posts")
+                  .update({ caption_embedding: embedData.embedding })
+                  .eq("id", postId);
+              }
+            } catch {}
+          })();
+        }
+      }
 
       if (postType === "event") {
         const { error: evErr } = await supabase.from("events").insert({
@@ -741,14 +818,36 @@ export default function CreatePost() {
         });
       }
 
-      Alert.alert(t("create_post_success_title"), t("create_post_success_message"));
       resetForm();
+      setSuccessModal({ visible: true, title: t("create_post_success_title"), message: t("create_post_success_message") });
     } catch (e) {
       console.warn(e);
       Alert.alert(t("create_post_fail_title"), e?.message || String(e));
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const fetchLocationSuggestions = (text) => {
+    if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current);
+    if (!text || text.trim().length < 2) {
+      setLocationSuggestions([]);
+      return;
+    }
+    locationDebounceRef.current = setTimeout(async () => {
+      try {
+        const token = Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+        if (!token) return;
+        const q = encodeURIComponent(text.trim());
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?types=poi,place,address&limit=5&access_token=${token}`
+        );
+        const json = await res.json();
+        setLocationSuggestions(Array.isArray(json.features) ? json.features : []);
+      } catch {
+        setLocationSuggestions([]);
+      }
+    }, 350);
   };
 
   const isEvent = postType === "event";
@@ -759,13 +858,13 @@ export default function CreatePost() {
   const isFeedPost = postType === "feedPost";
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.gray }]}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 72 : 0}
       >
-        <View style={[styles.container, { backgroundColor: theme.background }]}>
+        <View style={[styles.container, { backgroundColor: theme.gray }]}>
           <Header
             onSubmit={handleSubmit}
             submitting={submitting}
@@ -906,20 +1005,66 @@ export default function CreatePost() {
               )}
             </View>
 
-            {/* Location input */}
-            <Input
-              placeholder={t("create_post_location_placeholder")}
-              value={locationText}
-              onChangeText={setLocationText}
-              theme={theme}
-              isDark={isDark}
-            />
+            {/* Location with Mapbox suggestions */}
+            <View style={{ position: "relative", zIndex: 10 }}>
+              <Field isDark={isDark} lineOnly>
+                <TextInput
+                  placeholder={t("create_post_location_placeholder")}
+                  placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
+                  value={locationText}
+                  onChangeText={(text) => {
+                    setLocationText(text);
+                    fetchLocationSuggestions(text);
+                  }}
+                  style={[styles.textInput, { color: theme.text }]}
+                />
+              </Field>
+              {locationSuggestions.length > 0 && (
+                <View
+                  style={[
+                    styles.suggestionsBox,
+                    { backgroundColor: isDark ? "#2B2B2B" : "#fff", borderColor: isDark ? "#444" : "#ddd" },
+                  ]}
+                >
+                  {locationSuggestions.map((s) => (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setLocationText(s.place_name);
+                        setLocationSuggestions([]);
+                      }}
+                    >
+                      <Feather name="map-pin" size={13} color="#2F91FF" style={{ marginRight: 8 }} />
+                      <Text
+                        style={[styles.suggestionText, { color: theme.text }]}
+                        numberOfLines={2}
+                      >
+                        {s.place_name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
 
-            {/* Media */}
-            <View style={{ alignItems: "center", marginTop: 8 }}>
-              <TouchableOpacity style={styles.addMediaBtn} onPress={pickMedia} disabled={submitting}>
+            {/* Media + Thumbnail side by side */}
+            <View style={styles.mediaButtonsRow}>
+              <TouchableOpacity style={[styles.addMediaBtn, { flex: 1 }]} onPress={pickMedia} disabled={submitting}>
                 <Text style={styles.addMediaText}>{t("create_post_add_media_button")}</Text>
               </TouchableOpacity>
+
+              {!isFeedPost && (
+                <TouchableOpacity
+                  style={[styles.addMediaBtn, { flex: 1 }]}
+                  onPress={pickThumbnail}
+                  disabled={submitting}
+                >
+                  <Text style={styles.addMediaText}>
+                    {thumbnailUri ? "Change thumbnail" : "Add thumbnail"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             {media.length > 0 && (
@@ -930,26 +1075,16 @@ export default function CreatePost() {
               </View>
             )}
 
-            {/* Thumbnail (optional cover image for posts that contain videos) */}
-            {!isFeedPost && (
-              <View style={{ alignItems: "center", marginTop: 4 }}>
-                <TouchableOpacity style={styles.addMediaBtn} onPress={pickThumbnail} disabled={submitting}>
-                  <Text style={styles.addMediaText}>
-                    {thumbnailUri ? "Change thumbnail" : "Add thumbnail (optional)"}
-                  </Text>
+            {thumbnailUri && (
+              <View style={{ marginTop: 8, position: "relative", alignSelf: "flex-start" }}>
+                <Image source={{ uri: thumbnailUri }} style={[styles.mediaImg, { borderRadius: 8, width: 110, height: 100 }]} />
+                <TouchableOpacity
+                  onPress={() => setThumbnailUri(null)}
+                  style={styles.videoBadge}
+                  hitSlop={8}
+                >
+                  <Text style={styles.videoBadgeText}>✕</Text>
                 </TouchableOpacity>
-                {thumbnailUri && (
-                  <View style={{ marginTop: 8, position: "relative" }}>
-                    <Image source={{ uri: thumbnailUri }} style={[styles.mediaImg, { borderRadius: 8 }]} />
-                    <TouchableOpacity
-                      onPress={() => setThumbnailUri(null)}
-                      style={styles.videoBadge}
-                      hitSlop={8}
-                    >
-                      <Text style={styles.videoBadgeText}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
               </View>
             )}
 
@@ -1013,10 +1148,77 @@ export default function CreatePost() {
             {isEvent && <EventPanel onState={setEventState} />}
             {isAd && <AdPanel onState={setAdState} />}
 
+            {/* Feed post tag selector */}
+            {isFeedPost && (
+              <View style={{ marginTop: 16 }}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>
+                  Video categories
+                </Text>
+                <Text style={{ color: isDark ? "#8C96A5" : "#8F8F8F", fontSize: 12, fontFamily: "Poppins", marginBottom: 10 }}>
+                  Tag your video so people can discover it
+                </Text>
+                <View style={styles.tagsWrap}>
+                  {FEED_TAGS.map((tag) => {
+                    const active = feedTags.includes(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        onPress={() =>
+                          setFeedTags((prev) =>
+                            prev.includes(tag)
+                              ? prev.filter((t) => t !== tag)
+                              : [...prev, tag]
+                          )
+                        }
+                        style={[
+                          styles.tagChip,
+                          active
+                            ? { backgroundColor: "#00A9FF", borderColor: "#00A9FF" }
+                            : { backgroundColor: "transparent", borderColor: isDark ? "#555" : "#d0d7e2" },
+                        ]}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={{ color: active ? "#fff" : isDark ? "#8C96A5" : "#6F7D95", fontSize: 13, fontFamily: "Poppins" }}>
+                          {tag}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+
             <View style={{ height: 18 }} />
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Alba-native success modal */}
+      <Modal
+        visible={successModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSuccessModal({ visible: false, title: "", message: "" })}
+      >
+        <View style={styles.successOverlay}>
+          <View style={[styles.successCard, { backgroundColor: isDark ? "#101218" : "#fff" }]}>
+            {!!successModal.title && (
+              <Text style={[styles.successTitle, { color: isDark ? "#fff" : "#111" }]}>
+                {successModal.title}
+              </Text>
+            )}
+            <Text style={[styles.successMessage, { color: isDark ? "#ccc" : "#333" }]}>
+              {successModal.message}
+            </Text>
+            <TouchableOpacity
+              style={styles.successOkBtn}
+              onPress={() => setSuccessModal({ visible: false, title: "", message: "" })}
+            >
+              <Text style={styles.successOkText}>{t("ok_button") || "OK"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1189,5 +1391,89 @@ const styles = StyleSheet.create({
   timeOptionText: {
     fontSize: 13,
     fontFamily: "Poppins",
+  },
+
+  // Media buttons row (side by side)
+  mediaButtonsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+
+  // Mapbox suggestions dropdown
+  suggestionsBox: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    borderWidth: 1,
+    borderRadius: 10,
+    overflow: "hidden",
+    zIndex: 50,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  suggestionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#eee",
+  },
+  suggestionText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Poppins",
+  },
+
+  successOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  successCard: {
+    width: "82%",
+    borderRadius: 18,
+    padding: 22,
+    alignItems: "center",
+    elevation: 4,
+  },
+  successTitle: {
+    fontFamily: "Poppins",
+    fontWeight: "700",
+    fontSize: 16,
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  successMessage: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  successOkBtn: {
+    backgroundColor: "#4EBCFF",
+    paddingVertical: 10,
+    paddingHorizontal: 36,
+    borderRadius: 12,
+  },
+  successOkText: {
+    color: "#fff",
+    fontFamily: "Poppins",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+
+  tagsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  tagChip: {
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
 });

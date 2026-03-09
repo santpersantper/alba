@@ -18,6 +18,7 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import * as ImagePicker from "expo-image-picker";
+import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
 import { uploadChatImage } from "../lib/uploadImage";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -30,6 +31,7 @@ import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
 import PostMessage from "../components/chat/PostMessage";
 import InviteMessage from "../components/chat/InviteMessage";
+import LocationMessage from "../components/chat/LocationMessage";
 
 /* ---------------- helpers ---------------- */
 const asAt = (s) => String(s || "").replace(/^@+/, "");
@@ -146,6 +148,29 @@ const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, ow
   return data;
 };
 
+const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id }) => {
+  const now = new Date();
+  const sent_date = now.toISOString().slice(0, 10);
+  const sent_time = now.toTimeString().slice(0, 8);
+  const { data, error } = await supabase
+    .from("messages")
+    .insert([{
+      owner_id,
+      chat: chatId,
+      is_group: false,
+      sender_username: senderUsername || "me",
+      sender_is_me: true,
+      content: `__location__:${JSON.stringify(locationData)}`,
+      is_read: true,
+      sent_date,
+      sent_time,
+    }])
+    .select("*")
+    .single();
+  if (error) throw error;
+  return data;
+};
+
 const subscribeChatInserts = (chatId, onInsert) => {
   if (!chatId) return () => {};
   const channel = supabase
@@ -179,6 +204,14 @@ function mapRowToItem(row) {
   // post share
   if (row.post_id && !row.media_reference && (!row.content || !String(row.content).trim())) {
     return { ...base, type: "post", postId: row.post_id, postPreview: null };
+  }
+
+  // location
+  if (row.content && String(row.content).startsWith("__location__:")) {
+    try {
+      const loc = JSON.parse(String(row.content).slice("__location__:".length));
+      return { ...base, type: "location", locationData: loc };
+    } catch {}
   }
 
   // media
@@ -249,6 +282,12 @@ export default function SingleChatScreen({ navigation, route }) {
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
   const isBlocked = !isGroup && blockedUsers.includes(peerUsername);
+
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [locationSearchText, setLocationSearchText] = useState("");
+  const [locationSuggestions, setLocationSuggestions] = useState([]);
+  const [locationSearching, setLocationSearching] = useState(false);
+  const locationSearchTimeout = useRef(null);
 
   const getSessionUid = useCallback(async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -664,6 +703,101 @@ export default function SingleChatScreen({ navigation, route }) {
     }
   }, [chatId, input, pendingImage, myUsername, isBlocked, getSessionUid, peerUsername]);
 
+  const onSendLocation = useCallback(async (locationData) => {
+    if (!chatId) return;
+    setLocationModalVisible(false);
+    setLocationSearchText("");
+    setLocationSuggestions([]);
+    const now = new Date();
+    const optimisticId = `opt-loc-${now.getTime()}`;
+    const optimistic = {
+      id: optimisticId,
+      type: "location",
+      isMe: true,
+      senderUsername: myUsername,
+      locationData,
+      minuteKey: makeMinuteKey(now.toISOString().slice(0, 10), now.toTimeString().slice(0, 5)),
+      time: now.toTimeString().slice(0, 5),
+    };
+    setItems((prev) => {
+      const next = [...prev, optimistic];
+      setCachedSingleMessagesLocal({ chatId, peerUsername, items: next }).catch(() => {});
+      return next;
+    });
+    setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
+    try {
+      const owner_id = await getSessionUid();
+      if (!owner_id) throw new Error("Not authenticated");
+      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, owner_id });
+      const realItem = {
+        id: row.id,
+        type: "location",
+        isMe: true,
+        senderUsername: row.sender_username || myUsername,
+        locationData,
+        minuteKey: makeMinuteKey(row.sent_date, row.sent_time),
+        time: (row.sent_time || "").slice(0, 5),
+      };
+      setItems((prev) => {
+        const next = prev.map((m) => (m.id === optimisticId ? realItem : m));
+        setCachedSingleMessagesLocal({ chatId, peerUsername, items: next }).catch(() => {});
+        return next;
+      });
+    } catch {
+      setItems((p) => p.filter((m) => m.id !== optimisticId));
+    }
+  }, [chatId, myUsername, peerUsername, getSessionUid]);
+
+  const onSendCurrentLocation = useCallback(async () => {
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission needed", "Alba needs location access to share your location.");
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude: lat, longitude: lng } = loc.coords;
+      let address = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      try {
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&limit=1`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.features?.[0]?.place_name) address = json.features[0].place_name;
+      } catch {}
+      onSendLocation({ lat, lng, address });
+    } catch {
+      Alert.alert("Error", "Could not get your current location.");
+    }
+  }, [onSendLocation]);
+
+  const onLocationSearch = useCallback((text) => {
+    setLocationSearchText(text);
+    clearTimeout(locationSearchTimeout.current);
+    if (!text.trim()) { setLocationSuggestions([]); return; }
+    locationSearchTimeout.current = setTimeout(async () => {
+      try {
+        setLocationSearching(true);
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        const q = encodeURIComponent(text.trim());
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=5`;
+        const res = await fetch(url);
+        const json = await res.json();
+        setLocationSuggestions(
+          (json.features || []).map((f) => ({
+            address: f.place_name,
+            lat: f.center[1],
+            lng: f.center[0],
+          }))
+        );
+      } catch {
+        setLocationSuggestions([]);
+      } finally {
+        setLocationSearching(false);
+      }
+    }, 400);
+  }, []);
+
   const onPickGallery = useCallback(async () => {
     if (isBlocked) { setUnblockModalVisible(true); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -722,6 +856,9 @@ export default function SingleChatScreen({ navigation, route }) {
         break;
       case "invite":
         body = <InviteMessage {...item} time={displayTime} groupPreview={item.groupPreview || null} onDeleted={handleDeleted} />;
+        break;
+      case "location":
+        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
         break;
       default:
         return null;
@@ -817,7 +954,7 @@ export default function SingleChatScreen({ navigation, route }) {
                   ]}
                 >
                   <View style={styles.composerLeft}>
-                    <TouchableOpacity onPress={() => {}} style={styles.iconBtn} hitSlop={8}>
+                    <TouchableOpacity onPress={() => setLocationModalVisible(true)} style={styles.iconBtn} hitSlop={8}>
                       <Ionicons name="location-outline" size={22} color={iconColor} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={onPickGallery} style={styles.iconBtn} hitSlop={8}>
@@ -878,6 +1015,68 @@ export default function SingleChatScreen({ navigation, route }) {
             )}
           </>
         )}
+
+        {/* Location picker modal */}
+        <Modal
+          visible={locationModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+          />
+          <View style={[styles.locationSheet, { backgroundColor: isDark ? "#1A2330" : "#FFFFFF" }]}>
+            <Text style={[styles.locationSheetTitle, { color: theme.text }]}>Share Location</Text>
+
+            <TouchableOpacity
+              style={[styles.locationOptionBtn, { borderColor: isDark ? "#333" : "#E0E6EF" }]}
+              onPress={onSendCurrentLocation}
+            >
+              <Ionicons name="locate" size={20} color="#4EBCFF" style={{ marginRight: 10 }} />
+              <Text style={[styles.locationOptionText, { color: theme.text }]}>Send current location</Text>
+            </TouchableOpacity>
+
+            <Text style={[styles.locationOrLabel, { color: isDark ? "#9CA3AF" : "#888" }]}>or search for a place</Text>
+
+            <View style={[styles.locationSearchWrap, { backgroundColor: isDark ? "#2B2B2B" : "#F4F6F9", borderColor: isDark ? "#444" : "#D9E0EA" }]}>
+              <Ionicons name="search" size={16} color={isDark ? "#9CA3AF" : "#888"} style={{ marginRight: 6 }} />
+              <TextInput
+                style={[styles.locationSearchInput, { color: theme.text }]}
+                placeholder="Via Valtellina 5 or Alcatraz…"
+                placeholderTextColor={isDark ? "#666" : "#AAA"}
+                value={locationSearchText}
+                onChangeText={onLocationSearch}
+                autoCorrect={false}
+              />
+              {locationSearching && <ActivityIndicator size="small" color="#4EBCFF" />}
+            </View>
+
+            {locationSuggestions.length > 0 && (
+              <View style={[styles.suggestionsBox, { backgroundColor: isDark ? "#1E2933" : "#FAFCFF", borderColor: isDark ? "#333" : "#D9E0EA" }]}>
+                {locationSuggestions.map((s, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={[styles.suggestionRow, i < locationSuggestions.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: isDark ? "#333" : "#E5E9F0" }]}
+                    onPress={() => onSendLocation(s)}
+                  >
+                    <Ionicons name="location-outline" size={14} color="#4EBCFF" style={{ marginRight: 8 }} />
+                    <Text style={[styles.suggestionText, { color: theme.text }]} numberOfLines={2}>{s.address}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.locationCancelBtn}
+              onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+            >
+              <Text style={[styles.locationCancelText, { color: isDark ? "#9CA3AF" : "#888" }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </Modal>
 
         <Modal visible={unblockModalVisible} transparent animationType="fade" onRequestClose={() => setUnblockModalVisible(false)}>
           <View style={styles.modalOverlay}>
@@ -1018,4 +1217,60 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: "Poppins",
   },
+
+  // Location modal
+  locationSheet: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 32,
+  },
+  locationSheetTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    fontFamily: "Poppins",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  locationOptionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  locationOptionText: { fontFamily: "Poppins", fontSize: 14, fontWeight: "600" },
+  locationOrLabel: { fontSize: 12, fontFamily: "Poppins", marginBottom: 8 },
+  locationSearchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  locationSearchInput: { flex: 1, fontFamily: "Poppins", fontSize: 13 },
+  suggestionsBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 12,
+    overflow: "hidden",
+  },
+  suggestionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  suggestionText: { flex: 1, fontFamily: "Poppins", fontSize: 13 },
+  locationCancelBtn: { alignItems: "center", paddingVertical: 12, marginTop: 4 },
+  locationCancelText: { fontFamily: "Poppins", fontSize: 14 },
 });

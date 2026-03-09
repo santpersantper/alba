@@ -126,10 +126,19 @@ export default function GroupInfoScreen() {
   const [myUsername, setMyUsername] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // pending member approvals
+  const [requireApproval, setRequireApproval] = useState(false);
+  const [pendingMembers, setPendingMembers] = useState([]);
+
   // exit/report
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportText, setReportText] = useState("");
   const [exiting, setExiting] = useState(false);
+
+  // Alba-native info modal (replaces Alert.alert success messages)
+  const [infoModal, setInfoModal] = useState({ visible: false, message: "" });
+  // Alba-native confirm modal (replaces Alert.alert for delete group)
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState(false);
 
   // member menu
   const [memberMenuVisible, setMemberMenuVisible] = useState(false);
@@ -159,8 +168,13 @@ export default function GroupInfoScreen() {
           error,
         } = await supabase.auth.getUser();
         if (error || !user) return;
-        const username =
-          user.user_metadata?.username || user.email || user.id;
+        // Always load from profiles — user_metadata.username may not be set
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("username")
+          .eq("id", user.id)
+          .maybeSingle();
+        const username = profile?.username || user.user_metadata?.username || user.email || user.id;
         setMyUsername(username);
       } catch (e) {
         console.error("auth getUser error", e);
@@ -177,7 +191,7 @@ export default function GroupInfoScreen() {
       const { data, error } = await supabase
         .from("groups")
         .select(
-          "id, groupname, group_desc, group_pic_link, members, group_admin"
+          "id, groupname, group_desc, group_pic_link, members, group_admin, require_approval, pending_members"
         )
         .eq("groupname", resolvedGroupName)
         .maybeSingle();
@@ -197,6 +211,8 @@ export default function GroupInfoScreen() {
       setGroupAvatarUrl(data.group_pic_link || null);
       setGroupAdmins(Array.isArray(data.group_admin) ? data.group_admin : []);
       setMembersUsernames(Array.isArray(data.members) ? data.members : []);
+      setRequireApproval(!!data.require_approval);
+      setPendingMembers(Array.isArray(data.pending_members) ? data.pending_members : []);
     } catch (e) {
       console.error("loadGroup unexpected:", e);
     }
@@ -399,7 +415,7 @@ export default function GroupInfoScreen() {
       setMembersUsernames(nextMembers);
       setGroupAdmins(nextAdmins);
 
-      Alert.alert("", t("group_exit_success") || "You left this group.");
+      setInfoModal({ visible: true, message: t("group_exit_success") || "You left this group." });
       navigation.goBack();
     } catch (e) {
       console.error("Unexpected error exiting group:", e);
@@ -416,10 +432,7 @@ export default function GroupInfoScreen() {
     console.log("Reported group:", resolvedGroupName, "Reason:", reportText);
     setReportText("");
     setReportModalVisible(false);
-    Alert.alert(
-      "",
-      t("group_report_success") || "Thanks for your report."
-    );
+    setInfoModal({ visible: true, message: t("group_report_success") || "Thanks for your report." });
   };
 
   /* ---------------- admin: change avatar (uses groups.group_pic_link) --- */
@@ -573,19 +586,7 @@ export default function GroupInfoScreen() {
   /* ---------------- admin: delete group ---------------- */
 
   const confirmDeleteGroup = () => {
-    Alert.alert(
-      t("group_delete_title") || "Delete group",
-      t("group_delete_confirm") ||
-        "Are you sure you want to delete this group?",
-      [
-        { text: t("cancel_button") || "Cancel", style: "cancel" },
-        {
-          text: t("delete_button") || "Delete",
-          style: "destructive",
-          onPress: handleDeleteGroup,
-        },
-      ]
-    );
+    setDeleteConfirmModal(true);
   };
 
   const handleDeleteGroup = async () => {
@@ -606,7 +607,7 @@ export default function GroupInfoScreen() {
         return;
       }
 
-      Alert.alert("", t("group_deleted") || "Group deleted.");
+      setInfoModal({ visible: true, message: t("group_deleted") || "Group deleted." });
       navigation.goBack();
     } catch (e) {
       console.error("delete group unexpected", e);
@@ -1130,6 +1131,64 @@ export default function GroupInfoScreen() {
             </TouchableOpacity>
           )}
 
+          {/* Admin: require-approval toggle + pending members */}
+          {isAdmin && (
+            <View style={[styles.approvalSection, { borderColor: theme.border, backgroundColor: theme.card }]}>
+              <TouchableOpacity
+                style={styles.approvalToggleRow}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  const next = !requireApproval;
+                  setRequireApproval(next);
+                  await supabase.from("groups").update({ require_approval: next }).eq("id", groupId);
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>Require approval to join</Text>
+                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>New members must be approved by an admin</Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: requireApproval ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: requireApproval ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+
+              {pendingMembers.length > 0 && (
+                <View style={styles.pendingList}>
+                  <Text style={[styles.pendingTitle, { color: theme.text }]}>Pending requests ({pendingMembers.length})</Text>
+                  {pendingMembers.map((uname) => (
+                    <View key={uname} style={styles.pendingRow}>
+                      <Text style={[styles.pendingName, { color: theme.text }]}>@{uname}</Text>
+                      <View style={styles.pendingBtns}>
+                        <TouchableOpacity
+                          style={[styles.pendingBtn, { backgroundColor: "#3D8BFF" }]}
+                          onPress={async () => {
+                            const nextPending = pendingMembers.filter((u) => u !== uname);
+                            const nextMembers = [...membersUsernames, uname];
+                            await supabase.from("groups").update({ pending_members: nextPending, members: nextMembers }).eq("id", groupId);
+                            setPendingMembers(nextPending);
+                            setMembersUsernames(nextMembers);
+                          }}
+                        >
+                          <Text style={styles.pendingBtnText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.pendingBtn, { backgroundColor: "#EF4444" }]}
+                          onPress={async () => {
+                            const nextPending = pendingMembers.filter((u) => u !== uname);
+                            await supabase.from("groups").update({ pending_members: nextPending }).eq("id", groupId);
+                            setPendingMembers(nextPending);
+                          }}
+                        >
+                          <Text style={styles.pendingBtnText}>Decline</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+
           {/* Footer buttons */}
           <View style={styles.footer}>
             <TouchableOpacity
@@ -1307,6 +1366,61 @@ export default function GroupInfoScreen() {
         }
         onSent={() => setShareVisible(false)}
       />
+
+      {/* Alba-native info modal */}
+      <Modal
+        visible={infoModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInfoModal({ visible: false, message: "" })}
+      >
+        <View style={styles.albaModalOverlay}>
+          <View style={[styles.albaModalCard, { backgroundColor: theme.card }]}>
+            <Text style={[styles.albaModalMessage, { color: theme.text }]}>
+              {infoModal.message}
+            </Text>
+            <TouchableOpacity
+              style={styles.albaModalOkBtn}
+              onPress={() => setInfoModal({ visible: false, message: "" })}
+            >
+              <Text style={styles.albaModalOkText}>{t("ok_button") || "OK"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Alba-native delete group confirm modal */}
+      <Modal
+        visible={deleteConfirmModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteConfirmModal(false)}
+      >
+        <View style={styles.albaModalOverlay}>
+          <View style={[styles.albaModalCard, { backgroundColor: theme.card }]}>
+            <Text style={[styles.albaModalMessage, { color: theme.text }]}>
+              {t("group_delete_confirm") || "Are you sure you want to delete this group?"}
+            </Text>
+            <View style={styles.albaModalRow}>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { backgroundColor: "#b0b6c0" }]}
+                onPress={() => setDeleteConfirmModal(false)}
+              >
+                <Text style={styles.albaModalBtnText}>{t("cancel_button") || "Cancel"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { backgroundColor: "#d23b3b" }]}
+                onPress={() => {
+                  setDeleteConfirmModal(false);
+                  handleDeleteGroup();
+                }}
+              >
+                <Text style={styles.albaModalBtnText}>{t("confirm_yes") || "Yes"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -1566,6 +1680,78 @@ const styles = StyleSheet.create({
     color: "#ffffff",
   },
 
+  approvalSection: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  approvalToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+  },
+  approvalToggleLabel: {
+    fontFamily: "PoppinsBold",
+    fontSize: 14,
+  },
+  approvalToggleSub: {
+    fontFamily: "Poppins",
+    fontSize: 12,
+    marginTop: 2,
+  },
+  toggleTrack: {
+    width: 44,
+    height: 24,
+    borderRadius: 12,
+    padding: 3,
+    marginLeft: 12,
+  },
+  toggleThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#fff",
+  },
+  pendingList: {
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+  },
+  pendingTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  pendingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  pendingName: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    flex: 1,
+  },
+  pendingBtns: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  pendingBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  pendingBtnText: {
+    color: "#fff",
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+  },
+
   modalOuter: {
     flex: 1,
     justifyContent: "center",
@@ -1700,5 +1886,53 @@ const styles = StyleSheet.create({
     fontFamily: "PoppinsBold",
     fontSize: 15,
     color: "#ffffff",
+  },
+
+  albaModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  albaModalCard: {
+    width: "82%",
+    borderRadius: 18,
+    padding: 22,
+    alignItems: "center",
+    elevation: 4,
+  },
+  albaModalMessage: {
+    fontFamily: "Poppins",
+    fontSize: 15,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  albaModalOkBtn: {
+    backgroundColor: "#4EBCFF",
+    paddingVertical: 10,
+    paddingHorizontal: 36,
+    borderRadius: 12,
+  },
+  albaModalOkText: {
+    color: "#fff",
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
+  },
+  albaModalRow: {
+    flexDirection: "row",
+    columnGap: 10,
+    width: "100%",
+    justifyContent: "space-between",
+  },
+  albaModalBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  albaModalBtnText: {
+    color: "#fff",
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
   },
 });

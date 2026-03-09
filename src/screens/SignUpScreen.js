@@ -5,12 +5,13 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
+  Keyboard,
   ScrollView,
   StyleSheet,
   Dimensions,
   Image,
   ActivityIndicator,
-  Alert,
   Modal,
   KeyboardAvoidingView,
   Platform,
@@ -20,6 +21,7 @@ import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
 import { Picker } from "@react-native-picker/picker";
 import { Feather } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
 
@@ -43,10 +45,11 @@ export default function SignUpScreen({ navigation }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [age, setAge] = useState("");
-  const [gender, setGender] = useState("");
-  const [city, setCity] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
+
+  const [alertConfig, setAlertConfig] = useState(null);
+  const showAlert = (title, message) => setAlertConfig({ title, message });
 
   // live validation
   const [emailValid, setEmailValid] = useState(null);
@@ -60,7 +63,9 @@ export default function SignUpScreen({ navigation }) {
 
   // pickers
   const [showAgePicker, setShowAgePicker] = useState(false);
-  const [showGenderPicker, setShowGenderPicker] = useState(false);
+
+  // city detected silently from device location
+  const detectedCityRef = useRef(null);
 
   const scrollRef = useRef(null);
 
@@ -74,7 +79,6 @@ export default function SignUpScreen({ navigation }) {
   const accent = isDark ? "#FFFFFF" : "#00A9FF";
   const placeholder = accent;
 
-  // ✅ border logic: dark => bottom only (white), light => full (light blue)
   const borderStyle = isDark
     ? { borderBottomWidth: 1, borderBottomColor: "#FFFFFF" }
     : { borderWidth: 1, borderColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14 };
@@ -88,6 +92,29 @@ export default function SignUpScreen({ navigation }) {
       if (emailTimerRef.current) clearTimeout(emailTimerRef.current);
       if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
     };
+  }, []);
+
+  // Silently detect city on mount — no UI shown, no error if it fails
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Low,
+        });
+        const { latitude, longitude } = loc.coords;
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        if (!token) return;
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?types=place&access_token=${token}`
+        );
+        const json = await res.json();
+        detectedCityRef.current = json.features?.[0]?.text || null;
+      } catch {
+        // Silent — city will be null if detection fails
+      }
+    })();
   }, []);
 
   const checkUsernameUnique = async (value) => {
@@ -200,40 +227,32 @@ export default function SignUpScreen({ navigation }) {
 
   const validate = async () => {
     if (!name.trim() || !username.trim() || !email.trim() || !password.trim()) {
-      Alert.alert(t("signup_missing_info_title"), t("signup_missing_info_body"));
+      showAlert(t("signup_missing_info_title"), t("signup_missing_info_body"));
       return false;
     }
     if (!age) {
-      Alert.alert(t("signup_missing_age_title"), t("signup_missing_age_body"));
-      return false;
-    }
-    if (!gender) {
-      Alert.alert(t("signup_missing_gender_title"), t("signup_missing_gender_body"));
-      return false;
-    }
-    if (!city.trim()) {
-      Alert.alert(t("signup_missing_city_title"), t("signup_missing_city_body"));
+      showAlert(t("signup_missing_age_title"), t("signup_missing_age_body"));
       return false;
     }
 
     const nameParts = name.trim().split(/\s+/);
     if (nameParts.length < 2) {
-      Alert.alert(t("signup_invalid_name_title"), t("signup_invalid_name_body"));
+      showAlert(t("signup_invalid_name_title"), t("signup_invalid_name_body"));
       return false;
     }
 
     if (username.length < 3) {
-      Alert.alert(t("signup_username_short_title"), t("signup_username_short_body"));
+      showAlert(t("signup_username_short_title"), t("signup_username_short_body"));
       return false;
     }
 
     if (!emailRegex.test(email.trim())) {
-      Alert.alert(t("signup_invalid_email_title"), t("signup_invalid_email_body"));
+      showAlert(t("signup_invalid_email_title"), t("signup_invalid_email_body"));
       return false;
     }
 
     if (password.length < 6) {
-      Alert.alert(t("signup_weak_password_title"), t("signup_weak_password_body"));
+      showAlert(t("signup_weak_password_title"), t("signup_weak_password_body"));
       return false;
     }
 
@@ -245,11 +264,11 @@ export default function SignUpScreen({ navigation }) {
     ]);
 
     if (!userOk) {
-      Alert.alert(t("signup_username_unavailable_title"), t("signup_username_unavailable_body"));
+      showAlert(t("signup_username_unavailable_title"), t("signup_username_unavailable_body"));
       return false;
     }
     if (!emailOk) {
-      Alert.alert(t("signup_email_unavailable_title"), t("signup_email_unavailable_body"));
+      showAlert(t("signup_email_unavailable_title"), t("signup_email_unavailable_body"));
       return false;
     }
 
@@ -260,7 +279,7 @@ export default function SignUpScreen({ navigation }) {
     if (submitting) return;
 
     if (emailChecking || usernameChecking) {
-      Alert.alert(t("signup_wait_checks_title"), t("signup_wait_checks_body"));
+      showAlert(t("signup_wait_checks_title"), t("signup_wait_checks_body"));
       return;
     }
 
@@ -284,8 +303,8 @@ export default function SignUpScreen({ navigation }) {
         username: username.trim(),
         name: name.trim(),
         age: age ? Number(age) : null,
-        gender,
-        city: city.trim(),
+        gender: null,
+        city: detectedCityRef.current || null,
         visible_to_all: true,
         preferences: {
           music: "",
@@ -306,7 +325,7 @@ export default function SignUpScreen({ navigation }) {
       // Auth state change in AppNavigator handles navigation to MainNavigator automatically.
     } catch (e) {
       console.error("SIGNUP/PROFILE ERROR:", e);
-      Alert.alert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
+      showAlert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
     } finally {
       setSubmitting(false);
     }
@@ -318,7 +337,7 @@ export default function SignUpScreen({ navigation }) {
       <Feather
         name={valid ? "check" : "x"}
         size={18}
-        color={accent}
+        color={valid ? accent : '#FF3B30'}
         style={styles.validationIcon}
       />
     );
@@ -336,7 +355,9 @@ export default function SignUpScreen({ navigation }) {
         ref={scrollRef}
         contentContainerStyle={[styles.scrollContent, { backgroundColor: bg }]}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={styles.page}>
           <Logo />
 
@@ -414,35 +435,6 @@ export default function SignUpScreen({ navigation }) {
             <Feather name="chevron-down" size={18} color={accent} />
           </TouchableOpacity>
 
-          {/* Gender */}
-          <TouchableOpacity
-            style={[styles.inputContainer, borderStyle]}
-            onPress={() => setShowGenderPicker(true)}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.inputField, { color: accent, opacity: gender ? 1 : 0.8 }]}>
-              {gender || t("signup_gender_placeholder")}
-            </Text>
-            <Feather name="chevron-down" size={18} color={accent} />
-          </TouchableOpacity>
-
-          {/* City */}
-          <View style={[styles.inputContainer, borderStyle]}>
-            <TextInput
-              style={[styles.inputField, { color: accent }]}
-              placeholder={t("signup_city_placeholder")}
-              placeholderTextColor={placeholder}
-              value={city}
-              onChangeText={setCity}
-              onFocus={() => {
-                setTimeout(() => {
-                  scrollRef.current?.scrollToEnd({ animated: true });
-                }, 100);
-              }}
-              returnKeyType="done"
-            />
-          </View>
-
           {/* Button */}
           <TouchableOpacity
             style={[
@@ -475,7 +467,30 @@ export default function SignUpScreen({ navigation }) {
             </Text>
           </Text>
         </View>
+        </TouchableWithoutFeedback>
       </ScrollView>
+
+      {/* Alba-native alert modal */}
+      <Modal
+        visible={!!alertConfig}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAlertConfig(null)}
+      >
+        <View style={styles.alertOverlay}>
+          <View style={[styles.alertCard, { backgroundColor: isDark ? "#2a2a2a" : "#FFFFFF" }]}>
+            <Text style={[styles.alertTitle, { color: isDark ? "#FFFFFF" : "#111" }]}>
+              {alertConfig?.title}
+            </Text>
+            <Text style={[styles.alertBody, { color: isDark ? "#aaa" : "#555" }]}>
+              {alertConfig?.message}
+            </Text>
+            <TouchableOpacity style={styles.alertBtn} onPress={() => setAlertConfig(null)}>
+              <Text style={styles.alertBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Age picker modal */}
       <Modal
@@ -488,11 +503,7 @@ export default function SignUpScreen({ navigation }) {
           <View
             style={[
               styles.pickerCard,
-              {
-                backgroundColor: isDark ? theme.gray : "#fff",
-                borderColor: isDark ? "#FFFFFF" : "#00A9FF",
-                borderWidth: 1,
-              },
+              { backgroundColor: isDark ? theme.gray : "#fff" },
             ]}
           >
             <Text style={[styles.pickerTitle, { color: isDark ? "#FFFFFF" : "#111" }]}>
@@ -503,7 +514,7 @@ export default function SignUpScreen({ navigation }) {
               onValueChange={(val) => setAge(val)}
               dropdownIconColor={isDark ? "#FFFFFF" : "#00A9FF"}
               style={[styles.picker, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}
-              itemStyle={{ color: isDark ? "#FFFFFF" : "#00A9FF" }}
+              itemStyle={{ color: isDark ? "#FFFFFF" : "#00A9FF", fontFamily: "Poppins" }}
             >
               <Picker.Item label={t("signup_age_placeholder")} value="" />
               {ageOptions.map((a) => (
@@ -513,50 +524,6 @@ export default function SignUpScreen({ navigation }) {
             <TouchableOpacity
               style={styles.pickerCloseBtn}
               onPress={() => setShowAgePicker(false)}
-            >
-              <Text style={[styles.pickerCloseText, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}>
-                {t("signup_picker_done")}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Gender picker modal */}
-      <Modal
-        visible={showGenderPicker}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowGenderPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.pickerCard,
-              {
-                backgroundColor: isDark ? theme.gray : "#fff",
-                borderColor: isDark ? "#FFFFFF" : "#00A9FF",
-                borderWidth: 1,
-              },
-            ]}
-          >
-            <Text style={[styles.pickerTitle, { color: isDark ? "#FFFFFF" : "#111" }]}>
-              {t("signup_gender_picker_title")}
-            </Text>
-            <Picker
-              selectedValue={gender}
-              onValueChange={(val) => setGender(val)}
-              dropdownIconColor={isDark ? "#FFFFFF" : "#00A9FF"}
-              style={[styles.picker, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}
-              itemStyle={{ color: isDark ? "#FFFFFF" : "#00A9FF" }}
-            >
-              <Picker.Item label={t("signup_gender_placeholder")} value="" />
-              <Picker.Item label="M" value="M" />
-              <Picker.Item label="F" value="F" />
-            </Picker>
-            <TouchableOpacity
-              style={styles.pickerCloseBtn}
-              onPress={() => setShowGenderPicker(false)}
             >
               <Text style={[styles.pickerCloseText, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}>
                 {t("signup_picker_done")}
@@ -586,13 +553,11 @@ const styles = StyleSheet.create({
     marginBottom: 30,
     resizeMode: "contain",
   },
-
-  // ✅ more vertical spacing BETWEEN components (not internal)
   inputContainer: {
     width: "100%",
-    paddingHorizontal: 0, // light mode override adds 14 via borderStyle
+    paddingHorizontal: 0,
     paddingVertical: 10,
-    marginBottom: 22, // ⬅️ more spacing between rows
+    marginBottom: 22,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -606,18 +571,16 @@ const styles = StyleSheet.create({
   validationIcon: {
     marginLeft: 8,
   },
-
   nextBtn: {
     borderRadius: 8,
     paddingVertical: 12,
     paddingHorizontal: 40,
-    marginTop: 32, // ⬅️ more spacing above the button
+    marginTop: 32,
   },
   btnText: {
     fontFamily: "Poppins",
     fontSize: 16,
   },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -651,5 +614,45 @@ const styles = StyleSheet.create({
   linkText: {
     fontFamily: "PoppinsBold",
     fontWeight: "700",
+  },
+  alertOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  alertCard: {
+    width: "100%",
+    borderRadius: 16,
+    padding: 24,
+    elevation: 6,
+    alignItems: "center",
+  },
+  alertTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 17,
+    fontWeight: "700",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  alertBody: {
+    fontFamily: "Poppins",
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  alertBtn: {
+    backgroundColor: "#00A9FF",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 40,
+  },
+  alertBtnText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#fff",
   },
 });

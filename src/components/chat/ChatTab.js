@@ -17,6 +17,7 @@ export default function ChatTab({
   displayTime,
   unreadCount = 0,
   onPress,
+  onLongPress,
 }) {
   const { theme, isDark } = useAlbaTheme();
 
@@ -27,6 +28,8 @@ export default function ChatTab({
   return (
     <TouchableOpacity
       onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={400}
       activeOpacity={0.8}
       style={[styles.row, { backgroundColor: theme.gray }]}
     >

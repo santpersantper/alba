@@ -49,8 +49,16 @@ import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base-64";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import {
+  PlatformPay,
+  usePlatformPay,
+  useStripe,
+} from "@stripe/stripe-react-native";
+import Constants from "expo-constants";
 
 const BLUE = "#0077CC";
+const API_URL =
+  Constants.expoConfig?.extra?.expoPublic?.API_URL ?? "http://localhost:3000";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -104,6 +112,8 @@ export default function DiffusionComposeBox({
   navigation,
 }) {
   const { isDark } = useAlbaTheme();
+  const { isPlatformPaySupported, confirmPlatformPayPayment } = usePlatformPay();
+  const { initPaymentSheet, presentPaymentSheet } = useStripe();
 
   // Sender state
   const [senderMode, setSenderMode] = useState("idle"); // "idle"|"compose"|"confirm"|"stats"
@@ -307,7 +317,48 @@ export default function DiffusionComposeBox({
       const senderName = profile?.name || myUsername || "Someone";
       const senderAvatar = profile?.avatar_url || null;
 
-      // 3. Insert diffusion_message (payment bypassed — stripe_payment_intent_id = "bypassed-for-testing")
+      // 3. Process payment via Stripe (€1.00 per message)
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token || "";
+      const payRes = await fetch(`${API_URL}/create-payment-intent/diffusion-message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ userId: currentUserId, radiusKm: prefs.diffusionRadiusKm }),
+      });
+      const payJson = await payRes.json();
+      if (!payRes.ok || !payJson.clientSecret)
+        throw new Error(payJson.error || "Payment setup failed. Please try again.");
+
+      const clientSecret = payJson.clientSecret;
+      const paymentIntentId = clientSecret.split("_secret_")[0];
+
+      const platformPayAvailable = await isPlatformPaySupported().catch(() => false);
+      if (platformPayAvailable) {
+        const { error: payError } = await confirmPlatformPayPayment(clientSecret, {
+          applePay: {
+            cartItems: [{ label: "Diffusion Message", amount: "1.00", paymentType: "Immediate" }],
+            merchantCountryCode: "IT",
+            currencyCode: "EUR",
+          },
+          googlePay: { merchantCountryCode: "IT", currencyCode: "EUR", testEnv: true },
+        });
+        if (payError?.code === "Canceled") { setSenderMode("compose"); return; }
+        if (payError) throw new Error("Payment failed. Please try again.");
+      } else {
+        const { error: initError } = await initPaymentSheet({
+          paymentIntentClientSecret: clientSecret,
+          merchantDisplayName: "Alba",
+        });
+        if (initError) throw new Error("Payment setup failed.");
+        const { error: presentError } = await presentPaymentSheet();
+        if (presentError?.code === "Canceled") { setSenderMode("compose"); return; }
+        if (presentError) throw new Error("Payment failed. Please try again.");
+      }
+
+      // 4. Insert diffusion_message with real payment intent ID
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
       const { data: msgData, error: msgErr } = await supabase
         .from("diffusion_messages")
@@ -323,14 +374,14 @@ export default function DiffusionComposeBox({
           sender_lng: lng,
           sent_at: new Date().toISOString(),
           expires_at: expiresAt,
-          stripe_payment_intent_id: "bypassed-for-testing",
+          stripe_payment_intent_id: paymentIntentId,
         })
         .select()
         .single();
 
       if (msgErr) throw msgErr;
 
-      // 4. Upload media after record is created (so we have the ID for the storage key)
+      // 5. Upload media after record is created (so we have the ID for the storage key)
       if (media) {
         const uploaded = await uploadDiffusionMedia({ uri: media.uri, messageId: msgData.id });
         await supabase
@@ -341,7 +392,7 @@ export default function DiffusionComposeBox({
         msgData.media_type = uploaded.type;
       }
 
-      // 5. Find nearby recipients via existing nearby_profiles RPC
+      // 6. Find nearby recipients via existing nearby_profiles RPC
       const distMeters = Math.round(prefs.diffusionRadiusKm * 1000);
       const { data: nearby } = await supabase.rpc("nearby_profiles", {
         dist: distMeters,
@@ -350,7 +401,7 @@ export default function DiffusionComposeBox({
         search_term: "",
       });
 
-      // 6. Batch-insert receipts (excluding sender)
+      // 7. Batch-insert receipts (excluding sender)
       if (nearby && nearby.length > 0) {
         const receiptRows = nearby
           .filter((p) => p.id !== currentUserId)

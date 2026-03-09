@@ -1,6 +1,6 @@
 // components/community-settings/EventSettings.js
 import React, { useEffect, useState } from "react";
-import { View, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { View, TextInput, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from "react-native";
 import Slider from "@react-native-community/slider";
 import { Feather } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -8,6 +8,12 @@ import ThemedView from "../../theme/ThemedView";
 import ThemedText from "../../theme/ThemedText";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 import { useAlbaLanguage } from "../../theme/LanguageContext";
+import Constants from "expo-constants";
+
+const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
+  "http://localhost:3000";
 
 // Same defaults shown in CommunityScreen's LabelsCard
 const BASE_LABELS = [
@@ -26,6 +32,46 @@ export default function CommunityEventSettings() {
   const [input, setInput] = useState("");
   const [tags, setTags] = useState([...BASE_LABELS]);
   const [maxDistance, setMaxDistance] = useState(1500);
+
+  // Payout / Stripe Connect state
+  const [groupId, setGroupId] = useState(null);
+  const [payoutStatus, setPayoutStatus] = useState(null); // null | "not_started" | "pending" | "complete"
+  const [payoutLoading, setPayoutLoading] = useState(false);
+
+  const fetchPayoutStatus = async (gId, token) => {
+    try {
+      const res = await fetch(`${API_URL}/connect/status?groupId=${gId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (res.ok) setPayoutStatus(json.status);
+    } catch {
+      // silently ignore — non-critical
+    }
+  };
+
+  const handleSetupPayouts = async () => {
+    if (!groupId || payoutLoading) return;
+    try {
+      setPayoutLoading(true);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token || "";
+      const res = await fetch(`${API_URL}/connect/onboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ userId, groupId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to start onboarding");
+      await Linking.openURL(json.url);
+      // Re-check status after returning from browser
+      setTimeout(() => fetchPayoutStatus(groupId, token), 3000);
+    } catch (e) {
+      console.warn("Payout onboarding error:", e.message);
+    } finally {
+      setPayoutLoading(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -67,6 +113,22 @@ export default function CommunityEventSettings() {
             : null;
 
         if (typeof dist === "number") setMaxDistance(dist);
+
+        // Load payout status — find a group via a post authored by this user
+        const { data: postData } = await supabase
+          .from("posts")
+          .select("group_id")
+          .eq("author_id", u.id)
+          .not("group_id", "is", null)
+          .limit(1)
+          .maybeSingle();
+
+        if (mounted && postData?.group_id) {
+          setGroupId(postData.group_id);
+          const { data: sessionData } = await supabase.auth.getSession();
+          const token = sessionData?.session?.access_token || "";
+          await fetchPayoutStatus(postData.group_id, token);
+        }
       } catch (e) {
         console.warn("EventSettings load error", e);
       }
@@ -228,6 +290,77 @@ export default function CommunityEventSettings() {
         maximumTrackTintColor={isDark ? "#555555" : "#E0E0E0"}
         thumbTintColor="#FFFFFF"
       />
+
+      <TouchableOpacity
+        style={styles.resetBtn}
+        onPress={() => {
+          setTags([...BASE_LABELS]);
+          setMaxDistance(1500);
+          savePatch({ event_tags: BASE_LABELS, max_event_distance: 1500, event_distance_m: 1500 });
+        }}
+        activeOpacity={0.7}
+      >
+        <Feather name="refresh-ccw" size={13} color="#888" style={{ marginRight: 5 }} />
+        <ThemedText style={styles.resetBtnText}>Reset event preference settings</ThemedText>
+      </TouchableOpacity>
+
+      {/* ── Ticket payout setup ── */}
+      <View style={styles.payoutSection}>
+        <ThemedText style={[styles.payoutTitle, { color: theme.text }]}>
+          Ticket payouts
+        </ThemedText>
+        <ThemedText style={[styles.payoutHelper, { color: theme.secondaryText || "#888" }]}>
+          {!groupId
+            ? "If you organise events and sell tickets on Alba, you can connect a bank account here to receive ticket revenue directly. Create an event first to get started."
+            : payoutStatus === "complete"
+            ? "Your bank account is connected. Ticket sales will be transferred to you automatically, minus a small platform fee."
+            : payoutStatus === "pending"
+            ? "Onboarding started — please complete verification on Stripe to receive payments."
+            : "Connect a bank account to receive ticket revenue directly. Alba collects a small platform fee per transaction; the rest goes straight to you."}
+        </ThemedText>
+        {groupId && (
+          <View style={styles.payoutRow}>
+            <View
+              style={[
+                styles.payoutBadge,
+                {
+                  backgroundColor:
+                    payoutStatus === "complete"
+                      ? "#D1FAE5"
+                      : payoutStatus === "pending"
+                      ? "#FEF3C7"
+                      : isDark ? "#2A2A2A" : "#F3F4F6",
+                },
+              ]}
+            >
+              <Feather
+                name={payoutStatus === "complete" ? "check-circle" : payoutStatus === "pending" ? "clock" : "alert-circle"}
+                size={13}
+                color={payoutStatus === "complete" ? "#059669" : payoutStatus === "pending" ? "#D97706" : "#9CA3AF"}
+                style={{ marginRight: 4 }}
+              />
+              <ThemedText style={{ fontSize: 12, fontFamily: "Poppins", color: payoutStatus === "complete" ? "#059669" : payoutStatus === "pending" ? "#D97706" : "#9CA3AF" }}>
+                {payoutStatus === "complete" ? "Connected" : payoutStatus === "pending" ? "Pending verification" : "Not set up"}
+              </ThemedText>
+            </View>
+            {payoutStatus !== "complete" && (
+              <TouchableOpacity
+                style={styles.payoutBtn}
+                onPress={handleSetupPayouts}
+                disabled={payoutLoading}
+                activeOpacity={0.8}
+              >
+                {payoutLoading
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <ThemedText style={styles.payoutBtnText}>
+                      {payoutStatus === "pending" ? "Continue setup" : "Set up payouts"}
+                    </ThemedText>
+                }
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+      </View>
     </ThemedView>
   );
 }
@@ -267,4 +400,13 @@ const styles = StyleSheet.create({
   },
   distanceText: { fontFamily: "Poppins", fontSize: 14 },
   metersText: { fontFamily: "Poppins", fontSize: 14 },
+  resetBtn: { flexDirection: "row", alignItems: "center", marginTop: 14, alignSelf: "flex-start" },
+  resetBtnText: { fontFamily: "Poppins", fontSize: 13, color: "#888" },
+  payoutSection: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  payoutTitle: { fontFamily: "Poppins", fontWeight: "700", fontSize: 14, marginBottom: 4 },
+  payoutHelper: { fontFamily: "Poppins", fontSize: 12, lineHeight: 17, marginBottom: 10 },
+  payoutRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  payoutBadge: { flexDirection: "row", alignItems: "center", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  payoutBtn: { backgroundColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, minWidth: 44, alignItems: "center" },
+  payoutBtnText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 13 },
 });

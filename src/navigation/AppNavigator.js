@@ -7,6 +7,7 @@ import {
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { View, ActivityIndicator } from "react-native";
+import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
 import { LanguageProvider } from "../theme/LanguageContext";
 import AuthNavigator from "./AuthNavigator";
@@ -14,6 +15,7 @@ import MainTabs from "./MainTabs";
 import { ThemeProvider, useAlbaTheme } from "../theme/ThemeContext";
 import { StripeProvider } from "@stripe/stripe-react-native";
 import Constants from "expo-constants";
+import ProfileSetupModal from "../components/ProfileSetupModal";
 
 // detail screens
 import CommunityScreen from "../screens/CommunityScreen";
@@ -34,6 +36,7 @@ import EventSettingsScreen from "../screens/EventSettingsScreen";
 import PastEventsScreen from "../screens/PastEventsScreen";
 import MyTicketsScreen from "../screens/MyTicketsScreen";
 import AdPublisherScreen from "../screens/AdPublisherScreen";
+import SavedVideosScreen from "../screens/SavedVideosScreen";
 
 
 const Stack = createNativeStackNavigator();
@@ -46,7 +49,7 @@ function MainNavigator() {
       <Stack.Screen name="GroupChat" component={GroupChatScreen} />
       <Stack.Screen name="ChatList" component={ChatListScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
-      <Stack.Screen name="SingleChat" component={SingleChatScreen} />      
+      <Stack.Screen name="SingleChat" component={SingleChatScreen} />
       <Stack.Screen name="CreatePost" component={CreatePostScreen} />
       <Stack.Screen
         name="CommunitySettings"
@@ -68,19 +71,19 @@ function MainNavigator() {
       <Stack.Screen name="GroupInfo" component={GroupInfoScreen} />
       <Stack.Screen name="SinglePost" component={SinglePostScreen} />
       <Stack.Screen name="EventSettings" component={EventSettingsScreen} />
-      <Stack.Screen name="PastEvents" component={PastEventsScreen} />      
+      <Stack.Screen name="PastEvents" component={PastEventsScreen} />
       <Stack.Screen
         name="MyTickets"
         component={MyTicketsScreen}
         options={{ headerShown: false, animation: "slide_from_right" }}
       />
       <Stack.Screen name="AdPublisher" component={AdPublisherScreen} />
-
+      <Stack.Screen name="SavedVideos" component={SavedVideosScreen} />
     </Stack.Navigator>
   );
 }
 
-function ThemedNavigation({ signedIn }) {
+function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onProfileComplete }) {
   const { isDark } = useAlbaTheme();
 
   const navTheme = isDark
@@ -107,18 +110,36 @@ function ThemedNavigation({ signedIn }) {
   const navKey = signedIn ? "nav-signed-in" : "nav-signed-out";
 
   return (
-    <NavigationContainer theme={navTheme} key={navKey}>
-      {signedIn ? <MainNavigator /> : <AuthNavigator />}
-    </NavigationContainer>
+    <>
+      <NavigationContainer theme={navTheme} key={navKey}>
+        {signedIn ? <MainNavigator /> : <AuthNavigator />}
+      </NavigationContainer>
+
+      {/* Profile completion screen for new Google sign-in users */}
+      <ProfileSetupModal
+        visible={!!(signedIn && needsProfileSetup)}
+        user={pendingGoogleUser}
+        onComplete={onProfileComplete}
+      />
+    </>
   );
 }
 
 export default function AppNavigator() {
+  const [fontsLoaded] = useFonts({
+    Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
+    PoppinsBold: require("../../assets/fonts/Poppins-Bold.ttf"),
+  });
+
   const [ready, setReady] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
+  const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
 
   const stripeKey =
-    Constants.expoConfig?.extra?.expoPublic?.STRIPE_PUBLISHABLE_KEY ?? "";
+    process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ??
+    Constants?.expoConfig?.extra?.expoPublic?.STRIPE_PUBLISHABLE_KEY ??
+    "";
 
   useEffect(() => {
     let sub;
@@ -131,7 +152,48 @@ export default function AppNavigator() {
       setReady(true);
 
       const { data: listener } = supabase.auth.onAuthStateChange(
-        (_event, session) => {
+        async (_event, session) => {
+          if (session?.user) {
+            // Only show profile setup for Google OAuth users who have no profile yet
+            const isGoogleUser =
+              session.user.app_metadata?.provider === "google" ||
+              (session.user.app_metadata?.providers ?? []).includes("google");
+
+            if (isGoogleUser) {
+              try {
+                const { data: profile } = await supabase
+                  .from("profiles")
+                  .select("id")
+                  .eq("id", session.user.id)
+                  .maybeSingle();
+
+                if (!profile) {
+                  setPendingGoogleUser({
+                    id: session.user.id,
+                    name:
+                      session.user.user_metadata?.full_name ||
+                      session.user.user_metadata?.name ||
+                      "",
+                    email: session.user.email || "",
+                  });
+                  setNeedsProfileSetup(true);
+                } else {
+                  setNeedsProfileSetup(false);
+                  setPendingGoogleUser(null);
+                }
+              } catch {
+                // On error, let user in without profile setup
+                setNeedsProfileSetup(false);
+              }
+            } else {
+              setNeedsProfileSetup(false);
+              setPendingGoogleUser(null);
+            }
+          } else {
+            setNeedsProfileSetup(false);
+            setPendingGoogleUser(null);
+          }
+
           setSignedIn(!!session);
         }
       );
@@ -142,6 +204,11 @@ export default function AppNavigator() {
     return () => sub?.unsubscribe?.();
   }, []);
 
+  const handleProfileComplete = () => {
+    setNeedsProfileSetup(false);
+    setPendingGoogleUser(null);
+  };
+
   return (
     <StripeProvider
       publishableKey={stripeKey}
@@ -150,12 +217,17 @@ export default function AppNavigator() {
     >
       <LanguageProvider>
         <ThemeProvider>
-          {!ready ? (
+          {!ready || !fontsLoaded ? (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <ActivityIndicator />
             </View>
           ) : (
-            <ThemedNavigation signedIn={signedIn} />
+            <ThemedNavigation
+              signedIn={signedIn}
+              needsProfileSetup={needsProfileSetup}
+              pendingGoogleUser={pendingGoogleUser}
+              onProfileComplete={handleProfileComplete}
+            />
           )}
         </ThemeProvider>
       </LanguageProvider>

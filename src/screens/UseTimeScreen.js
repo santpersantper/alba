@@ -18,7 +18,7 @@ import { useNavigation } from "@react-navigation/native";
 import Slider from "@react-native-community/slider";
 import { useUserPreferences } from "../hooks/useUserPreferences";
 import { useScreenTime } from "../hooks/useScreenTime";
-import { evaluateStreak, formatMinutes } from "../utils/streakUtils";
+import { evaluateStreak, evaluateWeekRollover, formatMinutes } from "../utils/streakUtils";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,11 +57,15 @@ export default function UseTimeScreen() {
   const [editReductionPct, setEditReductionPct] = useState(10);
   const [editDailyMax, setEditDailyMax] = useState(180);
 
-  // Evaluate streak once per day when data is ready
+  // Evaluate streak + weekly rollover once per day when data is ready
   useEffect(() => {
     if (!usageData || !loaded) return;
-    const updates = evaluateStreak(usageData, prefs);
-    if (updates) updatePrefs(updates);
+    // On Monday: save last week's total and reset streak circles before evaluating today
+    const rollover = evaluateWeekRollover(usageData?.thisWeek?.totalMinutes ?? 0, prefs);
+    const effectivePrefs = rollover ? { ...prefs, ...rollover } : prefs;
+    const streakUpdates = evaluateStreak(usageData, effectivePrefs);
+    const combined = { ...(rollover ?? {}), ...(streakUpdates ?? {}) };
+    if (Object.keys(combined).length > 0) updatePrefs(combined);
   }, [usageData, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Swipe-left to go back
@@ -123,42 +127,6 @@ export default function UseTimeScreen() {
     updatePrefs({ screenTimeGoalDailyMaxMinutes: editDailyMax, ...(streakUpdates ?? {}) });
     setGoalModalType(null);
   };
-
-  // ── Android: not supported ─────────────────────────────────────────────────
-  if (Platform.OS === "android") {
-    return (
-      <LinearGradient colors={["#00D36F", "#00B249"]} style={{ flex: 1 }}>
-        <SafeAreaView
-          style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 28 }}
-        >
-          <Feather name="clock" size={48} color="#fff" style={{ marginBottom: 16 }} />
-          <Text
-            style={{
-              fontFamily: "Poppins",
-              fontSize: 22,
-              fontWeight: "700",
-              color: "#fff",
-              textAlign: "center",
-              marginBottom: 10,
-            }}
-          >
-            Screen Time Monitoring
-          </Text>
-          <Text
-            style={{
-              fontFamily: "Poppins",
-              fontSize: 15,
-              color: "rgba(255,255,255,0.85)",
-              textAlign: "center",
-            }}
-          >
-            Screen time monitoring is currently available on iOS only.{"\n"}Android support coming
-            soon.
-          </Text>
-        </SafeAreaView>
-      </LinearGradient>
-    );
-  }
 
   // ── Skeleton loading ───────────────────────────────────────────────────────
   const renderSkeleton = () => (

@@ -48,6 +48,7 @@ export default {
       entitlements: {
         "com.apple.developer.family-controls": true,
         "com.apple.security.application-groups": ["group.com.alba.app.screentime"],
+        "com.apple.developer.in-app-payments": ["merchant.com.alba.app"],
       },
     },
     android: {
@@ -90,6 +91,8 @@ export default {
           enableGooglePay: true,
         },
       ],
+      "./plugins/withScreenTime",
+      "./plugins/withAndroidNativeModules",
     ],
   },
 };

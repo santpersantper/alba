@@ -170,6 +170,18 @@ export default function AdSettings({ navigation }) {
         </View>
       )}
 
+      <TouchableOpacity
+        style={styles.resetBtn}
+        onPress={() => {
+          if (!userId) return;
+          setTags([]);
+          supabase.from("profiles").update({ ad_tags: [] }).eq("id", userId).then(() => {}).catch(() => {});
+        }}
+        activeOpacity={0.7}
+      >
+        <Feather name="refresh-ccw" size={13} color="#888" style={{ marginRight: 5 }} />
+        <ThemedText style={styles.resetBtnText}>Reset ad preference settings</ThemedText>
+      </TouchableOpacity>
     </ThemedView>
   );
 }
@@ -195,4 +207,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#3D8BFF",
   },
   tagText: { color: "#FFFFFF", fontSize: 13, fontFamily: "Poppins" },
+  resetBtn: { flexDirection: "row", alignItems: "center", marginTop: 14, alignSelf: "flex-start" },
+  resetBtnText: { fontFamily: "Poppins", fontSize: 13, color: "#888" },
 });

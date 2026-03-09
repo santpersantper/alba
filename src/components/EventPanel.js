@@ -43,8 +43,8 @@ export default function EventPanel({ onState }) {
 
   const idRef = useRef(3);
   const [tickets, setTickets] = useState([
-    { id: 1, name: "", free: true, cost: "" },
-    { id: 2, name: "", free: false, cost: "" },
+    { id: 1, name: "", free: true, cost: "", notes: "" },
+    { id: 2, name: "", free: false, cost: "", notes: "" },
   ]);
 
   const update = (id, patch) =>
@@ -53,7 +53,7 @@ export default function EventPanel({ onState }) {
   const addRow = () =>
     setTickets((t) => [
       ...t,
-      { id: idRef.current++, name: "", free: false, cost: "" },
+      { id: idRef.current++, name: "", free: false, cost: "", notes: "" },
     ]);
 
   const deleteRow = (id) => setTickets((t) => t.filter((x) => x.id !== id));
@@ -120,100 +120,94 @@ export default function EventPanel({ onState }) {
                 : t("event_ticket_name");
 
             return (
-              <View key={ticket.id} style={styles.ticketRow}>
-                <View
-                  style={[
-                    styles.ticketNameWrap,
-                    {
-                      backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                      borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
-                    },
-                  ]}
-                >
-                  <TextInput
-                    value={ticket.name}
-                    onChangeText={(v) => update(ticket.id, { name: v })}
-                    placeholder={ticketPlaceholder}
-                    placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
+              <View key={ticket.id} style={styles.ticketBlock}>
+                {/* Row 1: name + free + delete */}
+                <View style={styles.ticketRow}>
+                  <View
                     style={[
-                      styles.ticketName,
-                      { color: theme.text },
+                      styles.ticketNameWrap,
+                      {
+                        backgroundColor: isDark ? "#2B2B2B" : "#fff",
+                        borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
+                      },
                     ]}
+                  >
+                    <TextInput
+                      value={ticket.name}
+                      onChangeText={(v) => update(ticket.id, { name: v })}
+                      placeholder={ticketPlaceholder}
+                      placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
+                      style={[styles.ticketName, { color: theme.text }]}
+                    />
+                  </View>
+
+                  <CheckboxRow
+                    label={t("event_free_label")}
+                    checked={ticket.free}
+                    onToggle={() => {
+                      const nextFree = !ticket.free;
+                      update(ticket.id, { free: nextFree, cost: nextFree ? "" : ticket.cost });
+                    }}
+                    style={{ marginLeft: 12, marginRight: 4 }}
+                    theme={theme}
+                    isDark={isDark}
                   />
+
+                  {idx >= 1 && (
+                    <TouchableOpacity
+                      onPress={() => deleteRow(ticket.id)}
+                      style={styles.deleteBtn}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons name="close" size={18} color={isDark ? "#D1D5DB" : "#777"} />
+                    </TouchableOpacity>
+                  )}
                 </View>
 
-                <CheckboxRow
-                  label={t("event_free_label")}
-                  checked={ticket.free}
-                  onToggle={() => {
-                    const nextFree = !ticket.free;
-                    update(ticket.id, {
-                      free: nextFree,
-                      cost: nextFree ? "" : ticket.cost,
-                    });
-                  }}
-                  style={{ marginLeft: 12, marginRight: 8 }}
-                  theme={theme}
-                  isDark={isDark}
-                />
-
-                <Text
-                  style={[
-                    styles.costLabel,
-                    { color: theme.text },
-                  ]}
-                >
-                  {t("event_cost_label")}
-                </Text>
-
-                <View
-                  style={[
-                    styles.costBox,
-                    {
-                      borderColor: costDisabled
-                        ? isDark
-                          ? "#555C69"
-                          : "#E0E0E0"
-                        : isDark
-                        ? "#FFFFFF"
-                        : "#CFCFCF",
-                    },
-                  ]}
-                  pointerEvents={costDisabled ? "none" : "auto"}
-                >
+                {/* Row 2: notes (flex) + cost */}
+                <View style={styles.notesRow}>
                   <TextInput
-                    editable={!costDisabled}
-                    value={ticket.cost}
-                    onChangeText={(v) => update(ticket.id, { cost: v })}
-                    keyboardType="numeric"
-                    placeholder={costDisabled ? "" : "0"}
-                    placeholderTextColor={isDark ? "#8C96A5" : "#BFBFBF"}
+                    value={ticket.notes}
+                    onChangeText={(v) => update(ticket.id, { notes: v })}
+                    placeholder="Notes (optional)"
+                    placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
                     style={[
-                      styles.costInput,
+                      styles.notesInput,
                       {
-                        color: costDisabled
-                          ? isDark
-                            ? "#6D7584"
-                            : "#BFBFBF"
-                          : theme.text,
+                        color: theme.text,
+                        borderColor: isDark ? "#555" : "#D9D9D9",
+                        backgroundColor: isDark ? "#2B2B2B" : "#fff",
                       },
                     ]}
                   />
-                </View>
-
-                {idx >= 1 && (
-                  <TouchableOpacity
-                    onPress={() => deleteRow(ticket.id)}
-                    style={styles.deleteBtn}
-                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  <Text style={[styles.costLabel, { color: theme.text }]}>
+                    {t("event_cost_label")}
+                  </Text>
+                  <View
+                    style={[
+                      styles.costBox,
+                      {
+                        borderColor: costDisabled
+                          ? isDark ? "#555C69" : "#E0E0E0"
+                          : isDark ? "#FFFFFF" : "#CFCFCF",
+                      },
+                    ]}
+                    pointerEvents={costDisabled ? "none" : "auto"}
                   >
-                    <Ionicons
-                      name="close"
-                      size={18}
-                      color={isDark ? "#D1D5DB" : "#777"}
+                    <TextInput
+                      editable={!costDisabled}
+                      value={ticket.cost}
+                      onChangeText={(v) => update(ticket.id, { cost: v })}
+                      keyboardType="numeric"
+                      placeholder={costDisabled ? "" : "0"}
+                      placeholderTextColor={isDark ? "#8C96A5" : "#BFBFBF"}
+                      style={[
+                        styles.costInput,
+                        { color: costDisabled ? (isDark ? "#6D7584" : "#BFBFBF") : theme.text },
+                      ]}
                     />
-                  </TouchableOpacity>
-                )}
+                  </View>
+                </View>
               </View>
             );
           })}
@@ -308,14 +302,28 @@ const styles = StyleSheet.create({
   checkboxBoxChecked: { backgroundColor: "#3D8BFF", borderColor: "#3D8BFF" },
   checkboxLabel: { fontSize: 14, fontFamily: "Poppins" },
 
+  ticketBlock: { marginTop: 12 },
   ticketRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
+  },
+  notesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  notesInput: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 13,
+    fontFamily: "Poppins",
   },
   ticketNameWrap: {
     flex: 1,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
     paddingHorizontal: 12,
     height: 40,
@@ -355,7 +363,7 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins",
   },
   requiredInfoBox: {
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,

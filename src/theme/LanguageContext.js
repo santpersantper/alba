@@ -229,7 +229,78 @@ const STRINGS = {
     invite_default_message: "let's go to this event",
 
     my_tickets_title: 'My tickets',
-    no_qr_found: 'No QR tickets found for this event yet.'
+    no_qr_found: 'No QR tickets found for this event yet.',
+
+    /* ---------- Follow / ProfileScreen ---------- */
+    profile_follow: "Follow",
+    profile_following: "Following",
+    profile_blocked_label: "Blocked",
+    profile_message_button: "Message",
+    profile_report_label: "Report",
+    profile_block_label: "Block",
+    profile_unblock_label: "Unblock",
+    profile_cancel_label: "Cancel",
+    profile_report_user_title: "Report user",
+    profile_report_placeholder: "Describe the issue...",
+    profile_thanks_report: "Thanks for letting us know.",
+    profile_bio_add: "Add a bio...",
+    profile_bio_read_more: "Read more",
+    profile_bio_save: "Save",
+    profile_bio_saving: "Saving...",
+    profile_couldnt_save_bio: "Couldn't save bio.",
+    profile_no_posts: "hasn't made any posts yet.",
+
+    /* ---------- CommunitySettings – General tab ---------- */
+    settings_profile_section: "Profile",
+    settings_verified: "Verified",
+    settings_not_verified: "Not verified — tap to get verified and unlock posting & chat",
+    settings_name_placeholder: "Name",
+    settings_username_placeholder: "Username",
+    settings_checking_username: "Checking availability…",
+    settings_username_available: "Available",
+    settings_username_taken: "Already taken",
+    settings_username_invalid: "Must be at least 3 characters",
+    settings_password_placeholder: "New password (leave blank to keep)",
+    settings_confirm_password: "Confirm new password",
+    settings_save_changes: "Save changes",
+    settings_saved: "Saved!",
+    settings_blocked_users_title: "Blocked users",
+    settings_no_blocked: "You haven't blocked anyone.",
+    show_followed_posts: "Show posts from followed users",
+
+    /* ---------- Feed screen ---------- */
+    feed_loading: "Loading videos…",
+    feed_no_videos: "No videos yet",
+    feed_report_menu: "Report",
+    feed_block_menu: "Block user",
+    feed_delete_menu: "Delete",
+    feed_report_title: "Why do you want to report this user?",
+    feed_report_placeholder: "Describe the issue...",
+    feed_block_title: "Are you sure you want to block this user?",
+    feed_delete_title: "Are you sure you want to delete this post?",
+    feed_blocked_toast: "You've blocked this user.",
+    feed_reported_toast: "You reported this user.",
+    feed_break_title: "Time for a break!",
+    feed_break_message: "You've been watching for {n} minute(s).",
+    ok_button: "OK",
+    feed_couldnt_delete: "Couldn't delete this post.",
+    feed_deleted_toast: "Post deleted.",
+
+    /* ---------- FeedSettings screen ---------- */
+    feed_settings_title: "Feed Settings",
+    feed_settings_timer_title: "Show use-time timer",
+    feed_settings_timer_sub: "Display a timer on Feed showing how long you've been watching",
+    feed_settings_alert_title: "Alert me after",
+    feed_settings_minutes: "minutes",
+    feed_settings_hint: "When the timer reaches your limit, you'll receive a reminder to take a break.",
+    feed_settings_saved_videos: "See my saved videos",
+
+    /* ---------- Saved Videos screen ---------- */
+    saved_videos_title: "Saved Videos",
+    saved_videos_empty: "No saved videos yet",
+
+    /* ---------- Post / caption ---------- */
+    caption_read_less: "Read less",
   },
 
   it: {
@@ -460,7 +531,78 @@ const STRINGS = {
     invite_default_message: "andiamo a questo evento?",
 
     my_tickets_title: 'I miei biglietti',
-    no_qr_found: 'Nessun biglietto QR trovato per questo evento.'
+    no_qr_found: 'Nessun biglietto QR trovato per questo evento.',
+
+    /* ---------- Follow / ProfileScreen ---------- */
+    profile_follow: "Segui",
+    profile_following: "Stai seguendo",
+    profile_blocked_label: "Bloccato",
+    profile_message_button: "Messaggio",
+    profile_report_label: "Segnala",
+    profile_block_label: "Blocca",
+    profile_unblock_label: "Sblocca",
+    profile_cancel_label: "Annulla",
+    profile_report_user_title: "Segnala utente",
+    profile_report_placeholder: "Descrivi il problema...",
+    profile_thanks_report: "Grazie per la segnalazione.",
+    profile_bio_add: "Aggiungi una bio...",
+    profile_bio_read_more: "Mostra altro",
+    profile_bio_save: "Salva",
+    profile_bio_saving: "Salvataggio...",
+    profile_couldnt_save_bio: "Impossibile salvare la bio.",
+    profile_no_posts: "non ha ancora pubblicato post.",
+
+    /* ---------- CommunitySettings – General tab ---------- */
+    settings_profile_section: "Profilo",
+    settings_verified: "Verificato",
+    settings_not_verified: "Non verificato — tocca per verificarti e sbloccare post & chat",
+    settings_name_placeholder: "Nome",
+    settings_username_placeholder: "Username",
+    settings_checking_username: "Controllo disponibilità…",
+    settings_username_available: "Disponibile",
+    settings_username_taken: "Non disponibile",
+    settings_username_invalid: "Minimo 3 caratteri",
+    settings_password_placeholder: "Nuova password (lascia vuoto per non cambiare)",
+    settings_confirm_password: "Conferma nuova password",
+    settings_save_changes: "Salva modifiche",
+    settings_saved: "Salvato!",
+    settings_blocked_users_title: "Utenti bloccati",
+    settings_no_blocked: "Non hai bloccato nessuno.",
+    show_followed_posts: "Mostra post degli utenti che segui",
+
+    /* ---------- Feed screen ---------- */
+    feed_loading: "Caricamento video…",
+    feed_no_videos: "Nessun video",
+    feed_report_menu: "Segnala",
+    feed_block_menu: "Blocca utente",
+    feed_delete_menu: "Elimina",
+    feed_report_title: "Perché vuoi segnalare questo utente?",
+    feed_report_placeholder: "Descrivi il problema...",
+    feed_block_title: "Sei sicuro di voler bloccare questo utente?",
+    feed_delete_title: "Sei sicuro di voler eliminare questo post?",
+    feed_blocked_toast: "Hai bloccato questo utente.",
+    feed_reported_toast: "Hai segnalato questo utente.",
+    feed_break_title: "Prenditi una pausa!",
+    feed_break_message: "Hai guardato per {n} minuto/i.",
+    ok_button: "OK",
+    feed_couldnt_delete: "Impossibile eliminare il post.",
+    feed_deleted_toast: "Post eliminato.",
+
+    /* ---------- FeedSettings screen ---------- */
+    feed_settings_title: "Impostazioni Feed",
+    feed_settings_timer_title: "Mostra timer di utilizzo",
+    feed_settings_timer_sub: "Mostra un timer sul Feed che indica quanto stai guardando",
+    feed_settings_alert_title: "Avvisami dopo",
+    feed_settings_minutes: "minuti",
+    feed_settings_hint: "Quando il timer raggiunge il limite, riceverai un promemoria per fare una pausa.",
+    feed_settings_saved_videos: "Vedi i miei video salvati",
+
+    /* ---------- Saved Videos screen ---------- */
+    saved_videos_title: "Video salvati",
+    saved_videos_empty: "Nessun video salvato",
+
+    /* ---------- Post / caption ---------- */
+    caption_read_less: "Mostra meno",
   }
 };
 

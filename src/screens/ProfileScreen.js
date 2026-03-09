@@ -247,7 +247,7 @@ export default function ProfileScreen({ navigation, route }) {
     }, [params.userId, params.username])
   );
 
-  // blocked users (background)
+  // blocked + followed users (background, runs when authId is known)
   useEffect(() => {
     if (!authId) return;
     let mounted = true;
@@ -255,17 +255,22 @@ export default function ProfileScreen({ navigation, route }) {
       try {
         const { data, error } = await supabase
           .from("profiles")
-          .select("blocked_users")
+          .select("blocked_users, followed_users")
           .eq("id", authId)
           .maybeSingle();
         if (error || !data || !mounted) return;
         setBlockedUsers(Array.isArray(data.blocked_users) ? data.blocked_users : []);
+        // Init follow state once we know both authId and the target's id
+        const targetId = display?.id;
+        if (targetId && Array.isArray(data.followed_users)) {
+          setIsFollowing(data.followed_users.includes(targetId));
+        }
       } catch {}
     })();
     return () => {
       mounted = false;
     };
-  }, [authId]);
+  }, [authId, display?.id]);
 
   const persistBlockedUsers = async (next) => {
     setBlockedUsers(next);
@@ -370,9 +375,25 @@ export default function ProfileScreen({ navigation, route }) {
     });
   };
 
-  const onToggleFollow = () => {
-    if (isSelf) return;
-    setIsFollowing((prev) => !prev);
+  const onToggleFollow = async () => {
+    if (isSelf || !authId || !display.id) return;
+    const next = !isFollowing;
+    setIsFollowing(next);
+    try {
+      // Load current followed_users, then add/remove target
+      const { data: myProfile } = await supabase
+        .from("profiles")
+        .select("followed_users")
+        .eq("id", authId)
+        .maybeSingle();
+      const current = Array.isArray(myProfile?.followed_users) ? myProfile.followed_users : [];
+      const updated = next
+        ? Array.from(new Set([...current, display.id]))
+        : current.filter((id) => id !== display.id);
+      await supabase.from("profiles").update({ followed_users: updated }).eq("id", authId);
+    } catch {
+      setIsFollowing(!next); // revert on error
+    }
   };
 
   const openProfileMenu = () => {
@@ -420,7 +441,7 @@ export default function ProfileScreen({ navigation, route }) {
       );
       setEditingBio(false);
     } catch {
-      showToast("Couldn't save bio.");
+      showToast(t("profile_couldnt_save_bio"));
     } finally {
       setSavingBio(false);
     }
@@ -709,7 +730,7 @@ export default function ProfileScreen({ navigation, route }) {
 
   if (!fontsLoaded) return null;
 
-  function Header({ title, onBack, onOpenMenu, showMenu }) {
+  function Header({ title, onBack }) {
     return (
       <View style={[styles.headerWrap, { backgroundColor: theme.gray, borderBottomColor: theme.border }]}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={8}>
@@ -724,13 +745,7 @@ export default function ProfileScreen({ navigation, route }) {
           </View>
         </View>
 
-        {showMenu ? (
-          <TouchableOpacity style={styles.menuBtn} hitSlop={8} onPress={onOpenMenu}>
-            <Feather name="more-vertical" size={22} color={theme.text} />
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 22 }} />
-        )}
+        <View style={{ width: 30 }} />
       </View>
     );
   }
@@ -742,8 +757,6 @@ export default function ProfileScreen({ navigation, route }) {
       <Header
         title={display.username}
         onBack={() => navigation?.goBack?.()}
-        onOpenMenu={openProfileMenu}
-        showMenu={!isSelf}
       />
 
       {showBootSpinner ? (
@@ -830,7 +843,7 @@ export default function ProfileScreen({ navigation, route }) {
                       disabled={savingBio}
                       style={{ paddingHorizontal: 16, paddingVertical: 6, borderRadius: 8, backgroundColor: "#12A7E0" }}
                     >
-                      <Text style={{ color: "#fff", fontFamily: "Poppins", fontSize: 13 }}>{savingBio ? "Saving..." : "Save"}</Text>
+                      <Text style={{ color: "#fff", fontFamily: "Poppins", fontSize: 13 }}>{savingBio ? t("profile_bio_saving") : t("profile_bio_save")}</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -843,12 +856,12 @@ export default function ProfileScreen({ navigation, route }) {
                     >
                       {displayedBio}
                       {!showFullBio && shouldShowReadMore && (
-                        <Text style={[styles.readMore, { color: theme.text }]}>{" "}Read more</Text>
+                        <Text style={[styles.readMore, { color: theme.text }]}>{" "}{t("profile_bio_read_more")}</Text>
                       )}
                     </Text>
                   ) : (
                     <Text style={[styles.bio, { color: theme.secondaryText, opacity: 0.55, marginTop: 0, flex: 1 }]}>
-                      Add a bio...
+                      {t("profile_bio_add")}
                     </Text>
                   )}
                   <TouchableOpacity
@@ -868,43 +881,44 @@ export default function ProfileScreen({ navigation, route }) {
                 >
                   {displayedBio}
                   {!showFullBio && shouldShowReadMore && (
-                    <Text style={[styles.readMore, { color: theme.text }]}>{" "}Read more</Text>
+                    <Text style={[styles.readMore, { color: theme.text }]}>{" "}{t("profile_bio_read_more")}</Text>
                   )}
                 </Text>
               )
             )}
 
-            {/* Actions */}
-            <View style={styles.actionsRow}>
-              <TouchableOpacity
-                style={[styles.btn, styles.btnPrimary]}
-                onPress={() => {
-                  if (isBlocked) setUnblockModalVisible(true);
-                  else goMessage();
-                }}
-              >
-                <Feather name="message-circle" size={16} color="#fff" />
-                <Text style={[styles.btnText, { color: "#fff" }]}>Message</Text>
-              </TouchableOpacity>
+            {/* Actions — only shown when viewing another user's profile */}
+            {!isSelf && (
+              <View style={styles.actionsRow}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnPrimary]}
+                  onPress={() => {
+                    if (isBlocked) setUnblockModalVisible(true);
+                    else goMessage();
+                  }}
+                >
+                  <Feather name="message-circle" size={16} color="#fff" />
+                  <Text style={[styles.btnText, { color: "#fff" }]}>{t("profile_message_button")}</Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.btn, { borderWidth: 1, borderColor: theme.border, backgroundColor: theme.gray }]}
-                onPress={onToggleFollow}
-                disabled={isBlocked}
-              >
-                <Text style={[styles.btnText, { color: theme.text, fontWeight: "600" }]}>
-                  {isBlocked ? "Blocked" : isFollowing ? "Following" : "Follow"}
-                </Text>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, { borderWidth: 1, borderColor: theme.border, backgroundColor: theme.gray }]}
+                  onPress={onToggleFollow}
+                  disabled={isBlocked}
+                >
+                  <Text style={[styles.btnText, { color: theme.text, fontWeight: "600" }]}>
+                    {isBlocked ? t("profile_blocked_label") : isFollowing ? t("profile_following") : t("profile_follow")}
+                  </Text>
+                </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.squareBtn, { backgroundColor: theme.gray, borderColor: theme.border }]}
-                onPress={openProfileMenu}
-                disabled={isSelf}
-              >
-                <Feather name="more-horizontal" size={18} color={theme.text} />
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  style={[styles.squareBtn, { backgroundColor: theme.gray, borderColor: theme.border }]}
+                  onPress={openProfileMenu}
+                >
+                  <Feather name="more-horizontal" size={18} color={theme.text} />
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
 
           {postsLoading ? (
@@ -913,7 +927,7 @@ export default function ProfileScreen({ navigation, route }) {
             </View>
           ) : posts.length === 0 ? (
             <Text style={[styles.emptyText, { color: theme.secondaryText }]}>
-              @{asAt(display.username) || "user"} hasn't made any posts yet.
+              @{asAt(display.username) || "user"} {t("profile_no_posts")}
             </Text>
           ) : (
             posts.map((item) => (
@@ -925,8 +939,163 @@ export default function ProfileScreen({ navigation, route }) {
         </ScrollView>
       )}
 
-      {/* Modals + toast styles unchanged from your file */}
-      {/* ... keep your existing modals/toast code here ... */}
+      {/* Profile action menu (Report / Block) */}
+      <Modal
+        visible={profileMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProfileMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.sheetOverlay}
+          activeOpacity={1}
+          onPress={() => setProfileMenuVisible(false)}
+        >
+          <View style={[styles.sheetCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.sheetTitle, { color: isDark ? "#fff" : "#111" }]} numberOfLines={1}>
+              {display.name || (display.username ? `@${display.username}` : "User")}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.sheetItem}
+              onPress={() => {
+                setProfileMenuVisible(false);
+                setReportText("");
+                setReportModalVisible(true);
+              }}
+            >
+              <Feather name="alert-triangle" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+              <Text style={[styles.sheetItemText, { color: isDark ? "#fff" : "#111" }]}>{t("profile_report_label")}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.sheetItem} onPress={handleBlockUser}>
+              <Feather
+                name={isBlocked ? "user-check" : "user-x"}
+                size={18}
+                color="#d23b3b"
+                style={{ marginRight: 12 }}
+              />
+              <Text style={[styles.sheetItemText, { color: "#d23b3b" }]}>
+                {isBlocked ? t("profile_unblock_label") : t("profile_block_label")}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.sheetDivider, { backgroundColor: isDark ? "#444" : "#eee" }]} />
+
+            <TouchableOpacity style={styles.sheetItem} onPress={() => setProfileMenuVisible(false)}>
+              <Feather name="x" size={18} color={isDark ? "#aaa" : "#888"} style={{ marginRight: 12 }} />
+              <Text style={[styles.sheetItemText, { color: isDark ? "#aaa" : "#888" }]}>{t("profile_cancel_label")}</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Report text modal */}
+      <Modal
+        visible={reportModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReportModalVisible(false)}
+      >
+        <View style={styles.centeredOverlay}>
+          <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111" }]}>{t("profile_report_user_title")}</Text>
+            <TextInput
+              style={[
+                styles.reportInput,
+                {
+                  color: theme.text,
+                  borderColor: theme.border,
+                  backgroundColor: isDark ? "#1a1a1a" : "#f5f5f5",
+                },
+              ]}
+              placeholder={t("profile_report_placeholder")}
+              placeholderTextColor={isDark ? "#888" : "#aaa"}
+              value={reportText}
+              onChangeText={setReportText}
+              multiline
+              maxLength={500}
+            />
+            <View style={styles.dialogBtns}>
+              <TouchableOpacity
+                onPress={() => setReportModalVisible(false)}
+                style={styles.dialogBtnCancel}
+              >
+                <Text style={[styles.dialogBtnCancelText, { color: theme.text }]}>{t("profile_cancel_label")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.dialogBtnSubmit}
+                onPress={async () => {
+                  const { data: auth } = await supabase.auth.getUser();
+                  const reporterId = auth?.user?.id || null;
+                  const reason = reportText.trim() || `Profile: @${targetUsername}`;
+                  try {
+                    await supabase.from("reports").insert({
+                      reported_by: reporterId,
+                      reported_user: targetUsername || null,
+                      reason,
+                    });
+                  } catch {}
+                  try {
+                    const { data: myProfile } = await supabase
+                      .from("profiles")
+                      .select("username")
+                      .eq("id", reporterId)
+                      .maybeSingle();
+                    await supabase.functions.invoke("send-report", {
+                      body: {
+                        type: "profile",
+                        reported_by_id: reporterId,
+                        reported_by_username: myProfile?.username || null,
+                        reason,
+                        context: { reported_username: targetUsername },
+                      },
+                    });
+                  } catch {}
+                  setReportModalVisible(false);
+                  showToast(t("profile_thanks_report"));
+                }}
+              >
+                <Text style={styles.dialogBtnSubmitText}>{t("submit_button")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Unblock confirm modal */}
+      <Modal
+        visible={unblockModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelUnblock}
+      >
+        <View style={styles.centeredOverlay}>
+          <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111" }]}>
+              Unblock @{targetUsername}?
+            </Text>
+            <Text style={{ fontFamily: "Poppins", fontSize: 13, color: theme.secondaryText, marginBottom: 16 }}>
+              They'll be able to see your posts and contact you again.
+            </Text>
+            <View style={styles.dialogBtns}>
+              <TouchableOpacity onPress={cancelUnblock} style={styles.dialogBtnCancel}>
+                <Text style={[styles.dialogBtnCancelText, { color: theme.text }]}>{t("profile_cancel_label")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={confirmUnblock} style={styles.dialogBtnSubmit}>
+                <Text style={styles.dialogBtnSubmitText}>{t("profile_unblock_label")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Toast */}
+      {!!toastMessage && (
+        <Animated.View style={[styles.toast, { opacity: toastOpacity }]}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -997,4 +1166,27 @@ const styles = StyleSheet.create({
   },
 
   emptyText: { textAlign: "center", marginTop: 20, fontSize: 14, fontFamily: "Poppins" },
+
+  // Sheet modal (Report / Block)
+  sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  sheetCard: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 8, paddingBottom: 32, paddingHorizontal: 16 },
+  sheetTitle: { fontFamily: "PoppinsBold", fontSize: 15, textAlign: "center", paddingVertical: 10, marginBottom: 4 },
+  sheetItem: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
+  sheetItemText: { fontFamily: "Poppins", fontSize: 15 },
+  sheetDivider: { height: 1, marginVertical: 4 },
+
+  // Centered dialog (Report text / Unblock)
+  centeredOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 24 },
+  dialogCard: { width: "100%", borderRadius: 16, padding: 20 },
+  dialogTitle: { fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 12 },
+  reportInput: { borderWidth: 1, borderRadius: 10, padding: 10, minHeight: 80, fontFamily: "Poppins", fontSize: 14, textAlignVertical: "top", marginBottom: 16 },
+  dialogBtns: { flexDirection: "row", justifyContent: "flex-end", gap: 10 },
+  dialogBtnCancel: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+  dialogBtnCancelText: { fontFamily: "Poppins", fontSize: 14 },
+  dialogBtnSubmit: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: "#12A7E0" },
+  dialogBtnSubmitText: { fontFamily: "Poppins", fontSize: 14, color: "#fff" },
+
+  // Toast
+  toast: { position: "absolute", bottom: 32, alignSelf: "center", backgroundColor: "rgba(0,0,0,0.75)", borderRadius: 20, paddingHorizontal: 18, paddingVertical: 10 },
+  toastText: { color: "#fff", fontFamily: "Poppins", fontSize: 13 },
 });

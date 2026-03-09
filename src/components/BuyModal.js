@@ -542,9 +542,14 @@ export default function BuyModal({ visible, onClose, postId }) {
         // 1. Create a PaymentIntent on the backend
         let clientSecret;
         try {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const token = sessionData?.session?.access_token || "";
           const res = await fetch(`${API_URL}/create-payment-intent`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${token}`,
+            },
             body: JSON.stringify({
               amount: totalCents,
               currency: "eur",
@@ -577,7 +582,7 @@ export default function BuyModal({ visible, onClose, postId }) {
               return {
                 label: types[idx] || "Ticket",
                 amount: String(((Number(prices[idx]) || 0) * qty).toFixed(2)),
-                paymentType: PlatformPay.PaymentType.Final,
+                paymentType: "Immediate",
               };
             })
             .filter(Boolean);

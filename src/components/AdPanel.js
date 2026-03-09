@@ -39,8 +39,8 @@ export default function AdPanel({ onState }) {
 
   const idRef = useRef(3);
   const [products, setProducts] = useState([
-    { id: 1, name: "Pizza marinara", cost: "" },
-    { id: 2, name: "Marinara + bibita", cost: "" },
+    { id: 1, name: "", cost: "", notes: "" },
+    { id: 2, name: "", cost: "", notes: "" },
   ]);
 
   const update = (id, patch) =>
@@ -49,7 +49,7 @@ export default function AdPanel({ onState }) {
   const addRow = () =>
     setProducts((p) => [
       ...p,
-      { id: idRef.current++, name: "", cost: "" },
+      { id: idRef.current++, name: "", cost: "", notes: "" },
     ]);
 
   const deleteRow = (id) => setProducts((p) => p.filter((x) => x.id !== id));
@@ -87,68 +87,68 @@ export default function AdPanel({ onState }) {
       {iap && (
         <>
           {products.map((pr, idx) => (
-            <View key={pr.id} style={styles.productRow}>
-              <View
-                style={[
-                  styles.productNameWrap,
-                  {
-                    backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                    borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
-                  },
-                ]}
-              >
+            <View key={pr.id} style={styles.productBlock}>
+              {/* Row 1: name + delete */}
+              <View style={styles.productRow}>
+                <View
+                  style={[
+                    styles.productNameWrap,
+                    {
+                      backgroundColor: isDark ? "#2B2B2B" : "#fff",
+                      borderColor: isDark ? "#555" : "#D9D9D9",
+                    },
+                  ]}
+                >
+                  <TextInput
+                    value={pr.name}
+                    onChangeText={(v) => update(pr.id, { name: v })}
+                    placeholder={idx === 0 ? "Pizza marinara" : idx === 1 ? "Marinara + bibita" : t("ad_product_name_placeholder")}
+                    placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
+                    style={[styles.productName, { color: theme.text }]}
+                  />
+                </View>
+
+                {idx >= 1 && (
+                  <TouchableOpacity
+                    onPress={() => deleteRow(pr.id)}
+                    style={styles.deleteBtn}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Ionicons name="close" size={18} color={isDark ? "#D1D5DB" : "#777"} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Row 2: notes (flex) + cost */}
+              <View style={styles.notesRow}>
                 <TextInput
-                  value={pr.name}
-                  onChangeText={(v) => update(pr.id, { name: v })}
-                  placeholder={t("ad_product_name_placeholder")}
+                  value={pr.notes}
+                  onChangeText={(v) => update(pr.id, { notes: v })}
+                  placeholder="Notes (optional)"
                   placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
                   style={[
-                    styles.productName,
-                    { color: theme.text },
+                    styles.notesInput,
+                    {
+                      color: theme.text,
+                      borderColor: isDark ? "#555" : "#D9D9D9",
+                      backgroundColor: isDark ? "#2B2B2B" : "#fff",
+                    },
                   ]}
                 />
-              </View>
-
-              <Text
-                style={[
-                  styles.costLabel,
-                  { color: theme.text },
-                ]}
-              >
-                {t("ad_cost_label")}
-              </Text>
-              <View
-                style={[
-                  styles.costLineBox,
-                  { borderColor: isDark ? "#FFFFFF" : "#CFCFCF" },
-                ]}
-              >
-                <TextInput
-                  value={pr.cost}
-                  onChangeText={(v) => update(pr.id, { cost: v })}
-                  keyboardType="numeric"
-                  placeholder="0"
-                  placeholderTextColor={isDark ? "#8C96A5" : "#BFBFBF"}
-                  style={[
-                    styles.costLineInput,
-                    { color: theme.text },
-                  ]}
-                />
-              </View>
-
-              {idx >= 1 && (
-                <TouchableOpacity
-                  onPress={() => deleteRow(pr.id)}
-                  style={styles.deleteBtn}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <Ionicons
-                    name="close"
-                    size={18}
-                    color={isDark ? "#D1D5DB" : "#777"}
+                <Text style={[styles.costLabel, { color: theme.text }]}>
+                  {t("ad_cost_label")}
+                </Text>
+                <View style={[styles.costLineBox, { borderColor: isDark ? "#FFFFFF" : "#CFCFCF" }]}>
+                  <TextInput
+                    value={pr.cost}
+                    onChangeText={(v) => update(pr.id, { cost: v })}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={isDark ? "#8C96A5" : "#BFBFBF"}
+                    style={[styles.costLineInput, { color: theme.text }]}
                   />
-                </TouchableOpacity>
-              )}
+                </View>
+              </View>
             </View>
           ))}
 
@@ -214,10 +214,25 @@ const styles = StyleSheet.create({
   checkboxBoxChecked: { backgroundColor: "#3D8BFF", borderColor: "#3D8BFF" },
   checkboxLabel: { fontSize: 14, fontFamily: "Poppins" },
 
-  productRow: { flexDirection: "row", alignItems: "center", marginTop: 12 },
+  productBlock: { marginTop: 12 },
+  productRow: { flexDirection: "row", alignItems: "center" },
+  notesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  notesInput: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 13,
+    fontFamily: "Poppins",
+  },
   productNameWrap: {
     flex: 1,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
     paddingHorizontal: 12,
     height: 40,
@@ -256,7 +271,7 @@ const styles = StyleSheet.create({
     fontFamily: "Poppins",
   },
   requiredInfoBox: {
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,

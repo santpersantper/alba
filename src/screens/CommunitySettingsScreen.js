@@ -53,6 +53,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [showNews, setShowNews] = useState(true);
   const [visibleToAll, setVisibleToAll] = useState(false);
   const [allowDMs, setAllowDMs] = useState(true);
+  const [showFollowedPosts, setShowFollowedPosts] = useState(false);
 
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [blockedProfiles, setBlockedProfiles] = useState([]);
@@ -94,7 +95,7 @@ export default function CommunitySettingsScreen({ navigation }) {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified")
+        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts")
         .eq("id", u.id)
         .maybeSingle();
 
@@ -103,6 +104,7 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (typeof data.show_local_news === "boolean") setShowNews(data.show_local_news);
       if (typeof data.visible_to_all === "boolean") setVisibleToAll(data.visible_to_all);
       if (typeof data.allow_dms === "boolean") setAllowDMs(data.allow_dms);
+      if (typeof data.show_followed_users_posts === "boolean") setShowFollowedPosts(data.show_followed_users_posts);
       if (typeof data.name === "string") setEditName(data.name);
       if (typeof data.username === "string") {
         setEditUsername(data.username);
@@ -320,8 +322,12 @@ export default function CommunitySettingsScreen({ navigation }) {
       updatePrefs({ premiumAdFree: false });
       return;
     }
-    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
-    updatePrefs({ premiumAdFree: true });
+    setPremiumModal({
+      featureName: "Ad-Free",
+      description: "Browse Community without ads.",
+      price: "€2.99/month",
+      endpoint: "/create-payment-intent/premium-ad-free",
+    });
   };
 
   const handleTravelerPress = () => {
@@ -329,11 +335,12 @@ export default function CommunitySettingsScreen({ navigation }) {
       updatePrefs({ premiumTravelerMode: false, travelerModeCity: null, travelerModeCityCoords: null });
       return;
     }
-    if (prefs.premiumDiffusionList) {
-      Alert.alert("Note", "Traveler Mode is now active. Diffusion Lists will be unavailable until you disable it.");
-    }
-    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
-    updatePrefs({ premiumTravelerMode: true });
+    setPremiumModal({
+      featureName: "Traveler Mode",
+      description: "Access Community in any city worldwide.",
+      price: "€4.99/month",
+      endpoint: "/create-payment-intent/premium-traveler",
+    });
   };
 
   const handleDiffusionPress = () => {
@@ -341,8 +348,12 @@ export default function CommunitySettingsScreen({ navigation }) {
       updatePrefs({ premiumDiffusionList: false });
       return;
     }
-    // TODO: restore payment flow — replace with setPremiumModal({...}) when Stripe is ready
-    updatePrefs({ premiumDiffusionList: true });
+    setPremiumModal({
+      featureName: "Diffusion List",
+      description: "Broadcast a message to all Alba users nearby.",
+      price: "€1.00 per message",
+      endpoint: "/create-payment-intent/diffusion-message",
+    });
   };
 
   // Called by steppers — commits immediately and syncs display text
@@ -410,7 +421,7 @@ export default function CommunitySettingsScreen({ navigation }) {
           {/* ── Profile ── */}
           <ThemedView variant="gray" style={[styles.section, { paddingTop: 10 }]}>
             <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              Profile
+              {t("settings_profile_section")}
             </ThemedText>
 
             {/* Verification badge */}
@@ -426,22 +437,20 @@ export default function CommunitySettingsScreen({ navigation }) {
                 style={{ marginRight: 7 }}
               />
               <ThemedText style={[styles.verifiedText, { color: isVerified ? "#4CAF50" : "#F59E0B" }]}>
-                {isVerified
-                  ? "Verified"
-                  : "Not verified — tap here to get verified and unlock posting & chat"}
+                {isVerified ? t("settings_verified") : t("settings_not_verified")}
               </ThemedText>
             </TouchableOpacity>
 
             <TextInput
               style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder="Name"
+              placeholder={t("settings_name_placeholder")}
               placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
               value={editName}
               onChangeText={setEditName}
             />
             <TextInput
               style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder="Username"
+              placeholder={t("settings_username_placeholder")}
               placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
               autoCapitalize="none"
               autoCorrect={false}
@@ -451,29 +460,29 @@ export default function CommunitySettingsScreen({ navigation }) {
             {usernameStatus === "checking" && (
               <View style={styles.usernameStatusRow}>
                 <ActivityIndicator size="small" color="#00A9FF" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: isDark ? "#aaa" : "#666" }]}>Checking availability…</ThemedText>
+                <ThemedText style={[styles.usernameStatusText, { color: isDark ? "#aaa" : "#666" }]}>{t("settings_checking_username")}</ThemedText>
               </View>
             )}
             {usernameStatus === "available" && (
               <View style={styles.usernameStatusRow}>
                 <Feather name="check-circle" size={13} color="#4CAF50" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: "#4CAF50" }]}>Available</ThemedText>
+                <ThemedText style={[styles.usernameStatusText, { color: "#4CAF50" }]}>{t("settings_username_available")}</ThemedText>
               </View>
             )}
             {usernameStatus === "taken" && (
               <View style={styles.usernameStatusRow}>
                 <Feather name="x-circle" size={13} color="#E55353" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: "#E55353" }]}>Already taken</ThemedText>
+                <ThemedText style={[styles.usernameStatusText, { color: "#E55353" }]}>{t("settings_username_taken")}</ThemedText>
               </View>
             )}
             {usernameStatus === "invalid" && (
               <View style={styles.usernameStatusRow}>
-                <ThemedText style={[styles.usernameStatusText, { color: "#F59E0B" }]}>Must be at least 3 characters</ThemedText>
+                <ThemedText style={[styles.usernameStatusText, { color: "#F59E0B" }]}>{t("settings_username_invalid")}</ThemedText>
               </View>
             )}
             <TextInput
               style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder="New password (leave blank to keep)"
+              placeholder={t("settings_password_placeholder")}
               placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
               secureTextEntry
               value={editPassword}
@@ -501,7 +510,7 @@ export default function CommunitySettingsScreen({ navigation }) {
                 ))}
                 <TextInput
                   style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa", marginTop: 8 }]}
-                  placeholder="Confirm new password"
+                  placeholder={t("settings_confirm_password")}
                   placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
                   secureTextEntry
                   value={editPasswordConfirm}
@@ -514,7 +523,7 @@ export default function CommunitySettingsScreen({ navigation }) {
               <ThemedText style={styles.saveErrorText}>{saveError}</ThemedText>
             )}
             {saveSuccess && (
-              <ThemedText style={styles.saveSuccessText}>Saved!</ThemedText>
+              <ThemedText style={styles.saveSuccessText}>{t("settings_saved")}</ThemedText>
             )}
 
             <TouchableOpacity
@@ -524,7 +533,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             >
               {saving
                 ? <ActivityIndicator color="#fff" size="small" />
-                : <ThemedText style={styles.saveBtnText}>Save changes</ThemedText>}
+                : <ThemedText style={styles.saveBtnText}>{t("settings_save_changes")}</ThemedText>}
             </TouchableOpacity>
           </ThemedView>
 
@@ -551,6 +560,11 @@ export default function CommunitySettingsScreen({ navigation }) {
               const next = !showNews;
               setShowNews(next);
               await updateProfile({ show_local_news: next });
+            })}
+            {renderCheckbox(showFollowedPosts, t("show_followed_posts"), async () => {
+              const next = !showFollowedPosts;
+              setShowFollowedPosts(next);
+              await updateProfile({ show_followed_users_posts: next });
             })}
           </ThemedView>
 
@@ -745,11 +759,11 @@ export default function CommunitySettingsScreen({ navigation }) {
 
           <ThemedView variant="gray" style={[styles.section, { paddingTop: 16 }]}>
             <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              Blocked users
+              {t("settings_blocked_users_title")}
             </ThemedText>
             {blockedProfiles.length === 0 ? (
               <ThemedText style={[styles.blockedEmptyText, { color: theme.secondaryText }]}>
-                You haven&apos;t blocked anyone.
+                {t("settings_no_blocked")}
               </ThemedText>
             ) : (
               <FlatList
@@ -893,10 +907,13 @@ export default function CommunitySettingsScreen({ navigation }) {
           visible={!!premiumModal}
           onClose={() => setPremiumModal(null)}
           onSuccess={async () => {
-            if (premiumModal.endpoint.includes("ad-free")) {
+            const ep = premiumModal.endpoint;
+            if (ep.includes("ad-free")) {
               await updatePrefs({ premiumAdFree: true });
-            } else {
+            } else if (ep.includes("traveler")) {
               await updatePrefs({ premiumTravelerMode: true });
+            } else if (ep.includes("diffusion")) {
+              await updatePrefs({ premiumDiffusionList: true });
             }
             setPremiumModal(null);
           }}

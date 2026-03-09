@@ -29,6 +29,48 @@ export function evaluateStreak(usageData, prefs) {
   };
 }
 
+const EMPTY_STREAK_DAYS = {
+  Mon: false, Tue: false, Wed: false, Thu: false,
+  Fri: false, Sat: false, Sun: false,
+};
+
+/**
+ * Detect a Monday week-boundary and return prefs updates that:
+ *   - save last week's total into lastWeekTotalMinutes (for week-over-week % stat)
+ *   - reset streakDays and currentStreakCount for the new week
+ *
+ * No-op if: today is not Monday, or lastStreakUpdate is already from this week.
+ *
+ * @param {number} weekMinutes — usageData.thisWeek.totalMinutes from the PREVIOUS week
+ * @param {object} prefs       — current useUserPreferences values
+ * @returns {object|null}      — partial prefs to merge, or null if nothing to update
+ */
+export function evaluateWeekRollover(weekMinutes, prefs) {
+  // Only fires on Monday (getDay() === 1)
+  if (new Date().getDay() !== 1) return null;
+
+  // If there's no previous streak update there's no "last week" to save
+  const lastUpdate = prefs.lastStreakUpdate;
+  if (!lastUpdate) return null;
+
+  // Calculate the Monday that starts the current week and the one that started
+  // the week of the last streak update. If they're the same we already rolled over.
+  const getMondayOf = (dateStr) => {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // shift to Monday
+    return d.toDateString();
+  };
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (getMondayOf(lastUpdate) === getMondayOf(todayStr)) return null; // same week
+
+  return {
+    lastWeekTotalMinutes: weekMinutes ?? 0,
+    streakDays: { ...EMPTY_STREAK_DAYS },
+    currentStreakCount: 0,
+  };
+}
+
 /**
  * Format a minute count into a human-readable string.
  * 0       → "0 min"

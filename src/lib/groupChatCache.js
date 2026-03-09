@@ -135,6 +135,13 @@ export function mapMessageRowToItem(row) {
     return { ...base, type: "post", postId: row.post_id };
   }
 
+  if (row.content && String(row.content).startsWith("__location__:")) {
+    try {
+      const loc = JSON.parse(String(row.content).slice("__location__:".length));
+      return { ...base, type: "location", locationData: loc };
+    } catch {}
+  }
+
   if (row.media_reference) {
     return { ...base, type: "media", uris: [row.media_reference], caption: row.content || "" };
   }

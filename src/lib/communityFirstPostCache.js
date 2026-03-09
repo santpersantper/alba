@@ -146,7 +146,9 @@ export async function warmCommunityFirstPost(postRow) {
 
     const cachedAvatar = userpicuri ? await cacheRemoteFile(userpicuri) : null;
 
-    const cachedMedia = mediaArr.length ? await cacheRemoteFiles(mediaArr) : [];
+    // Only pre-cache the first media item — downloading all post media was a
+    // significant source of Supabase cached-egress overages.
+    const cachedMedia = mediaArr.length ? await cacheRemoteFiles([mediaArr[0]]) : [];
 
     const payload = {
       ...payloadBase,

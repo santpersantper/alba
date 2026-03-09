@@ -154,11 +154,10 @@ export async function preloadProfileData({ userId, username, isMe } = {}) {
 
     if (!row) return null;
 
-    // ✅ warm disk cache now (best effort)
-    const [avatarLocal, coverLocal] = await Promise.all([
-      row.avatar_url ? cacheImageToDisk(row.avatar_url) : Promise.resolve(null),
-      row.cover_url ? cacheImageToDisk(row.cover_url) : Promise.resolve(null),
-    ]);
+    // Only pre-cache the avatar — cover images are large and loaded on demand.
+    // Pre-caching covers was the primary driver of Supabase cached-egress overages.
+    const avatarLocal = row.avatar_url ? await cacheImageToDisk(row.avatar_url) : null;
+    const coverLocal = null;
 
     const rowWithLocal = {
       ...row,

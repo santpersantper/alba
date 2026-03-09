@@ -6,7 +6,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import {
   PlatformPayButton,
@@ -16,10 +15,14 @@ import {
 } from "@stripe/stripe-react-native";
 import Constants from "expo-constants";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { supabase } from "../lib/supabase";
 
-// Read payment server URL from Expo config; falls back to localhost during development
+// Read payment server URL — env var takes priority, then Expo config, then dev localhost
 const API_URL =
-  Constants.expoConfig?.extra?.expoPublic?.API_URL ?? "http://localhost:3000";
+  process.env.EXPO_PUBLIC_API_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
+  "http://localhost:3000";
+console.log("[Payment] module loaded, API_URL =", API_URL);
 
 const mapStripeError = (code) => {
   if (code === "card_declined")
@@ -70,19 +73,32 @@ export default function PremiumPurchaseModal({
       // 1. Create a PaymentIntent on the backend
       let clientSecret;
       try {
-        const res = await fetch(`${API_URL}${paymentEndpoint}`, {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token || "";
+        const fullUrl = `${API_URL}${paymentEndpoint}`;
+        console.log("[Payment] API_URL:", API_URL);
+        console.log("[Payment] endpoint:", fullUrl);
+        console.log("[Payment] userId:", userId);
+        console.log("[Payment] has token:", !!token);
+        const res = await fetch(fullUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+          },
           body: JSON.stringify({ userId }),
         });
+        console.log("[Payment] server status:", res.status);
         const json = await res.json();
+        console.log("[Payment] server response:", JSON.stringify(json));
         if (!res.ok || !json.clientSecret)
           throw new Error(json.error || "Payment setup failed");
         clientSecret = json.clientSecret;
       } catch (e) {
+        console.error("[Payment] fetch error:", e.message, e);
         showFeedback(
           "Error",
-          "Connection error. Please check your internet and try again."
+          `Server error: ${e.message}`
         );
         return;
       }
@@ -93,7 +109,7 @@ export default function PremiumPurchaseModal({
           {
             label: featureName,
             amount: numericPrice,
-            paymentType: PlatformPay.PaymentType.Final,
+            paymentType: "Immediate",
           },
         ];
 
@@ -115,7 +131,8 @@ export default function PremiumPurchaseModal({
 
         if (payError?.code === "Canceled") return; // user dismissed — silent
         if (payError) {
-          showFeedback("Payment failed", mapStripeError(payError.code));
+          console.error("[Payment] platformPay error code:", payError.code, "message:", payError.message, "localizedMessage:", payError.localizedMessage);
+          showFeedback("Payment failed", `[${payError.code}] ${payError.message || mapStripeError(payError.code)}`);
           return;
         }
       } else {
@@ -125,20 +142,22 @@ export default function PremiumPurchaseModal({
           merchantDisplayName: "Alba",
         });
         if (initError) {
-          showFeedback("Error", "Payment setup failed.");
+          console.error("[Payment] initPaymentSheet error code:", initError.code, "message:", initError.message);
+          showFeedback("Error", `[${initError.code}] ${initError.message || "Payment setup failed."}`);
           return;
         }
         const { error: presentError } = await presentPaymentSheet();
         if (presentError?.code === "Canceled") return; // user dismissed — silent
         if (presentError) {
-          showFeedback("Payment failed", mapStripeError(presentError.code));
+          console.error("[Payment] presentPaymentSheet error code:", presentError.code, "message:", presentError.message);
+          showFeedback("Payment failed", `[${presentError.code}] ${presentError.message || mapStripeError(presentError.code)}`);
           return;
         }
       }
 
       // Payment succeeded
       onSuccess();
-      Alert.alert("Feature activated! Enjoy Alba Premium.");
+      showFeedback("Success", "Feature activated! Enjoy Alba Premium.", onClose);
     } catch (e) {
       showFeedback("Error", "Something went wrong. Please try again.");
     } finally {

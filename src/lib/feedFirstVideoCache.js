@@ -102,6 +102,24 @@ export async function writeCachedFirstFeedVideoOverride({
       return existing;
     }
 
+    // Check file size before downloading — skip videos larger than 20 MB.
+    // Large videos should be streamed on demand; pre-downloading them was the
+    // primary driver of Supabase cached-egress overages.
+    const MAX_PRELOAD_BYTES = 20 * 1024 * 1024; // 20 MB
+    try {
+      const headRes = await fetch(remoteVideoUrl, { method: "HEAD" });
+      const contentLength = parseInt(headRes.headers.get("content-length") || "0", 10);
+      if (contentLength > MAX_PRELOAD_BYTES) {
+        log("write: SKIP (video too large for preload, will stream)", {
+          id: String(id),
+          sizeMB: (contentLength / 1024 / 1024).toFixed(1),
+        });
+        return null;
+      }
+    } catch {
+      // HEAD request failed — fall through and attempt download anyway
+    }
+
     const fname = `first_${String(id)}_${safeHash(remoteVideoUrl)}.mp4`;
     const dest = `${DIR}${fname}`;
 

@@ -11,7 +11,7 @@ import {
   Alert,
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
-import { Video, ResizeMode } from "expo-av";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../../lib/supabase";
@@ -27,6 +27,13 @@ const prefetchUri = (uri) => {
     ExpoImage.prefetch?.(uri);
   } catch {}
 };
+
+function VideoThumbnail({ uri, style }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.muted = true;
+  });
+  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
+}
 
 const isVideoUri = (uri) => {
   if (!uri) return false;
@@ -297,15 +304,7 @@ export default function PostMessage({
                 />
               ) : post?.firstVideoUri ? (
                 <View style={[styles.media, { backgroundColor: "#000" }]}>
-                  <Video
-                    source={{ uri: post.firstVideoUri }}
-                    style={StyleSheet.absoluteFill}
-                    resizeMode={ResizeMode.COVER}
-                    shouldPlay={false}
-                    isMuted
-                    isLooping={false}
-                    volume={0}
-                  />
+                  <VideoThumbnail uri={post.firstVideoUri} style={StyleSheet.absoluteFill} />
                   <View style={styles.playOverlay}>
                     <View style={styles.playCircle}>
                       <Feather name="play" size={22} color="#fff" style={{ paddingLeft: 3 }} />
