@@ -16,6 +16,9 @@
     "preview": {
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --clean",
+      "android": {
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a"
+      },
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
       }
