@@ -22,14 +22,22 @@ const DEFAULT_PREFS = {
   notifFollowedPosts: true,   // boolean — notify on new posts from followed accounts
   // ── Screen Time (stored locally via AsyncStorage — usage data never sent to backend) ──
   lastWeekTotalMinutes: 0,                  // number — previous week's social media total for week-over-week comparison
+  lastWeekDailyTotals: {},                  // {Mon: number, …} — previous week's per-day breakdown (for "7 days ago" comparison)
   screenTimeGoalReductionPercent: 10,       // number — % reduction per week (5–50), default 10%
-  screenTimeGoalDailyMaxMinutes: 180,       // number — daily max in minutes (30–480), default 3h
+  screenTimeGoalDailyMaxMinutes: 180,       // number — active daily max in minutes
   streakDays: {                             // boolean map — goal met per weekday this week
     Mon: false, Tue: false, Wed: false,
     Thu: false, Fri: false, Sat: false, Sun: false,
   },
   currentStreakCount: 0,                    // number — consecutive days goal was met
   lastStreakUpdate: null,                   // ISO date string "YYYY-MM-DD" — last evaluation date
+  // ── First-week observation period ──
+  trackingStartDate: null,                  // "YYYY-MM-DD" — date FamilyControls auth was first granted
+  trackingActive: true,                     // boolean — user hasn't voluntarily deactivated tracking
+  firstWeekComplete: false,                 // boolean — 7+ days have elapsed since tracking started
+  firstWeekAverageDailyMinutes: null,       // number | null — avg daily usage from the first 7 days
+  goalAutoSet: false,                       // boolean — daily goal was auto-derived from first-week average
+  dailyHistory: [],                         // [{date: "YYYY-MM-DD", minutes: number}] — last 14 days of usage
 };
 
 export function useUserPreferences() {
