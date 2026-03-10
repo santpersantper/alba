@@ -1,7 +1,7 @@
 // components/chat/FeedVideoMessage.js
 // Renders a shared Feed video in a chat bubble.
-// Shows a static thumbnail (no VideoView — avoids FlatList rendering issues)
-// with a play icon overlay. Tap → SinglePostScreen.
+// Shows a static thumbnail or a muted VideoView first-frame with a play icon overlay.
+// Tap → Feed tab.
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -13,61 +13,112 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 
-// Tiny in-memory cache shared with PostMessage to avoid double-fetching
+// In-memory cache: postId → enriched feed_video row
+// Keyed as "postId:username" to detect stale "alba_user" entries and re-fetch
 const POST_CACHE = new Map();
+
+function resolveVideoUrl(storagePath) {
+  if (!storagePath) return null;
+  if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) return storagePath;
+  const cleanedPath = storagePath.startsWith("public/")
+    ? storagePath.replace(/^public\//, "")
+    : storagePath;
+  const { data } = supabase.storage.from("public").getPublicUrl(cleanedPath);
+  return data?.publicUrl ?? null;
+}
+
+// Muted VideoView paused at frame 0 — shows first frame as a static thumbnail
+function VideoFirstFrame({ videoUrl, style }) {
+  const player = useVideoPlayer(videoUrl, (p) => { p.muted = true; });
+  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
+}
 
 export default function FeedVideoMessage({
   id,
   isMe,
   time,
   postId,
-  thumbnailUrl,   // pre-stored in messages.thumbnail_url — no fetch needed when present
+  thumbnailUrl,   // optional static thumbnail pre-stored in message content
   onDeleted,
 }) {
   const navigation = useNavigation();
   const { theme, isDark } = useAlbaTheme();
 
   const [post, setPost] = useState(null);
+  const [isActuallyPost, setIsActuallyPost] = useState(false); // true when postId belongs to posts table
   const [menuVisible, setMenuVisible] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Fetch post metadata only if we don't already have the thumbnail or title
+  // Fetch feed video metadata — falls back to posts table for old incorrectly-encoded messages
   useEffect(() => {
-    if (!postId || thumbnailUrl) return; // thumbnailUrl already stored — skip fetch
+    if (!postId) return;
     const cached = POST_CACHE.get(postId);
-    if (cached) { setPost(cached); return; }
+    // Skip cache if username is still the placeholder — always re-fetch to get real username
+    if (cached && cached.username && cached.username !== "alba_user") {
+      setPost(cached);
+      setIsActuallyPost(!!cached._isPost);
+      return;
+    }
 
     let alive = true;
-    supabase
-      .from("posts")
-      .select("id, user, userpicuri, title, thumbnail_url")
-      .eq("id", postId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!alive || !data) return;
-        POST_CACHE.set(postId, data);
-        setPost(data);
-      });
-    return () => { alive = false; };
-  }, [postId, thumbnailUrl]);
+    (async () => {
+      // 1. Try feed_videos first
+      const { data } = await supabase
+        .from("feed_videos")
+        .select("id, user_id, username, caption, video_storage_path")
+        .eq("id", postId)
+        .maybeSingle();
 
-  const effectiveThumbnail = thumbnailUrl || post?.thumbnail_url || null;
-  const username = post?.user || "user";
-  const title = post?.title || "Shared video";
+      if (alive && data) {
+        // In feed_videos, user_id stores the poster's username (not a UUID)
+        const enriched = { ...data, username: data.user_id || data.username || "user" };
+        POST_CACHE.set(postId, enriched);
+        if (alive) { setPost(enriched); setIsActuallyPost(false); }
+        return;
+      }
+
+      // 2. postId not in feed_videos — it's a community post incorrectly encoded as __feed_video__
+      const { data: postData } = await supabase
+        .from("posts")
+        .select("id, user, author_id, title, description")
+        .eq("id", postId)
+        .maybeSingle();
+      if (!alive) return;
+
+      if (postData) {
+        const enriched = {
+          id: postData.id,
+          username: postData.user || "user",
+          caption: postData.title || postData.description || "Shared post",
+          video_storage_path: null,
+          _isPost: true,
+        };
+        POST_CACHE.set(postId, enriched);
+        setPost(enriched);
+        setIsActuallyPost(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [postId]);
+
+  const effectiveThumbnail = thumbnailUrl || null;
+  const videoUrl = post?.video_storage_path ? resolveVideoUrl(post.video_storage_path) : null;
+  const username = post?.username || "alba_user";
+  const title = post?.caption || "Shared video";
 
   const goToPost = () => {
-    navigation.navigate("SinglePost", {
-      postId,
-      postPreview: post
-        ? { ...post, userpicuri: post.userpicuri, postmediauri: null }
-        : null,
-    });
+    if (isActuallyPost) {
+      navigation.navigate("SinglePost", { postId });
+    } else {
+      navigation.navigate("SingleFeedVideo", { postId });
+    }
   };
 
   const runDelete = async () => {
@@ -116,40 +167,33 @@ export default function FeedVideoMessage({
                     cachePolicy="disk"
                     transition={0}
                   />
+                ) : videoUrl ? (
+                  <VideoFirstFrame videoUrl={videoUrl} style={StyleSheet.absoluteFill} />
                 ) : (
-                  // Placeholder when no thumbnail available
                   <View style={styles.thumbPlaceholder}>
-                    <Feather name="film" size={32} color="rgba(255,255,255,0.3)" />
+                    <Feather name={isActuallyPost ? "file-text" : "film"} size={32} color="rgba(255,255,255,0.3)" />
                   </View>
                 )}
-                {/* Subtle dark overlay so play button is always visible */}
+                {/* Subtle dark overlay */}
                 <View style={styles.thumbOverlay} />
-                {/* Play button */}
-                <View style={styles.playWrap}>
-                  <View style={styles.playCircle}>
-                    <Feather name="play" size={22} color="#fff" style={{ paddingLeft: 3 }} />
+                {/* Play button — only shown for real videos, not community posts */}
+                {!isActuallyPost && (
+                  <View style={styles.playWrap}>
+                    <View style={styles.playCircle}>
+                      <Feather name="play" size={22} color="#fff" style={{ paddingLeft: 3 }} />
+                    </View>
                   </View>
-                </View>
-                {/* "Video" pill badge */}
+                )}
+                {/* Type pill badge */}
                 <View style={styles.badge}>
-                  <Feather name="film" size={10} color="#fff" style={{ marginRight: 3 }} />
-                  <Text style={styles.badgeText}>Video</Text>
+                  <Feather name={isActuallyPost ? "file-text" : "film"} size={10} color="#fff" style={{ marginRight: 3 }} />
+                  <Text style={styles.badgeText}>{isActuallyPost ? "Post" : "Video"}</Text>
                 </View>
               </View>
 
               {/* Footer: avatar + username + title */}
               <View style={styles.footer}>
-                {post?.userpicuri ? (
-                  <ExpoImage
-                    source={{ uri: post.userpicuri }}
-                    style={[styles.avatar, { backgroundColor: isDark ? "#2A2F38" : "#E5ECF4" }]}
-                    contentFit="cover"
-                    cachePolicy="disk"
-                    transition={0}
-                  />
-                ) : (
-                  <View style={[styles.avatar, { backgroundColor: isDark ? "#2A2F38" : "#E5ECF4" }]} />
-                )}
+                <View style={[styles.avatar, { backgroundColor: isDark ? "#2A2F38" : "#E5ECF4" }]} />
                 <View style={{ flex: 1 }}>
                   <Text
                     style={[styles.handle, { color: isDark ? "#C1CAD6" : "#888" }]}

@@ -14,7 +14,7 @@ import { supabase } from "../../lib/supabase";
 import ShareMenu from "../ShareMenu";
 import { useAlbaTheme } from "../../theme/ThemeContext"; // ✅ NEW
 
-export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName }) {
+export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick }) {
   const { theme, isDark } = useAlbaTheme(); // ✅ NEW
 
   const [menuVisible, setMenuVisible] = useState(false);
@@ -63,6 +63,22 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
   const openForward = () => {
     setMenuVisible(false);
     setShareVisible(true);
+  };
+
+  const openKick = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      "Remove from group",
+      `Remove @${senderUsername} from this group?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => onKick?.(senderUsername),
+        },
+      ]
+    );
   };
 
   // ✅ requested: other people's bubbles use theme.gray on dark mode
@@ -131,6 +147,12 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
           {isMe && (
             <TouchableOpacity style={styles.menuItem} onPress={openForward}>
               <Text style={styles.menuText}>Forward</Text>
+            </TouchableOpacity>
+          )}
+
+          {isAdmin && !isMe && onKick && senderUsername && (
+            <TouchableOpacity style={styles.menuItem} onPress={openKick}>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Remove from group</Text>
             </TouchableOpacity>
           )}
 

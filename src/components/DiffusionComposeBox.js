@@ -56,6 +56,10 @@ import {
 } from "@stripe/stripe-react-native";
 import Constants from "expo-constants";
 
+// ─── TESTING: set to true to skip Stripe payment for diffusion messages ───
+const PAYMENT_BYPASS = false;
+// ──────────────────────────────────────────────────────────────────────────
+
 const BLUE = "#0077CC";
 const API_URL =
   Constants.expoConfig?.extra?.expoPublic?.API_URL ?? "http://localhost:3000";
@@ -227,7 +231,9 @@ export default function DiffusionComposeBox({
         },
         () => loadReceipts(messageId)
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (err) console.warn("[DiffusionComposeBox realtime] error:", err.message);
+      });
   };
 
   const startExpiryTimer = (expiresAt) => {
@@ -318,47 +324,50 @@ export default function DiffusionComposeBox({
       const senderAvatar = profile?.avatar_url || null;
 
       // 3. Process payment via Stripe (€1.00 per message)
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token || "";
-      const payRes = await fetch(`${API_URL}/create-payment-intent/diffusion-message`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body: JSON.stringify({ userId: currentUserId, radiusKm: prefs.diffusionRadiusKm }),
-      });
-      const payJson = await payRes.json();
-      if (!payRes.ok || !payJson.clientSecret)
-        throw new Error(payJson.error || "Payment setup failed. Please try again.");
-
-      const clientSecret = payJson.clientSecret;
-      const paymentIntentId = clientSecret.split("_secret_")[0];
-
-      const platformPayAvailable = await isPlatformPaySupported().catch(() => false);
-      if (platformPayAvailable) {
-        const { error: payError } = await confirmPlatformPayPayment(clientSecret, {
-          applePay: {
-            cartItems: [{ label: "Diffusion Message", amount: "1.00", paymentType: "Immediate" }],
-            merchantCountryCode: "IT",
-            currencyCode: "EUR",
+      let paymentIntentId = "bypassed-for-testing";
+      if (!PAYMENT_BYPASS) {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token || "";
+        const payRes = await fetch(`${API_URL}/create-payment-intent/diffusion-message`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
           },
-          googlePay: { merchantCountryCode: "IT", currencyCode: "EUR", testEnv: true },
+          body: JSON.stringify({ userId: currentUserId, radiusKm: prefs.diffusionRadiusKm }),
         });
-        if (payError?.code === "Canceled") { setSenderMode("compose"); return; }
-        if (payError) throw new Error("Payment failed. Please try again.");
-      } else {
-        const { error: initError } = await initPaymentSheet({
-          paymentIntentClientSecret: clientSecret,
-          merchantDisplayName: "Alba",
-        });
-        if (initError) throw new Error("Payment setup failed.");
-        const { error: presentError } = await presentPaymentSheet();
-        if (presentError?.code === "Canceled") { setSenderMode("compose"); return; }
-        if (presentError) throw new Error("Payment failed. Please try again.");
+        const payJson = await payRes.json();
+        if (!payRes.ok || !payJson.clientSecret)
+          throw new Error(payJson.error || "Payment setup failed. Please try again.");
+
+        const clientSecret = payJson.clientSecret;
+        paymentIntentId = clientSecret.split("_secret_")[0];
+
+        const platformPayAvailable = await isPlatformPaySupported().catch(() => false);
+        if (platformPayAvailable) {
+          const { error: payError } = await confirmPlatformPayPayment(clientSecret, {
+            applePay: {
+              cartItems: [{ label: "Diffusion Message", amount: "1.00", paymentType: "Immediate" }],
+              merchantCountryCode: "IT",
+              currencyCode: "EUR",
+            },
+            googlePay: { merchantCountryCode: "IT", currencyCode: "EUR", testEnv: true },
+          });
+          if (payError?.code === "Canceled") { setSenderMode("compose"); return; }
+          if (payError) throw new Error("Payment failed. Please try again.");
+        } else {
+          const { error: initError } = await initPaymentSheet({
+            paymentIntentClientSecret: clientSecret,
+            merchantDisplayName: "Alba",
+          });
+          if (initError) throw new Error("Payment setup failed.");
+          const { error: presentError } = await presentPaymentSheet();
+          if (presentError?.code === "Canceled") { setSenderMode("compose"); return; }
+          if (presentError) throw new Error("Payment failed. Please try again.");
+        }
       }
 
-      // 4. Insert diffusion_message with real payment intent ID
+      // 4. Insert diffusion_message
       const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
       const { data: msgData, error: msgErr } = await supabase
         .from("diffusion_messages")
@@ -381,9 +390,17 @@ export default function DiffusionComposeBox({
 
       if (msgErr) throw msgErr;
 
-      // 5. Upload media after record is created (so we have the ID for the storage key)
+      // 5. Upload media after record is created (so we have the ID for the storage key).
+      //    If the upload fails, delete the message record to avoid orphaned rows.
       if (media) {
-        const uploaded = await uploadDiffusionMedia({ uri: media.uri, messageId: msgData.id });
+        let uploaded;
+        try {
+          uploaded = await uploadDiffusionMedia({ uri: media.uri, messageId: msgData.id });
+        } catch (uploadErr) {
+          // Clean up the orphaned message record before re-throwing
+          await supabase.from("diffusion_messages").delete().eq("id", msgData.id).catch(() => {});
+          throw uploadErr;
+        }
         await supabase
           .from("diffusion_messages")
           .update({ media_url: uploaded.url, media_type: uploaded.type })

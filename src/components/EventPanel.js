@@ -1,7 +1,7 @@
-// EventPanel.js — same aesthetics, new behavior
+// EventPanel.js
 import React, { useState, useRef, useEffect } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 
@@ -16,27 +16,23 @@ const CheckboxRow = ({ label, checked, onToggle, style, theme, isDark }) => (
         styles.checkboxBox,
         {
           backgroundColor: isDark ? "#2B2B2B" : "#fff",
-          borderColor: isDark ? "#FFFFFF" : "#B8B8B8",
+          borderColor: isDark ? "#555" : "#C8C8C8",
         },
         checked && styles.checkboxBoxChecked,
       ]}
     >
-      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
+      {checked && <Feather name="check" size={12} color="#fff" />}
     </View>
-    <Text
-      style={[
-        styles.checkboxLabel,
-        { color: theme.text },
-      ]}
-    >
-      {label}
-    </Text>
+    <Text style={[styles.checkboxLabel, { color: theme.text }]}>{label}</Text>
   </TouchableOpacity>
 );
 
 export default function EventPanel({ onState }) {
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
+
+  const inputBg = isDark ? "#1E1E1E" : "#FAFAFA";
+  const borderColor = isDark ? "#444" : "#E0E0E0";
 
   const [enableGroupChat, setEnableGroupChat] = useState(true);
   const [allowTicketing, setAllowTicketing] = useState(true);
@@ -60,7 +56,6 @@ export default function EventPanel({ onState }) {
 
   const [requiredBuyerInfo, setRequiredBuyerInfo] = useState("");
 
-  // NEW: extra actions
   const [allowSubgroups, setAllowSubgroups] = useState(false);
   const [allowInvites, setAllowInvites] = useState(false);
 
@@ -85,12 +80,7 @@ export default function EventPanel({ onState }) {
   ]);
 
   return (
-    <View
-      style={[
-        styles.panel,
-        { backgroundColor: theme.backgroundColor },
-      ]}
-    >
+    <View style={[styles.panel, { backgroundColor: theme.background }]}>
       <CheckboxRow
         label={t("event_checkbox_group_chat")}
         checked={enableGroupChat}
@@ -123,21 +113,13 @@ export default function EventPanel({ onState }) {
               <View key={ticket.id} style={styles.ticketBlock}>
                 {/* Row 1: name + free + delete */}
                 <View style={styles.ticketRow}>
-                  <View
-                    style={[
-                      styles.ticketNameWrap,
-                      {
-                        backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                        borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
-                      },
-                    ]}
-                  >
+                  <View style={[styles.inputWrap, { flex: 1, borderColor, backgroundColor: inputBg }]}>
                     <TextInput
                       value={ticket.name}
                       onChangeText={(v) => update(ticket.id, { name: v })}
                       placeholder={ticketPlaceholder}
-                      placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                      style={[styles.ticketName, { color: theme.text }]}
+                      placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                      style={[styles.input, { color: theme.text }]}
                     />
                   </View>
 
@@ -148,7 +130,7 @@ export default function EventPanel({ onState }) {
                       const nextFree = !ticket.free;
                       update(ticket.id, { free: nextFree, cost: nextFree ? "" : ticket.cost });
                     }}
-                    style={{ marginLeft: 12, marginRight: 4 }}
+                    style={{ marginLeft: 10 }}
                     theme={theme}
                     isDark={isDark}
                   />
@@ -159,37 +141,35 @@ export default function EventPanel({ onState }) {
                       style={styles.deleteBtn}
                       hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                     >
-                      <Ionicons name="close" size={18} color={isDark ? "#D1D5DB" : "#777"} />
+                      <Feather name="x" size={16} color={isDark ? "#D1D5DB" : "#999"} />
                     </TouchableOpacity>
                   )}
                 </View>
 
                 {/* Row 2: notes (flex) + cost */}
                 <View style={styles.notesRow}>
-                  <TextInput
-                    value={ticket.notes}
-                    onChangeText={(v) => update(ticket.id, { notes: v })}
-                    placeholder="Notes (optional)"
-                    placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                    style={[
-                      styles.notesInput,
-                      {
-                        color: theme.text,
-                        borderColor: isDark ? "#555" : "#D9D9D9",
-                        backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                      },
-                    ]}
-                  />
+                  <View style={[styles.inputWrap, { flex: 1, borderColor, backgroundColor: inputBg }]}>
+                    <TextInput
+                      value={ticket.notes}
+                      onChangeText={(v) => update(ticket.id, { notes: v })}
+                      placeholder="Notes (optional)"
+                      placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                      style={[styles.input, { color: theme.text }]}
+                    />
+                  </View>
                   <Text style={[styles.costLabel, { color: theme.text }]}>
                     {t("event_cost_label")}
                   </Text>
                   <View
                     style={[
-                      styles.costBox,
+                      styles.costWrap,
                       {
                         borderColor: costDisabled
-                          ? isDark ? "#555C69" : "#E0E0E0"
-                          : isDark ? "#FFFFFF" : "#CFCFCF",
+                          ? isDark ? "#3A3A3A" : "#E8E8E8"
+                          : isDark ? "#555" : "#CFCFCF",
+                        backgroundColor: costDisabled
+                          ? isDark ? "#1A1A1A" : "#F5F5F5"
+                          : inputBg,
                       },
                     ]}
                     pointerEvents={costDisabled ? "none" : "auto"}
@@ -214,55 +194,33 @@ export default function EventPanel({ onState }) {
 
           {/* Required buyer info */}
           <View style={styles.requiredInfoSection}>
-            <Text
-              style={[
-                styles.requiredInfoTitle,
-                { color: theme.text },
-              ]}
-            >
+            <Text style={[styles.sectionLabel, { color: isDark ? "#8C96A5" : "#888" }]}>
               {t("event_required_info_title")}
             </Text>
-            <View
-              style={[
-                styles.requiredInfoBox,
-                {
-                  backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                  borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
-                },
-              ]}
-            >
+            <View style={[styles.inputWrap, { borderColor, backgroundColor: inputBg }]}>
               <TextInput
                 value={requiredBuyerInfo}
                 onChangeText={setRequiredBuyerInfo}
                 placeholder={t("event_required_info_placeholder")}
-                placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                style={[
-                  styles.requiredInfoInput,
-                  { color: theme.text },
-                ]}
+                placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                style={[styles.input, { color: theme.text, minHeight: 60, textAlignVertical: "top" }]}
                 multiline
               />
             </View>
           </View>
 
           <TouchableOpacity style={styles.addBtn} onPress={addRow}>
-            <Text style={styles.addBtnText}>
-              {t("event_add_ticket_button")}
-            </Text>
+            <Feather name="plus" size={15} color="#fff" style={{ marginRight: 6 }} />
+            <Text style={styles.addBtnText}>{t("event_add_ticket_button")}</Text>
           </TouchableOpacity>
         </>
       )}
 
-      {/* Select actions: ONLY the two new toggles, same look */}
-      <Text
-        style={[
-          styles.actionsTitle,
-          { color: theme.text },
-        ]}
-      >
+      {/* Actions section */}
+      <Text style={[styles.sectionLabel, { color: isDark ? "#8C96A5" : "#888", marginTop: 18 }]}>
         {t("event_actions_title")}
       </Text>
-      <View style={{ marginTop: 8 }}>
+      <View>
         <CheckboxRow
           label={t("event_action_allow_subgroups")}
           checked={allowSubgroups}
@@ -286,9 +244,16 @@ export default function EventPanel({ onState }) {
 const styles = StyleSheet.create({
   panel: {
     borderRadius: 12,
-    padding: 14,
+    paddingTop: 14,
     marginTop: 12,
   },
+
+  sectionLabel: {
+    fontFamily: "PoppinsBold",
+    fontSize: 10,
+    marginBottom: 8,
+  },
+
   checkboxRow: { flexDirection: "row", alignItems: "center" },
   checkboxBox: {
     width: 18,
@@ -299,100 +264,76 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 8,
   },
-  checkboxBoxChecked: { backgroundColor: "#3D8BFF", borderColor: "#3D8BFF" },
+  checkboxBoxChecked: { backgroundColor: "#2F91FF", borderColor: "#2F91FF" },
   checkboxLabel: { fontSize: 14, fontFamily: "Poppins" },
 
-  ticketBlock: { marginTop: 12 },
+  ticketBlock: { marginTop: 10 },
   ticketRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 8,
   },
   notesRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 6,
+    marginTop: 8,
+    gap: 8,
   },
-  notesInput: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    fontSize: 13,
-    fontFamily: "Poppins",
-  },
-  ticketNameWrap: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+
+  inputWrap: {
+    borderWidth: 1,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    height: 40,
+    paddingVertical: 8,
     justifyContent: "center",
   },
-  ticketName: { fontSize: 14, fontFamily: "Poppins" },
+  input: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+  },
 
   costLabel: {
-    fontSize: 14,
-    marginLeft: 6,
-    marginRight: 6,
+    fontSize: 13,
     fontFamily: "Poppins",
+    flexShrink: 0,
   },
-  costBox: {
-    width: 40,
-    height: 34,
-    borderBottomWidth: 1,
-    justifyContent: "center",
+  costWrap: {
+    width: 52,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    alignItems: "center",
   },
   costInput: {
     fontSize: 14,
-    paddingVertical: 4,
     fontFamily: "Poppins",
+    width: "100%",
+    textAlign: "center",
   },
 
   deleteBtn: {
-    marginLeft: 6,
     justifyContent: "center",
     alignItems: "center",
+    padding: 4,
   },
 
   requiredInfoSection: { marginTop: 14 },
-  requiredInfoTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 6,
-    fontFamily: "Poppins",
-  },
-  requiredInfoBox: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minHeight: 40,
-    justifyContent: "center",
-  },
-  requiredInfoInput: {
-    fontSize: 14,
-    fontFamily: "Poppins",
-  },
 
   addBtn: {
+    flexDirection: "row",
     alignSelf: "center",
-    backgroundColor: "#59A7FF",
+    alignItems: "center",
+    backgroundColor: "#2F91FF",
     paddingVertical: 10,
     paddingHorizontal: 18,
-    borderRadius: 8,
+    borderRadius: 10,
     marginTop: 14,
   },
   addBtnText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "600",
-    fontFamily: "Poppins",
-  },
-  actionsTitle: {
-    marginTop: 12,
-    fontSize: 16,
-    fontWeight: "700",
     fontFamily: "Poppins",
   },
 });

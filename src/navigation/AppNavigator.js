@@ -19,6 +19,7 @@ import ProfileSetupModal from "../components/ProfileSetupModal";
 
 // detail screens
 import CommunityScreen from "../screens/CommunityScreen";
+import FeedScreen from "../screens/FeedScreen";
 import GroupChatScreen from "../screens/GroupChatScreen";
 import ChatListScreen from "../screens/ChatListScreen";
 import ProfileScreen from "../screens/ProfileScreen";
@@ -37,7 +38,8 @@ import PastEventsScreen from "../screens/PastEventsScreen";
 import MyTicketsScreen from "../screens/MyTicketsScreen";
 import AdPublisherScreen from "../screens/AdPublisherScreen";
 import SavedVideosScreen from "../screens/SavedVideosScreen";
-
+import SingleFeedVideoScreen from "../screens/SingleFeedVideoScreen";
+import { registerForPushNotifications, savePushToken, addNotificationTapListener } from "../lib/notifications";
 
 const Stack = createNativeStackNavigator();
 
@@ -79,6 +81,8 @@ function MainNavigator() {
       />
       <Stack.Screen name="AdPublisher" component={AdPublisherScreen} />
       <Stack.Screen name="SavedVideos" component={SavedVideosScreen} />
+      <Stack.Screen name="SingleFeedVideo" component={SingleFeedVideoScreen} />
+      <Stack.Screen name="Feed" component={FeedScreen} />
     </Stack.Navigator>
   );
 }
@@ -203,6 +207,22 @@ export default function AppNavigator() {
 
     return () => sub?.unsubscribe?.();
   }, []);
+
+  // Register push token when user signs in
+  useEffect(() => {
+    if (!signedIn) return;
+    (async () => {
+      const token = await registerForPushNotifications();
+      if (token) await savePushToken(token);
+    })();
+
+    // Handle notification taps — navigate to relevant screen
+    const unsub = addNotificationTapListener((response) => {
+      const data = response.notification.request.content.data;
+      console.log("[Push] notification tapped:", data);
+    });
+    return unsub;
+  }, [signedIn]);
 
   const handleProfileComplete = () => {
     setNeedsProfileSetup(false);

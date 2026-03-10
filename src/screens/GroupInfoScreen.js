@@ -129,6 +129,7 @@ export default function GroupInfoScreen() {
   // pending member approvals
   const [requireApproval, setRequireApproval] = useState(false);
   const [pendingMembers, setPendingMembers] = useState([]);
+  const [reviewLinks, setReviewLinks] = useState(false);
 
   // exit/report
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -191,7 +192,7 @@ export default function GroupInfoScreen() {
       const { data, error } = await supabase
         .from("groups")
         .select(
-          "id, groupname, group_desc, group_pic_link, members, group_admin, require_approval, pending_members"
+          "id, groupname, group_desc, group_pic_link, members, group_admin, require_approval, pending_members, review_links"
         )
         .eq("groupname", resolvedGroupName)
         .maybeSingle();
@@ -213,6 +214,7 @@ export default function GroupInfoScreen() {
       setMembersUsernames(Array.isArray(data.members) ? data.members : []);
       setRequireApproval(!!data.require_approval);
       setPendingMembers(Array.isArray(data.pending_members) ? data.pending_members : []);
+      setReviewLinks(!!data.review_links);
     } catch (e) {
       console.error("loadGroup unexpected:", e);
     }
@@ -531,13 +533,38 @@ export default function GroupInfoScreen() {
         return;
       }
 
-      console.log("DEBUG make admin, nextAdmins =", nextAdmins);
-
       setGroupAdmins(nextAdmins);
       setMemberMenuVisible(false);
     } catch (e) {
       console.error("make admin unexpected", e);
       Alert.alert("Error", "Could not make admin.");
+    }
+  };
+
+  const handleRemoveAdmin = async () => {
+    if (!selectedMember || !groupId) return;
+    const uname = selectedMember.username;
+    if (!uname) return;
+
+    const nextAdmins = (groupAdmins || []).filter((u) => u !== uname);
+
+    try {
+      const { error } = await supabase
+        .from("groups")
+        .update({ group_admin: nextAdmins })
+        .eq("id", groupId);
+
+      if (error) {
+        console.error("remove admin error", error);
+        Alert.alert("Error", "Could not remove admin.");
+        return;
+      }
+
+      setGroupAdmins(nextAdmins);
+      setMemberMenuVisible(false);
+    } catch (e) {
+      console.error("remove admin unexpected", e);
+      Alert.alert("Error", "Could not remove admin.");
     }
   };
 
@@ -730,9 +757,11 @@ export default function GroupInfoScreen() {
       item.id?.toString() || item.username || Math.random().toString();
 
     return (
-      <View
+      <TouchableOpacity
         key={key}
         style={[styles.memberRow, { borderBottomColor: theme.border }]}
+        activeOpacity={0.7}
+        onPress={() => username && navigation.navigate("Profile", { username })}
       >
         {item.avatar_url ? (
           <Image source={{ uri: item.avatar_url }} style={styles.memberAvatar} />
@@ -782,7 +811,7 @@ export default function GroupInfoScreen() {
             />
           </TouchableOpacity>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -1152,6 +1181,24 @@ export default function GroupInfoScreen() {
                 </View>
               </TouchableOpacity>
 
+              <TouchableOpacity
+                style={styles.approvalToggleRow}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  const next = !reviewLinks;
+                  setReviewLinks(next);
+                  await supabase.from("groups").update({ review_links: next }).eq("id", groupId);
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>Review messages with links</Text>
+                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>Members are warned when sending messages containing links</Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: reviewLinks ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: reviewLinks ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+
               {pendingMembers.length > 0 && (
                 <View style={styles.pendingList}>
                   <Text style={[styles.pendingTitle, { color: theme.text }]}>Pending requests ({pendingMembers.length})</Text>
@@ -1311,14 +1358,25 @@ export default function GroupInfoScreen() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.memberMenuItem}
-              onPress={handleMakeAdmin}
-            >
-              <Text style={[styles.memberMenuText, { color: theme.text }]}>
-                {t("group_make_admin") || "Make admin"}
-              </Text>
-            </TouchableOpacity>
+            {groupAdmins?.includes(selectedMember?.username) ? (
+              <TouchableOpacity
+                style={styles.memberMenuItem}
+                onPress={handleRemoveAdmin}
+              >
+                <Text style={[styles.memberMenuText, { color: theme.text }]}>
+                  Remove admin
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.memberMenuItem}
+                onPress={handleMakeAdmin}
+              >
+                <Text style={[styles.memberMenuText, { color: theme.text }]}>
+                  {t("group_make_admin") || "Make admin"}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={styles.memberMenuItem}

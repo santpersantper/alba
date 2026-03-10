@@ -4,7 +4,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as Crypto from "expo-crypto";
 
 /* ---------------- cache keys ---------------- */
-const CACHE_VER = 2; // ✅ bump version
+const CACHE_VER = 3; // bumped: is_verified field added
 const CACHE_MAX_AGE_MS = 1000 * 60 * 5; // 5 min — keeps profile text (name, username) fresh
 
 const meKey = () => `alba_profile_me_v${CACHE_VER}`;
@@ -35,6 +35,8 @@ const normalizeProfile = (row) => {
     // ✅ local cached file paths (may be null)
     avatar_local: row.avatar_local ?? null,
     cover_local: row.cover_local ?? null,
+
+    is_verified: row.is_verified ?? false,
   };
 };
 
@@ -126,7 +128,7 @@ export async function fetchProfileRowById(userId) {
   if (!userId) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, avatar_url, cover_url, bio")
+    .select("id, username, name, city, avatar_url, cover_url, bio, is_verified")
     .eq("id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -138,7 +140,7 @@ export async function fetchProfileRowByUsername(username) {
   if (!uname) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, avatar_url, cover_url, bio")
+    .select("id, username, name, city, avatar_url, cover_url, bio, is_verified")
     .eq("username", uname)
     .maybeSingle();
   if (error) throw error;

@@ -29,6 +29,7 @@ import {
 import { VideoView, useVideoPlayer } from "expo-video";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import ShareMenu from "../components/ShareMenu";
+import OnboardingOverlay from "../components/OnboardingOverlay";
 import { useFonts } from "expo-font";
 import {
   SafeAreaView,
@@ -145,7 +146,14 @@ function FeedItem({
       </Text>
     );
   } else if (showFullCaption) {
-    captionContent = <Text style={styles.captionText}>{item.caption}</Text>;
+    captionContent = (
+      <>
+        <Text style={styles.captionText}>{item.caption}</Text>
+        <Text style={styles.readMoreText} onPress={() => setShowFullCaption(false)}>
+          {t("caption_read_less") || "Read less"}
+        </Text>
+      </>
+    );
   } else {
     captionContent = (
       <>
@@ -499,6 +507,7 @@ export default function FeedScreen() {
         clearTimeout(toastTimeoutRef.current);
       }
       setToastMessage(msg);
+      toastOpacity.stopAnimation();
       Animated.timing(toastOpacity, {
         toValue: 1,
         duration: 160,
@@ -688,16 +697,17 @@ export default function FeedScreen() {
 
           if (!isActive) return;
 
-          const rawMapped =
-            (rows || [])
-              .filter((row) => !blocked.includes(row.user_id))
+          // In feed_videos, user_id stores the poster's username (not a UUID)
+          const visibleRows = (rows || []).filter((row) => !blocked.includes(row.user_id));
+
+          const rawMapped = visibleRows
               .map((row) => {
                 const videoUrl = resolveVideoUrl(row.video_storage_path);
                 if (!videoUrl) return null;
                 return {
                   id: String(row.id),
                   userId: row.user_id,
-                  username: row.username || "alba_user",
+                  username: row.user_id || row.username || "user",
                   caption: row.caption || "",
                   videoUrl,
                   canDelete: !!user?.id && row.user_id === user.id,
@@ -956,6 +966,7 @@ export default function FeedScreen() {
           reported_by_id: meId,
           reported_by_username: meUsername,
           reason: text,
+          poster_user_id: reportTargetUserId,
           context: {
             video_id: item?.id,
             video_caption: item?.caption,
@@ -1076,6 +1087,7 @@ export default function FeedScreen() {
             visible={shareVisible}
             onClose={() => setShareVisible(false)}
             postId={currentItem.id}
+            isVideo={true}
           />
         )}
       </View>
@@ -1189,6 +1201,8 @@ export default function FeedScreen() {
           <Text style={styles.toastText}>{toastMessage}</Text>
         </Animated.View>
       ) : null}
+
+      <OnboardingOverlay screenKey="feed" />
     </SafeAreaView>
   );
 }

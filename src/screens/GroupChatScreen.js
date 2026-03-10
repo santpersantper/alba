@@ -17,14 +17,16 @@ import {
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
+import { VideoView, useVideoPlayer } from "expo-video";
 import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
-import { uploadChatImage } from "../lib/uploadImage";
+import { uploadChatMedia } from "../lib/uploadImage";
 import { markChatReadInCache } from "../lib/chatListCache";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { Image as ExpoImage } from "expo-image";
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
 import PostMessage from "../components/chat/PostMessage";
@@ -144,9 +146,17 @@ const subscribeChatInserts = (chatId, onInsert) => {
       },
       (payload) => onInsert?.(payload.new)
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (err) console.warn("[GroupChat realtime] error:", err.message);
+    });
   return () => supabase.removeChannel(channel);
 };
+
+/* Shows first frame of a local or remote video as a static thumbnail */
+function PendingVideoThumb({ uri, style }) {
+  const player = useVideoPlayer(uri, (p) => { p.muted = true; });
+  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
+}
 
 /* ---------------- Main screen ---------------- */
 export default function GroupChatScreen({ navigation, route }) {
@@ -170,6 +180,11 @@ export default function GroupChatScreen({ navigation, route }) {
   const [membersLine, setMembersLine] = useState("");
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const isAdminRef = useRef(false);
+  const [reviewLinks, setReviewLinks] = useState(false);
+  const [kickedModal, setKickedModal] = useState(false);
+  const [deletedModal, setDeletedModal] = useState(false);
+  const [promotedModal, setPromotedModal] = useState(false);
 
   const [text, setText] = useState("");
   const [sendingMedia, setSendingMedia] = useState(false);
@@ -185,6 +200,21 @@ export default function GroupChatScreen({ navigation, route }) {
   const locationSearchTimeout = useRef(null);
 
   const onPressBack = () => navigation?.goBack?.();
+
+  const handleKick = useCallback(async (username) => {
+    if (!chatId || !username) return;
+    try {
+      const { data: groupRow } = await supabase
+        .from("groups")
+        .select("members")
+        .eq("id", chatId)
+        .maybeSingle();
+      const newMembers = (groupRow?.members || []).filter((m) => m !== username);
+      await supabase.from("groups").update({ members: newMembers }).eq("id", chatId);
+    } catch (e) {
+      Alert.alert("Error", "Could not remove member. Please try again.");
+    }
+  }, [chatId]);
 
   const handleOpenGroupInfo = useCallback(() => {
     navigation.navigate("GroupInfo", { groupId: chatId, groupName });
@@ -336,20 +366,23 @@ export default function GroupChatScreen({ navigation, route }) {
       try {
         const uid = await getUserId();
 
-        // Check if current user is a group admin
+        // Check if current user is a group admin + load review_links
         const { data: groupRow } = await supabase
           .from("groups")
-          .select("group_admin")
+          .select("group_admin, review_links")
           .eq("id", chatId)
           .maybeSingle();
-        if (mounted && groupRow?.group_admin) {
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("username")
-            .eq("id", uid)
-            .maybeSingle();
-          const uname = profile?.username || myUsername;
-          setIsAdmin(Array.isArray(groupRow.group_admin) && groupRow.group_admin.includes(uname));
+        if (mounted && groupRow) {
+          if (groupRow.group_admin) {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("username")
+              .eq("id", uid)
+              .maybeSingle();
+            const uname = profile?.username || myUsername;
+            setIsAdmin(Array.isArray(groupRow.group_admin) && groupRow.group_admin.includes(uname));
+          }
+          setReviewLinks(!!groupRow.review_links);
         }
 
         // 1) instant cache render
@@ -438,6 +471,45 @@ export default function GroupChatScreen({ navigation, route }) {
     return un;
   }, [chatId]);
 
+  // Keep isAdminRef in sync so the subscription callback avoids stale closure
+  useEffect(() => { isAdminRef.current = isAdmin; }, [isAdmin]);
+
+  // Realtime group membership / admin changes
+  useEffect(() => {
+    if (!chatId || !myUsername) return () => {};
+
+    const channel = supabase
+      .channel(`group-meta-${chatId}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "groups", filter: `id=eq.${chatId}` }, (payload) => {
+        const newRow = payload.new;
+        const newMembers = Array.isArray(newRow?.members) ? newRow.members : [];
+        const newAdmins = Array.isArray(newRow?.group_admin) ? newRow.group_admin : [];
+
+        // Kicked out?
+        if (!newMembers.includes(myUsername)) {
+          setKickedModal(true);
+          return;
+        }
+        // Promoted to admin?
+        if (!isAdminRef.current && newAdmins.includes(myUsername)) {
+          setIsAdmin(true);
+          setPromotedModal(true);
+        }
+        // Demoted from admin?
+        if (isAdminRef.current && !newAdmins.includes(myUsername)) {
+          setIsAdmin(false);
+        }
+      })
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "groups", filter: `id=eq.${chatId}` }, () => {
+        setDeletedModal(true);
+      })
+      .subscribe((status, err) => {
+        if (err) console.warn("[GroupChat group-updates realtime] error:", err.message);
+      });
+
+    return () => supabase.removeChannel(channel);
+  }, [chatId, myUsername]);
+
   // Mark read on focus
   useFocusEffect(
     useCallback(() => {
@@ -485,7 +557,7 @@ export default function GroupChatScreen({ navigation, route }) {
 
       try {
         const owner_id = await getUserId();
-        const mediaUrl = await uploadChatImage({ uri, chatId });
+        const mediaUrl = await uploadChatMedia({ uri, chatId });
         const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, owner_id });
 
         const fp = `${row.sent_date}T${row.sent_time}-${row.media_reference}-ins`;
@@ -519,6 +591,47 @@ export default function GroupChatScreen({ navigation, route }) {
     // ── text send ────────────────────────────────────────────────────────────
     const msg = text.trim();
     if (!msg) return;
+
+    // Feature 5: warn if message contains a link and review_links is active
+    const hasLink = /https?:\/\/|www\./i.test(msg);
+    if (hasLink && reviewLinks) {
+      Alert.alert(
+        "Link Review Active",
+        "This group requires admin review for messages containing links. Your message will still be sent.",
+        [{ text: "OK" }]
+      );
+    }
+
+    // Feature 3: cross-group duplicate check (same message to 2 groups within 1 hour)
+    try {
+      const DEDUP_KEY = "alba_group_msg_dedup";
+      const raw = await AsyncStorage.getItem(DEDUP_KEY);
+      const dedupMap = raw ? JSON.parse(raw) : {};
+      const now1h = Date.now() - 60 * 60 * 1000;
+      const msgEntry = dedupMap[msg];
+      if (msgEntry) {
+        // Clean stale entries older than 1 hour
+        const recentSends = msgEntry.filter((e) => e.sentAt > now1h);
+        const sentToOtherGroup = recentSends.find((e) => e.groupId !== chatId);
+        if (sentToOtherGroup) {
+          Alert.alert(
+            "Duplicate Message",
+            "You already sent this exact message to another group in the last hour.",
+            [{ text: "OK" }]
+          );
+          return;
+        }
+        // Add this group to the list
+        dedupMap[msg] = [...recentSends, { groupId: chatId, sentAt: Date.now() }];
+      } else {
+        dedupMap[msg] = [{ groupId: chatId, sentAt: Date.now() }];
+      }
+      // Prune map to avoid unbounded growth (keep only keys with recent sends)
+      for (const key of Object.keys(dedupMap)) {
+        if (!dedupMap[key].some((e) => e.sentAt > now1h)) delete dedupMap[key];
+      }
+      await AsyncStorage.setItem(DEDUP_KEY, JSON.stringify(dedupMap));
+    } catch {}
 
     const now = new Date();
     const minuteKey = makeMinuteKeyFromDate(now);
@@ -643,35 +756,34 @@ export default function GroupChatScreen({ navigation, route }) {
 
   const onPickGallery = useCallback(async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission needed", "Alba needs access to your photos.");
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsMultipleSelection: false,
-      quality: 0.85,
-    });
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs access to your photos."); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: false, quality: 0.85 });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset?.uri) return;
-    setPendingImage({ uri: asset.uri });
+    setPendingImage({ uri: asset.uri, type: "image" });
+  }, []);
+
+  const onPickVideo = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs access to your photos."); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['videos'], allowsMultipleSelection: false });
+    if (res.canceled) return;
+    const asset = res.assets?.[0];
+    if (!asset?.uri) return;
+    setPendingImage({ uri: asset.uri, type: "video" });
   }, []);
 
   const onPickCamera = useCallback(async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission needed", "Alba needs camera access.");
-      return;
-    }
-    const res = await ImagePicker.launchCameraAsync({
-      mediaTypes: 'images',
-      quality: 0.85,
-    });
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs camera access."); return; }
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], quality: 0.85, videoMaxDuration: 15 });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset?.uri) return;
-    setPendingImage({ uri: asset.uri });
+    const ext = asset.uri.split("?")[0].split(".").pop()?.toLowerCase() || "";
+    const isVid = asset.type === "video" || ["mp4","mov","m4v","webm","avi"].includes(ext);
+    setPendingImage({ uri: asset.uri, type: isVid ? "video" : "image" });
   }, []);
 
   const renderItem = ({ item, index }) => {
@@ -692,7 +804,7 @@ export default function GroupChatScreen({ navigation, route }) {
     let body = null;
     switch (item.type) {
       case "text":
-        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} isAdmin={isAdmin} />;
+        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} isAdmin={isAdmin} groupId={chatId} onKick={handleKick} />;
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
@@ -841,6 +953,7 @@ export default function GroupChatScreen({ navigation, route }) {
           onSend={onSend}
           onAttachLocation={() => setLocationModalVisible(true)}
           onPickGallery={onPickGallery}
+          onPickVideo={onPickVideo}
           onPickCamera={onPickCamera}
           pendingImage={pendingImage}
           onClearPending={() => setPendingImage(null)}
@@ -903,7 +1016,11 @@ export default function GroupChatScreen({ navigation, route }) {
                         reported_by_id: reporterId,
                         reported_by_username: myProfile?.username || null,
                         reason: `Group reported: ${groupName}`,
-                        context: { group_name: groupName, chat_id: chatId || null },
+                        context: {
+                          group_name: groupName,
+                          chat_id: chatId || null,
+                          group_id: chatId || null,
+                        },
                       },
                     });
                   } catch {}
@@ -992,6 +1109,60 @@ export default function GroupChatScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
         </Modal>
+        {/* Kicked out modal */}
+        <Modal visible={kickedModal} transparent animationType="fade" onRequestClose={() => {}}>
+          <View style={styles.metaModalOverlay}>
+            <View style={[styles.metaModalCard, { backgroundColor: isDark ? "#1e2530" : "#fff" }]}>
+              <Text style={[styles.metaModalTitle, { color: theme.text }]}>Removed from group</Text>
+              <Text style={[styles.metaModalBody, { color: isDark ? "#aaa" : "#555" }]}>
+                You are no longer a member of this group.
+              </Text>
+              <TouchableOpacity
+                style={styles.metaModalBtn}
+                onPress={() => { setKickedModal(false); navigation.goBack(); }}
+              >
+                <Text style={styles.metaModalBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Group deleted modal */}
+        <Modal visible={deletedModal} transparent animationType="fade" onRequestClose={() => {}}>
+          <View style={styles.metaModalOverlay}>
+            <View style={[styles.metaModalCard, { backgroundColor: isDark ? "#1e2530" : "#fff" }]}>
+              <Text style={[styles.metaModalTitle, { color: theme.text }]}>Group deleted</Text>
+              <Text style={[styles.metaModalBody, { color: isDark ? "#aaa" : "#555" }]}>
+                The group was deleted by the admin.
+              </Text>
+              <TouchableOpacity
+                style={styles.metaModalBtn}
+                onPress={() => { setDeletedModal(false); navigation.goBack(); }}
+              >
+                <Text style={styles.metaModalBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Promoted to admin modal */}
+        <Modal visible={promotedModal} transparent animationType="fade" onRequestClose={() => setPromotedModal(false)}>
+          <View style={styles.metaModalOverlay}>
+            <View style={[styles.metaModalCard, { backgroundColor: isDark ? "#1e2530" : "#fff" }]}>
+              <Text style={[styles.metaModalTitle, { color: theme.text }]}>You're now an admin</Text>
+              <Text style={[styles.metaModalBody, { color: isDark ? "#aaa" : "#555" }]}>
+                You have been made an admin of this group.
+              </Text>
+              <TouchableOpacity
+                style={styles.metaModalBtn}
+                onPress={() => setPromotedModal(false)}
+              >
+                <Text style={styles.metaModalBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
       </SafeAreaView>
     </KeyboardAvoidingView>
   );
@@ -1055,7 +1226,7 @@ function Header({
 }
 
 /* ------------------------- Composer ------------------------ */
-function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery, onPickCamera, pendingImage, onClearPending, sendingMedia, theme, isDark }) {
+function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery, onPickVideo, onPickCamera, pendingImage, onClearPending, sendingMedia, theme, isDark }) {
   const iconColor = isDark ? "#E5E7EB" : "#444";
   return (
     <View
@@ -1074,6 +1245,9 @@ function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery
         <TouchableOpacity onPress={onPickGallery} style={styles.iconBtn} hitSlop={8}>
           <Ionicons name="image-outline" size={22} color={iconColor} />
         </TouchableOpacity>
+        <TouchableOpacity onPress={onPickVideo} style={styles.iconBtn} hitSlop={8}>
+          <Ionicons name="videocam-outline" size={22} color={iconColor} />
+        </TouchableOpacity>
         <TouchableOpacity onPress={onPickCamera} style={styles.iconBtn} hitSlop={8}>
           <Ionicons name="camera-outline" size={22} color={iconColor} />
         </TouchableOpacity>
@@ -1081,7 +1255,11 @@ function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery
 
       {pendingImage ? (
         <View style={styles.pendingWrap}>
-          <Image source={{ uri: pendingImage.uri }} style={styles.pendingThumb} resizeMode="cover" />
+          {pendingImage.type === "video" ? (
+            <PendingVideoThumb uri={pendingImage.uri} style={styles.pendingThumb} />
+          ) : (
+            <Image source={{ uri: pendingImage.uri }} style={styles.pendingThumb} resizeMode="cover" />
+          )}
           <TouchableOpacity style={styles.pendingRemove} onPress={onClearPending} hitSlop={8}>
             <Feather name="x" size={14} color="#fff" />
           </TouchableOpacity>
@@ -1122,6 +1300,12 @@ function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery
 /* --------------------------- Styles ------------------------ */
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  metaModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", alignItems: "center", paddingHorizontal: 32 },
+  metaModalCard: { width: "100%", borderRadius: 16, padding: 24, alignItems: "center" },
+  metaModalTitle: { fontFamily: "PoppinsBold", fontSize: 17, marginBottom: 10, textAlign: "center" },
+  metaModalBody: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", marginBottom: 20, lineHeight: 20 },
+  metaModalBtn: { backgroundColor: "#3D8BFF", borderRadius: 10, paddingVertical: 11, paddingHorizontal: 40 },
+  metaModalBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
   groupMenuOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   groupMenuCard: { borderTopLeftRadius: 18, borderTopRightRadius: 18, paddingTop: 8, paddingBottom: 28, paddingHorizontal: 16 },
   groupMenuTitle: { fontFamily: "PoppinsBold", fontSize: 15, textAlign: "center", paddingVertical: 10, marginBottom: 4 },

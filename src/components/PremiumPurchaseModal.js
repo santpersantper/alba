@@ -17,12 +17,15 @@ import Constants from "expo-constants";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { supabase } from "../lib/supabase";
 
+// ─── TESTING: set to true to skip Stripe and activate features instantly ───
+const PAYMENT_BYPASS = false;
+// ────────────────────────────────────────────────────────────────────────────
+
 // Read payment server URL — env var takes priority, then Expo config, then dev localhost
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL ??
   Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
   "http://localhost:3000";
-console.log("[Payment] module loaded, API_URL =", API_URL);
 
 const mapStripeError = (code) => {
   if (code === "card_declined")
@@ -64,6 +67,13 @@ export default function PremiumPurchaseModal({
     if (loading) return;
     if (!userId) {
       showFeedback("Error", "Login required.");
+      return;
+    }
+
+    // ── Testing bypass: skip Stripe, activate immediately ──
+    if (PAYMENT_BYPASS) {
+      onSuccess();
+      showFeedback("Success", "Feature activated! Enjoy Alba Premium.", onClose);
       return;
     }
 

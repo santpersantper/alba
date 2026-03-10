@@ -1,12 +1,18 @@
 // components/community-settings/AdSettings.js
 import React, { useEffect, useState } from "react";
-import { View, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Linking, Alert } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import ThemedView from "../../theme/ThemedView";
 import ThemedText from "../../theme/ThemedText";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 import { useAlbaLanguage } from "../../theme/LanguageContext";
+import Constants from "expo-constants";
+
+const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
+  "http://localhost:3000";
 
 const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
@@ -17,6 +23,49 @@ export default function AdSettings({ navigation }) {
   const [userId, setUserId] = useState(null);
   const [input, setInput] = useState("");
   const [tags, setTags] = useState([]);
+
+  // Payout state
+  const [payoutStatus, setPayoutStatus] = useState(null); // null | "not_started" | "pending" | "complete"
+  const [payoutLoading, setPayoutLoading] = useState(false);
+
+  const fetchPayoutStatus = async (token) => {
+    try {
+      const res = await fetch(`${API_URL}/connect/status/profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (res.ok) setPayoutStatus(json.status);
+    } catch {
+      // non-critical
+    }
+  };
+
+  const handleSetupPayouts = async () => {
+    if (payoutLoading) return;
+    try {
+      setPayoutLoading(true);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token || "";
+      const res = await fetch(`${API_URL}/connect/onboard/profile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ userId }),
+      });
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error(`Server error (${res.status}) — make sure the payment server is running and up to date.`);
+      }
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to start onboarding");
+      await Linking.openURL(json.url);
+      setTimeout(() => fetchPayoutStatus(token), 3000);
+    } catch (e) {
+      console.warn("Ad payout onboarding error:", e.message);
+      Alert.alert("Error", e.message || "Could not start payout setup. Please try again.");
+    } finally {
+      setPayoutLoading(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -36,6 +85,11 @@ export default function AdSettings({ navigation }) {
 
         if (!mounted || error || !data) return;
         if (Array.isArray(data.ad_tags)) setTags(data.ad_tags);
+
+        // Load payout status
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData?.session?.access_token || "";
+        if (mounted) await fetchPayoutStatus(token);
       } catch (e) {
         console.warn("AdSettings load error", e);
       }
@@ -182,6 +236,60 @@ export default function AdSettings({ navigation }) {
         <Feather name="refresh-ccw" size={13} color="#888" style={{ marginRight: 5 }} />
         <ThemedText style={styles.resetBtnText}>Reset ad preference settings</ThemedText>
       </TouchableOpacity>
+
+      {/* ── Product-sale payout setup ── */}
+      <View style={styles.payoutSection}>
+        <ThemedText style={[styles.payoutTitle, { color: theme.text }]}>
+          Product sale payouts
+        </ThemedText>
+        <ThemedText style={[styles.payoutHelper, { color: theme.secondaryText || "#888" }]}>
+          {payoutStatus === "complete"
+            ? "Your bank account is connected. Payments from product sales will be transferred to you automatically, minus a small platform fee."
+            : payoutStatus === "pending"
+            ? "Onboarding started — please complete verification on Stripe to receive payments."
+            : "If you sell products directly from your ads on Alba, connect a bank account here to receive payments. Alba collects a small platform fee per transaction; the rest goes straight to you."}
+        </ThemedText>
+        <View style={styles.payoutRow}>
+          <View
+            style={[
+              styles.payoutBadge,
+              {
+                backgroundColor:
+                  payoutStatus === "complete"
+                    ? "#D1FAE5"
+                    : payoutStatus === "pending"
+                    ? "#FEF3C7"
+                    : isDark ? "#2A2A2A" : "#F3F4F6",
+              },
+            ]}
+          >
+            <Feather
+              name={payoutStatus === "complete" ? "check-circle" : payoutStatus === "pending" ? "clock" : "alert-circle"}
+              size={13}
+              color={payoutStatus === "complete" ? "#059669" : payoutStatus === "pending" ? "#D97706" : "#9CA3AF"}
+              style={{ marginRight: 4 }}
+            />
+            <ThemedText style={{ fontSize: 12, fontFamily: "Poppins", color: payoutStatus === "complete" ? "#059669" : payoutStatus === "pending" ? "#D97706" : "#9CA3AF" }}>
+              {payoutStatus === "complete" ? "Connected" : payoutStatus === "pending" ? "Pending verification" : "Not set up"}
+            </ThemedText>
+          </View>
+          {payoutStatus !== "complete" && (
+            <TouchableOpacity
+              style={styles.payoutBtn}
+              onPress={handleSetupPayouts}
+              disabled={payoutLoading}
+              activeOpacity={0.8}
+            >
+              {payoutLoading
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <ThemedText style={styles.payoutBtnText}>
+                    {payoutStatus === "pending" ? "Continue setup" : "Set up payouts"}
+                  </ThemedText>
+              }
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
     </ThemedView>
   );
 }
@@ -209,4 +317,11 @@ const styles = StyleSheet.create({
   tagText: { color: "#FFFFFF", fontSize: 13, fontFamily: "Poppins" },
   resetBtn: { flexDirection: "row", alignItems: "center", marginTop: 14, alignSelf: "flex-start" },
   resetBtnText: { fontFamily: "Poppins", fontSize: 13, color: "#888" },
+  payoutSection: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  payoutTitle: { fontFamily: "Poppins", fontWeight: "700", fontSize: 14, marginBottom: 4 },
+  payoutHelper: { fontFamily: "Poppins", fontSize: 12, lineHeight: 17, marginBottom: 10 },
+  payoutRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  payoutBadge: { flexDirection: "row", alignItems: "center", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  payoutBtn: { backgroundColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, minWidth: 44, alignItems: "center" },
+  payoutBtnText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 13 },
 });

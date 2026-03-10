@@ -8,6 +8,12 @@ const mem = {
   ts: 0,
 };
 
+// Client-side guard: IDs of chats the user has deleted.
+// Filters threads from ALL cache reads and DB fetches so a deleted chat
+// never reappears, even if the DB DELETE was blocked by RLS or a realtime
+// subscription triggers a re-fetch before the delete commits.
+const deletedIds = new Set();
+
 const CACHE_VERSION = 1;
 const CACHE_TTL_MS = 1000 * 60 * 10; // 10 min
 
@@ -124,6 +130,16 @@ export async function getCachedChatListData(uid) {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
 
+    // Filter out locally-deleted chats/groups before returning
+    if (deletedIds.size > 0) {
+      if (parsed?.threads) {
+        parsed.threads = parsed.threads.filter((t) => !deletedIds.has(String(t.chat_id)));
+      }
+      if (parsed?.groupMap) {
+        for (const id of deletedIds) delete parsed.groupMap[id];
+      }
+    }
+
     // stale is still ok to *render instantly*; refresh will fix
     mem.uid = uid;
     mem.data = parsed;
@@ -144,7 +160,11 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
 
   const me = await fetchMe(uid);
 
-  const threads = await fetchThreads(uid, limit);
+  let threads = await fetchThreads(uid, limit);
+  // Strip out locally-deleted chats regardless of DB state
+  if (deletedIds.size > 0) {
+    threads = threads.filter((t) => !deletedIds.has(String(t.chat_id)));
+  }
 
   // in your model: chat_id == peer profile id (DM) OR group id (group)
   const dmIds = threads.filter((x) => !x.is_group).map((x) => x.chat_id).filter(Boolean);
@@ -164,6 +184,7 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
   const mergedGroupMap = { ...groupMap };
   for (const g of myGroups) {
     if (!g?.id) continue;
+    if (deletedIds.has(String(g.id))) continue; // skip locally-deleted groups
     if (!mergedGroupMap[g.id]) {
       mergedGroupMap[g.id] = {
         name: g.groupname || "Group",
@@ -171,6 +192,10 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
         members: Array.isArray(g.members) ? g.members : [],
       };
     }
+  }
+  // Strip deleted group IDs from the merged map
+  if (deletedIds.size > 0) {
+    for (const id of deletedIds) delete mergedGroupMap[id];
   }
 
   const maxDistanceKm =
@@ -208,6 +233,30 @@ export function isCacheFresh(uid) {
 /** Call this when unread state changes (e.g. opening a chat) so ChatListScreen re-fetches on next focus. */
 export function invalidateChatListCache() {
   mem.ts = 0;
+}
+
+/**
+ * Remove a single chat thread from the in-memory cache immediately (e.g. after user deletes a chat).
+ * Also invalidates AsyncStorage so the next focus re-fetches from DB.
+ */
+export function removeChatFromCache(chatId, uid) {
+  if (!chatId) return;
+  // Add to client-side blocklist — prevents any future cache read or DB fetch
+  // from ever surfacing this thread again (even if RLS blocks the DB DELETE)
+  deletedIds.add(String(chatId));
+  if (mem.data?.threads) {
+    mem.data = {
+      ...mem.data,
+      threads: mem.data.threads.filter((t) => !deletedIds.has(String(t.chat_id))),
+    };
+    // Persist the patched data to AsyncStorage so it survives navigation
+    if (uid || mem.uid) {
+      try {
+        AsyncStorage.setItem(keyFor(uid || mem.uid), JSON.stringify(mem.data));
+      } catch {}
+    }
+  }
+  mem.ts = 0; // force re-fetch on next focus
 }
 
 /**

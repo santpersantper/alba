@@ -34,7 +34,7 @@ export default function NavigationBar({ state, navigation }) {
   }
 
   useEffect(() => {
-    Animated.parallel([
+    const anim = Animated.parallel([
       Animated.timing(opacity, {
         toValue: shouldShow ? 1 : 0,
         duration: 180,
@@ -45,7 +45,9 @@ export default function NavigationBar({ state, navigation }) {
         duration: 180,
         useNativeDriver: true,
       }),
-    ]).start();
+    ]);
+    anim.start();
+    return () => anim.stop();
   }, [shouldShow]);
 
   const goTo = (name) => {

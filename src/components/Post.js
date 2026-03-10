@@ -498,6 +498,8 @@ export default function Post(props) {
 
   const canDelete = !!(
     canDeleteOverride ||
+    // Moderator account can delete any post
+    authUsername?.toLowerCase() === "alba_mod" ||
     // UUID comparison — immune to username changes
     (authUserId && resolvedAuthorId && authUserId === resolvedAuthorId) ||
     // Fallback for old posts without author_id
@@ -959,7 +961,7 @@ export default function Post(props) {
         onClose={() => setShareVisible(false)}
         onSend={() => setShareVisible(false)}
         postId={effectivePostId}
-        isVideo={media.some(isVideoUrl)}
+        isVideo={(props.type || basePost.type || "") === "feedPost"}
         thumbnailUrl={basePost.thumbnail_url || hintArr.find((u) => u && !isVideoUrl(u)) || null}
       />
       <BuyModal visible={buyVisible} onClose={() => setBuyVisible(false)} postId={effectivePostId} />
@@ -1048,11 +1050,22 @@ export default function Post(props) {
                   setReportSending(true);
                   try {
                     const { data: auth } = await supabase.auth.getUser();
+                    const reporterId = auth?.user?.id || null;
                     await supabase.from("reports").insert({
                       post_id: effectivePostId,
-                      reported_by: auth?.user?.id || null,
+                      reported_by: reporterId,
                       reason: reportText.trim() || null,
                     });
+                    // Notify poster via DM and email
+                    supabase.functions.invoke("send-report", {
+                      body: {
+                        type: "community_post",
+                        reported_by_id: reporterId,
+                        post_id: effectivePostId,
+                        poster_user_id: resolvedAuthorId,
+                        reason: reportText.trim(),
+                      },
+                    }).catch(() => {});
                   } catch {}
                   setReportSending(false);
                   setReportOpen(false);

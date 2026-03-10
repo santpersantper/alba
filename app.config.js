@@ -53,7 +53,7 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        foregroundImage: "./assets/adaptive-icon.png",
+        foregroundImage: "./assets/icon.png",
         backgroundColor: "#ffffff",
       },
       edgeToEdgeEnabled: true,
@@ -89,6 +89,15 @@ export default {
         {
           merchantIdentifier: "merchant.com.alba.app",
           enableGooglePay: true,
+        },
+      ],
+      [
+        "expo-notifications",
+        {
+          icon: "./assets/icon.png",
+          color: "#00A9FF",
+          defaultChannel: "default",
+          iosDisplayInForeground: true,
         },
       ],
       "./plugins/withScreenTime",

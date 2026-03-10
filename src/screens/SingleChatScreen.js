@@ -18,9 +18,10 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import * as ImagePicker from "expo-image-picker";
+import { VideoView, useVideoPlayer } from "expo-video";
 import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
-import { uploadChatImage } from "../lib/uploadImage";
+import { uploadChatMedia } from "../lib/uploadImage";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
@@ -181,7 +182,9 @@ const subscribeChatInserts = (chatId, onInsert) => {
       { event: "INSERT", schema: "public", table: "messages", filter: `chat=eq.${chatId}` },
       (payload) => onInsert?.(payload.new)
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (err) console.warn("[SingleChat realtime] error:", err.message);
+    });
   return () => supabase.removeChannel(channel);
 };
 
@@ -255,6 +258,12 @@ async function fetchSingleMessagesDirect(chatId, limit = 200) {
   return items;
 }
 
+/* Shows first frame of a local or remote video as a static thumbnail */
+function PendingVideoThumb({ uri, style }) {
+  const player = useVideoPlayer(uri, (p) => { p.muted = true; });
+  return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
+}
+
 /* ---------------- component ---------------- */
 export default function SingleChatScreen({ navigation, route }) {
   const isGroup = !!route?.params?.isGroup;
@@ -300,8 +309,7 @@ export default function SingleChatScreen({ navigation, route }) {
   const getSessionUid = useCallback(async () => {
     const { data, error } = await supabase.auth.getSession();
     const uid = data?.session?.user?.id || null;
-    console.log("[SingleChat][AUTH] getSession", { uid, err: error?.message || null });
-    return uid;
+        return uid;
   }, []);
 
   const loadBlockedUsers = useCallback(async (uid) => {
@@ -420,31 +428,12 @@ export default function SingleChatScreen({ navigation, route }) {
     let mounted = true;
     const runId = ++runRef.current;
 
-    console.log("[SingleChat][BOOT] start", {
-      runId,
-      isGroup,
-      peerUsername,
-      chatId,
-      chatIdType: typeof chatId,
-    });
-
     (async () => {
       if (mounted) setLoadingMsgs(true);
 
-      if (!chatId) {
-        console.log("[SingleChat][BOOT] no chatId yet -> wait", { runId });
-        if (mounted) {
-          setBooting(true);
-          setLoadingMsgs(false);
-        }
-        return;
-      }
-
       // 1) cache paint
       try {
-        console.log("[SingleChat][BOOT] 1-cache (local)", { runId, chatId });
-        const cached = await getCachedSingleMessagesLocal({ chatId, peerUsername });
-        console.log("[SingleChat][BOOT] 1-cache-done", { runId, cachedLen: cached?.length || 0 });
+                const cached = await getCachedSingleMessagesLocal({ chatId, peerUsername });
 
         if (mounted && Array.isArray(cached) && cached.length) {
           setItems(cached);
@@ -453,13 +442,13 @@ export default function SingleChatScreen({ navigation, route }) {
           setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
         }
       } catch (e) {
-        console.log("[SingleChat][BOOT] cache error (local)", { runId, ...safeErr(e) });
+        console.log("", { runId, ...safeErr(e) });
       }
 
       // 2) auth
       const uid = await getSessionUid();
       if (!uid) {
-        console.log("[SingleChat][BOOT] no session uid", { runId });
+        console.log("", { runId });
         if (mounted) {
           setBooting(false);
           setLoadingMsgs(false);
@@ -473,7 +462,6 @@ export default function SingleChatScreen({ navigation, route }) {
       if (!mounted) return;
 
       if (!isGroup && blockedNow.includes(peerUsername)) {
-        console.log("[SingleChat][BOOT] blocked -> stop", { runId });
         setBooting(false);
         if (mounted) setLoadingMsgs(false);
         return;
@@ -481,10 +469,8 @@ export default function SingleChatScreen({ navigation, route }) {
 
       // 4) fetch messages direct
       try {
-        console.log("[SingleChat][BOOT] 4-fetch direct", { runId, chatId });
-        const fresh = await fetchSingleMessagesDirect(chatId, 200);
-        console.log("[SingleChat][BOOT] 4-fetch done", { runId, freshLen: fresh?.length || 0 });
-
+                const fresh = await fetchSingleMessagesDirect(chatId, 200);
+ 
         if (!mounted) return;
 
         setItems(fresh);
@@ -494,8 +480,7 @@ export default function SingleChatScreen({ navigation, route }) {
         setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh }).catch(() => {});
         setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
       } catch (e) {
-        console.log("[SingleChat][BOOT] fetch error (direct)", { runId, ...safeErr(e) });
-        if (mounted) setBooting(false);
+                if (mounted) setBooting(false);
       }
 
       if (mounted) setLoadingMsgs(false);
@@ -503,7 +488,6 @@ export default function SingleChatScreen({ navigation, route }) {
 
     return () => {
       mounted = false;
-      console.log("[SingleChat][BOOT] cleanup", { runId });
     };
   }, [isGroup, chatId, peerUsername, getSessionUid, loadBlockedUsers]);
 
@@ -643,7 +627,7 @@ export default function SingleChatScreen({ navigation, route }) {
       try {
         const owner_id = await getSessionUid();
         if (!owner_id) throw new Error("Not authenticated");
-        const mediaUrl = await uploadChatImage({ uri, chatId });
+        const mediaUrl = await uploadChatMedia({ uri, chatId });
         const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, owner_id });
 
         const fp = `${row.sent_date}T${row.sent_time}-${row.media_reference}-ins`;
@@ -809,36 +793,36 @@ export default function SingleChatScreen({ navigation, route }) {
   const onPickGallery = useCallback(async () => {
     if (isBlocked) { setUnblockModalVisible(true); return; }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission needed", "Alba needs access to your photos.");
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsMultipleSelection: false,
-      quality: 0.85,
-    });
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs access to your photos."); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: false, quality: 0.85 });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset?.uri) return;
-    setPendingImage({ uri: asset.uri });
+    setPendingImage({ uri: asset.uri, type: "image" });
+  }, [isBlocked]);
+
+  const onPickVideo = useCallback(async () => {
+    if (isBlocked) { setUnblockModalVisible(true); return; }
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs access to your photos."); return; }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['videos'], allowsMultipleSelection: false });
+    if (res.canceled) return;
+    const asset = res.assets?.[0];
+    if (!asset?.uri) return;
+    setPendingImage({ uri: asset.uri, type: "video" });
   }, [isBlocked]);
 
   const onPickCamera = useCallback(async () => {
     if (isBlocked) { setUnblockModalVisible(true); return; }
     const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert("Permission needed", "Alba needs camera access.");
-      return;
-    }
-    const res = await ImagePicker.launchCameraAsync({
-      mediaTypes: 'images',
-      quality: 0.85,
-    });
+    if (!perm.granted) { Alert.alert("Permission needed", "Alba needs camera access."); return; }
+    const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images', 'videos'], quality: 0.85, videoMaxDuration: 15 });
     if (res.canceled) return;
     const asset = res.assets?.[0];
     if (!asset?.uri) return;
-    setPendingImage({ uri: asset.uri });
+    const ext = asset.uri.split("?")[0].split(".").pop()?.toLowerCase() || "";
+    const isVid = asset.type === "video" || ["mp4","mov","m4v","webm","avi"].includes(ext);
+    setPendingImage({ uri: asset.uri, type: isVid ? "video" : "image" });
   }, [isBlocked]);
 
   const renderItem = ({ item, index }) => {
@@ -971,6 +955,9 @@ export default function SingleChatScreen({ navigation, route }) {
                     <TouchableOpacity onPress={onPickGallery} style={styles.iconBtn} hitSlop={8}>
                       <Ionicons name="image-outline" size={22} color={iconColor} />
                     </TouchableOpacity>
+                    <TouchableOpacity onPress={onPickVideo} style={styles.iconBtn} hitSlop={8}>
+                      <Ionicons name="videocam-outline" size={22} color={iconColor} />
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={onPickCamera} style={styles.iconBtn} hitSlop={8}>
                       <Ionicons name="camera-outline" size={22} color={iconColor} />
                     </TouchableOpacity>
@@ -978,11 +965,15 @@ export default function SingleChatScreen({ navigation, route }) {
 
                   {pendingImage ? (
                     <View style={styles.pendingWrap}>
-                      <Image
-                        source={{ uri: pendingImage.uri }}
-                        style={styles.pendingThumb}
-                        resizeMode="cover"
-                      />
+                      {pendingImage.type === "video" ? (
+                        <PendingVideoThumb uri={pendingImage.uri} style={styles.pendingThumb} />
+                      ) : (
+                        <Image
+                          source={{ uri: pendingImage.uri }}
+                          style={styles.pendingThumb}
+                          resizeMode="cover"
+                        />
+                      )}
                       <TouchableOpacity
                         style={styles.pendingRemove}
                         onPress={() => setPendingImage(null)}

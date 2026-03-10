@@ -32,6 +32,29 @@ export async function uploadImage({ uri, postId, filename }) {
   // return signed.signedUrl;
 }
 
+// Upload any chat media (image or video) and return its public URL.
+// Stored at chats/{chatId}/{timestamp}.{ext} inside the "alba-media" bucket.
+export async function uploadChatMedia({ uri, chatId }) {
+  const ext = uri.split(".").pop()?.split("?")[0]?.toLowerCase() || "jpg";
+  const isVideo = ["mp4", "mov", "m4v", "webm"].includes(ext);
+  const mimeType = isVideo
+    ? "video/mp4"
+    : ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpeg";
+  const key = `chats/${chatId}/${Date.now()}.${ext}`;
+
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+  const binary = decode(base64);
+  const buffer = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+
+  const { error } = await supabase.storage
+    .from("alba-media")
+    .upload(key, buffer, { upsert: false, contentType: mimeType });
+  if (error) throw error;
+  const { data: pub } = supabase.storage.from("alba-media").getPublicUrl(key);
+  return pub.publicUrl;
+}
+
 // Upload a chat image and return its public URL.
 // Stored at chats/{chatId}/{timestamp}.{ext} inside the "alba-media" bucket.
 export async function uploadChatImage({ uri, chatId }) {

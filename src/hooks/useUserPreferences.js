@@ -15,6 +15,11 @@ const DEFAULT_PREFS = {
   premiumDiffusionList: false,   // boolean — Diffusion List feature active
   diffusionRadiusKm: 5,          // number — broadcast radius in km (1–50), default 5
   blockDiffusionMessages: false, // boolean — privacy setting; available to ALL users
+  // ── Notifications ──
+  notifChatMessages:  true,   // boolean — notify on new DMs
+  notifGroupMessages: true,   // boolean — notify on new group messages
+  notifDiffusion:     true,   // boolean — notify on diffusion messages
+  notifFollowedPosts: true,   // boolean — notify on new posts from followed accounts
   // ── Screen Time (stored locally via AsyncStorage — usage data never sent to backend) ──
   lastWeekTotalMinutes: 0,                  // number — previous week's social media total for week-over-week comparison
   screenTimeGoalReductionPercent: 10,       // number — % reduction per week (5–50), default 10%

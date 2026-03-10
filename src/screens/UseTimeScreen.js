@@ -17,6 +17,7 @@ import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import Slider from "@react-native-community/slider";
 import { useUserPreferences } from "../hooks/useUserPreferences";
+import OnboardingOverlay from "../components/OnboardingOverlay";
 import { useScreenTime } from "../hooks/useScreenTime";
 import { evaluateStreak, evaluateWeekRollover, formatMinutes } from "../utils/streakUtils";
 
@@ -418,6 +419,8 @@ export default function UseTimeScreen() {
           </View>
         </View>
       </Modal>
+
+      <OnboardingOverlay screenKey="usetime" />
     </LinearGradient>
   );
 }

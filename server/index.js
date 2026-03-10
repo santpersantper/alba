@@ -118,14 +118,16 @@ app.post("/create-payment-intent", requireAuth, paymentLimiter, async (req, res)
       return res.status(400).json({ error: "eventId is required." });
     }
 
-    // Look up the post's group → connected Stripe account
+    // Look up the post → try group stripe account, then fall back to author's profile account
     const { data: postRow } = await supabaseAdmin
       .from("posts")
-      .select("group_id")
+      .select("group_id, author_id")
       .eq("id", eventId)
       .maybeSingle();
 
     let stripeAccountId = null;
+
+    // 1. Group-level account (set via CommunityEventSettings)
     if (postRow?.group_id) {
       const { data: groupRow } = await supabaseAdmin
         .from("groups")
@@ -134,6 +136,18 @@ app.post("/create-payment-intent", requireAuth, paymentLimiter, async (req, res)
         .maybeSingle();
       if (groupRow?.stripe_onboarding_complete && groupRow?.stripe_account_id) {
         stripeAccountId = groupRow.stripe_account_id;
+      }
+    }
+
+    // 2. If no group account, fall back to post author's profile account
+    if (!stripeAccountId && postRow?.author_id) {
+      const { data: profileRow } = await supabaseAdmin
+        .from("profiles")
+        .select("stripe_account_id, stripe_onboarding_complete")
+        .eq("id", postRow.author_id)
+        .maybeSingle();
+      if (profileRow?.stripe_onboarding_complete && profileRow?.stripe_account_id) {
+        stripeAccountId = profileRow.stripe_account_id;
       }
     }
 
@@ -271,9 +285,99 @@ app.get("/connect/status", requireAuth, async (req, res) => {
 });
 
 /**
+ * POST /connect/onboard/profile
+ * Body: { userId: string }
+ * Creates (or retrieves) a Stripe Express account tied to the user's profile
+ * so they can receive direct product-sale payouts from ads.
+ */
+app.post("/connect/onboard/profile", requireAuth, async (req, res) => {
+  try {
+    if (!assertUserIdMatch(req, res)) return;
+
+    const uid = req.user.id;
+
+    const { data: profileRow, error: profErr } = await supabaseAdmin
+      .from("profiles")
+      .select("id, stripe_account_id, stripe_onboarding_complete")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (profErr || !profileRow) return res.status(404).json({ error: "Profile not found." });
+
+    let accountId = profileRow.stripe_account_id;
+    if (!accountId) {
+      const account = await stripe.accounts.create({
+        type: "express",
+        country: "IT",
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+        metadata: { userId: String(uid) },
+      });
+      accountId = account.id;
+      await supabaseAdmin
+        .from("profiles")
+        .update({ stripe_account_id: accountId })
+        .eq("id", uid);
+    }
+
+    const origin = process.env.APP_URL || "https://alba.app";
+    const accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${origin}/connect/refresh?userId=${uid}`,
+      return_url: `${origin}/connect/return?userId=${uid}`,
+      type: "account_onboarding",
+    });
+
+    res.json({ url: accountLink.url });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error("[/connect/onboard/profile] error:", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /connect/status/profile
+ * Returns the Stripe Connect onboarding status for the authenticated user's profile.
+ */
+app.get("/connect/status/profile", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.id;
+
+    const { data: profileRow } = await supabaseAdmin
+      .from("profiles")
+      .select("stripe_account_id, stripe_onboarding_complete")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (!profileRow?.stripe_account_id) {
+      return res.json({ status: "not_started" });
+    }
+
+    const account = await stripe.accounts.retrieve(profileRow.stripe_account_id);
+    const complete = account.details_submitted && !account.requirements?.currently_due?.length;
+
+    if (complete && !profileRow.stripe_onboarding_complete) {
+      await supabaseAdmin
+        .from("profiles")
+        .update({ stripe_onboarding_complete: true })
+        .eq("id", uid);
+    }
+
+    res.json({
+      status: complete ? "complete" : "pending",
+      accountId: profileRow.stripe_account_id,
+    });
+  } catch (err) {
+    Sentry.captureException(err);
+    console.error("[/connect/status/profile] error:", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
  * POST /create-payment-intent/premium-ad-free
  * Body: { userId: string }
- * Amount: €2.99/month → 299 cents
+ * Amount: €5.00/month → 500 cents
  */
 app.post("/create-payment-intent/premium-ad-free", requireAuth, paymentLimiter, async (req, res) => {
   try {
@@ -282,7 +386,7 @@ app.post("/create-payment-intent/premium-ad-free", requireAuth, paymentLimiter, 
     const idempotencyKey = `pi-adFree-${String(req.user.id)}`;
     const paymentIntent = await stripe.paymentIntents.create(
       {
-        amount: 299,
+        amount: 500,
         currency: "eur",
         automatic_payment_methods: { enabled: true },
         metadata: { product: "adFree", userId: String(req.user.id) },
@@ -397,6 +501,28 @@ app.post("/verify-face", requireAuth, verifyFaceLimiter, async (req, res) => {
 });
 
 /**
+ * POST /delete-account
+ * Permanently deletes the authenticated user from auth.users.
+ * Supabase cascades the delete to all tables that reference auth.users(id).
+ * The user must be logged in — their JWT proves ownership.
+ */
+app.post("/delete-account", requireAuth, async (req, res) => {
+  const uid = req.user.id;
+  try {
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(uid);
+    if (error) {
+      console.error("[/delete-account] deleteUser error:", error.message);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+    console.log(`[/delete-account] deleted user ${uid}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[/delete-account] error:", err.message);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
  * POST /webhook
  * Stripe sends signed webhook events here.
  * Verifies the signature using STRIPE_WEBHOOK_SECRET before processing.
@@ -413,7 +539,7 @@ app.post("/webhook", (req, res) => {
     );
   } catch (err) {
     console.error("[/webhook] signature verification failed:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    return res.status(400).json({ error: "Webhook signature verification failed." });
   }
 
   switch (event.type) {

@@ -1,7 +1,7 @@
 // AdPanel.js
 import React, { useState, useRef, useEffect } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 
@@ -12,27 +12,23 @@ const CheckboxRow = ({ label, checked, onToggle, style, theme, isDark }) => (
         styles.checkboxBox,
         {
           backgroundColor: isDark ? "#2B2B2B" : "#fff",
-          borderColor: isDark ? "#FFFFFF" : "#B8B8B8",
+          borderColor: isDark ? "#555" : "#C8C8C8",
         },
         checked && styles.checkboxBoxChecked,
       ]}
     >
-      {checked && <Ionicons name="checkmark" size={14} color="#fff" />}
+      {checked && <Feather name="check" size={12} color="#fff" />}
     </View>
-    <Text
-      style={[
-        styles.checkboxLabel,
-        { color: theme.text },
-      ]}
-    >
-      {label}
-    </Text>
+    <Text style={[styles.checkboxLabel, { color: theme.text }]}>{label}</Text>
   </TouchableOpacity>
 );
 
 export default function AdPanel({ onState }) {
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
+
+  const inputBg = isDark ? "#1E1E1E" : "#FAFAFA";
+  const borderColor = isDark ? "#444" : "#E0E0E0";
 
   const [targetInterested, setTargetInterested] = useState(true);
   const [iap, setIap] = useState(true);
@@ -62,12 +58,7 @@ export default function AdPanel({ onState }) {
   }, [targetInterested, iap, products, requiredBuyerInfo, onState]);
 
   return (
-    <View
-      style={[
-        styles.panel,
-        { backgroundColor: theme.background }, // bluish overlay, darker in night
-      ]}
-    >
+    <View style={[styles.panel, { backgroundColor: theme.background }]}>
       <CheckboxRow
         label={t("ad_checkbox_target_interested")}
         checked={targetInterested}
@@ -90,21 +81,13 @@ export default function AdPanel({ onState }) {
             <View key={pr.id} style={styles.productBlock}>
               {/* Row 1: name + delete */}
               <View style={styles.productRow}>
-                <View
-                  style={[
-                    styles.productNameWrap,
-                    {
-                      backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                      borderColor: isDark ? "#555" : "#D9D9D9",
-                    },
-                  ]}
-                >
+                <View style={[styles.inputWrap, { flex: 1, borderColor, backgroundColor: inputBg }]}>
                   <TextInput
                     value={pr.name}
                     onChangeText={(v) => update(pr.id, { name: v })}
                     placeholder={idx === 0 ? "Pizza marinara" : idx === 1 ? "Marinara + bibita" : t("ad_product_name_placeholder")}
-                    placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                    style={[styles.productName, { color: theme.text }]}
+                    placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                    style={[styles.input, { color: theme.text }]}
                   />
                 </View>
 
@@ -114,38 +97,33 @@ export default function AdPanel({ onState }) {
                     style={styles.deleteBtn}
                     hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                   >
-                    <Ionicons name="close" size={18} color={isDark ? "#D1D5DB" : "#777"} />
+                    <Feather name="x" size={16} color={isDark ? "#D1D5DB" : "#999"} />
                   </TouchableOpacity>
                 )}
               </View>
 
               {/* Row 2: notes (flex) + cost */}
               <View style={styles.notesRow}>
-                <TextInput
-                  value={pr.notes}
-                  onChangeText={(v) => update(pr.id, { notes: v })}
-                  placeholder="Notes (optional)"
-                  placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                  style={[
-                    styles.notesInput,
-                    {
-                      color: theme.text,
-                      borderColor: isDark ? "#555" : "#D9D9D9",
-                      backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                    },
-                  ]}
-                />
+                <View style={[styles.inputWrap, { flex: 1, borderColor, backgroundColor: inputBg }]}>
+                  <TextInput
+                    value={pr.notes}
+                    onChangeText={(v) => update(pr.id, { notes: v })}
+                    placeholder="Notes (optional)"
+                    placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                    style={[styles.input, { color: theme.text }]}
+                  />
+                </View>
                 <Text style={[styles.costLabel, { color: theme.text }]}>
                   {t("ad_cost_label")}
                 </Text>
-                <View style={[styles.costLineBox, { borderColor: isDark ? "#FFFFFF" : "#CFCFCF" }]}>
+                <View style={[styles.costWrap, { borderColor: isDark ? "#555" : "#CFCFCF", backgroundColor: inputBg }]}>
                   <TextInput
                     value={pr.cost}
                     onChangeText={(v) => update(pr.id, { cost: v })}
                     keyboardType="numeric"
                     placeholder="0"
                     placeholderTextColor={isDark ? "#8C96A5" : "#BFBFBF"}
-                    style={[styles.costLineInput, { color: theme.text }]}
+                    style={[styles.costInput, { color: theme.text }]}
                   />
                 </View>
               </View>
@@ -154,38 +132,23 @@ export default function AdPanel({ onState }) {
 
           {/* Required buyer info */}
           <View style={styles.requiredInfoSection}>
-            <Text
-              style={[
-                styles.requiredInfoTitle,
-                { color: theme.text },
-              ]}
-            >
+            <Text style={[styles.sectionLabel, { color: isDark ? "#8C96A5" : "#888" }]}>
               {t("ad_required_info_title")}
             </Text>
-            <View
-              style={[
-                styles.requiredInfoBox,
-                {
-                  backgroundColor: isDark ? "#2B2B2B" : "#fff",
-                  borderColor: isDark ? "#FFFFFF" : "#D9D9D9",
-                },
-              ]}
-            >
+            <View style={[styles.inputWrap, { borderColor, backgroundColor: inputBg }]}>
               <TextInput
                 value={requiredBuyerInfo}
                 onChangeText={setRequiredBuyerInfo}
                 placeholder={t("ad_required_info_placeholder")}
-                placeholderTextColor={isDark ? "#8C96A5" : "#8F8F8F"}
-                style={[
-                  styles.requiredInfoInput,
-                  { color: theme.text },
-                ]}
+                placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                style={[styles.input, { color: theme.text, minHeight: 60, textAlignVertical: "top" }]}
                 multiline
               />
             </View>
           </View>
 
           <TouchableOpacity style={styles.addBtn} onPress={addRow}>
+            <Feather name="plus" size={15} color="#fff" style={{ marginRight: 6 }} />
             <Text style={styles.addBtnText}>{t("ad_add_product_button")}</Text>
           </TouchableOpacity>
         </>
@@ -197,8 +160,14 @@ export default function AdPanel({ onState }) {
 const styles = StyleSheet.create({
   panel: {
     borderRadius: 12,
-    padding: 14,
+    paddingTop: 14,
     marginTop: 12,
+  },
+
+  sectionLabel: {
+    fontFamily: "PoppinsBold",
+    fontSize: 10,
+    marginBottom: 8,
   },
 
   checkboxRow: { flexDirection: "row", alignItems: "center" },
@@ -211,84 +180,66 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 8,
   },
-  checkboxBoxChecked: { backgroundColor: "#3D8BFF", borderColor: "#3D8BFF" },
+  checkboxBoxChecked: { backgroundColor: "#2F91FF", borderColor: "#2F91FF" },
   checkboxLabel: { fontSize: 14, fontFamily: "Poppins" },
 
-  productBlock: { marginTop: 12 },
-  productRow: { flexDirection: "row", alignItems: "center" },
+  productBlock: { marginTop: 10 },
+  productRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   notesRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 6,
+    marginTop: 8,
+    gap: 8,
   },
-  notesInput: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    fontSize: 13,
-    fontFamily: "Poppins",
-  },
-  productNameWrap: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+
+  inputWrap: {
+    borderWidth: 1,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    height: 40,
+    paddingVertical: 8,
     justifyContent: "center",
   },
-  productName: { fontSize: 14, fontFamily: "Poppins" },
+  input: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+  },
 
   costLabel: {
-    fontSize: 14,
-    marginLeft: 10,
-    marginRight: 6,
+    fontSize: 13,
     fontFamily: "Poppins",
+    flexShrink: 0,
   },
-  costLineBox: {
-    width: 40,
-    justifyContent: "flex-end",
-    borderBottomWidth: 1,
+  costWrap: {
+    width: 52,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    alignItems: "center",
   },
-  costLineInput: {
+  costInput: {
     fontSize: 14,
-    paddingVertical: 2,
     fontFamily: "Poppins",
+    width: "100%",
+    textAlign: "center",
   },
 
   deleteBtn: {
-    marginLeft: 6,
     justifyContent: "center",
     alignItems: "center",
+    padding: 4,
   },
 
   requiredInfoSection: { marginTop: 14 },
-  requiredInfoTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 6,
-    fontFamily: "Poppins",
-  },
-  requiredInfoBox: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minHeight: 40,
-    justifyContent: "center",
-  },
-  requiredInfoInput: {
-    fontSize: 14,
-    fontFamily: "Poppins",
-  },
 
   addBtn: {
+    flexDirection: "row",
     alignSelf: "center",
-    backgroundColor: "#59A7FF", // keep light blue CTA
+    alignItems: "center",
+    backgroundColor: "#2F91FF",
     paddingVertical: 10,
     paddingHorizontal: 18,
-    borderRadius: 8,
+    borderRadius: 10,
     marginTop: 14,
   },
   addBtnText: {

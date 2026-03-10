@@ -442,6 +442,7 @@ export default function ShareMenu({
         } else if (postId != null && !inviteGroup) {
           // Encode as __feed_video__ when this is a video post, even if thumbnail is null.
           // FeedVideoMessage will fetch the thumbnail itself when not pre-stored.
+          console.log("[ShareMenu] postId:", postId, "isVideo:", isVideo, "thumbnailUrl:", thumbnailUrl);
           const videoContent = (isVideo || thumbnailUrl)
             ? `__feed_video__:${JSON.stringify({ thumbnailUrl: thumbnailUrl || null })}`
             : "";

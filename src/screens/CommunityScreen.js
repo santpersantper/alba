@@ -35,6 +35,7 @@ import { useUserPreferences, PREFS_KEY } from "../hooks/useUserPreferences";
 import Post from "../components/Post";
 import TopBar from "../components/TopBar";
 import LabelsCard from "../components/LabelsCard";
+import OnboardingOverlay from "../components/OnboardingOverlay";
 
 import {
   readCachedFirstPostOverride,
@@ -137,6 +138,7 @@ export default function CommunityScreen() {
 
     animationState.current = effective;
 
+    topBarOpacity.stopAnimation();
     Animated.timing(topBarOpacity, {
       toValue: effective === "shown" ? 1 : 0,
       duration: 180,
@@ -1143,6 +1145,7 @@ export default function CommunityScreen() {
         </View>
       </Modal>
 
+      <OnboardingOverlay screenKey="community" />
     </ThemedView>
   );
 }

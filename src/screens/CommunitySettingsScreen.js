@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   Alert,
   Text,
+  Switch,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -30,7 +31,9 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import Constants from "expo-constants";
 import { useUserPreferences } from "../hooks/useUserPreferences";
+import { saveNotifPrefs } from "../lib/notifications";
 import PremiumPurchaseModal from "../components/PremiumPurchaseModal";
+import OnboardingOverlay from "../components/OnboardingOverlay";
 
 const TABS = ["General", "Events", "Ads", "Privacy"];
 
@@ -60,6 +63,8 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
   const [unblockCandidate, setUnblockCandidate] = useState(null);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Profile editing
   const [editName, setEditName] = useState("");
@@ -85,6 +90,18 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [diffusionRadiusText, setDiffusionRadiusText] = useState("5");
   const diffusionInputFocused = useRef(false);
 
+  // Collapsible sections — all start open
+  const [sectionsOpen, setSectionsOpen] = useState({
+    profile: true,
+    appearance: true,
+    language: true,
+    feed: true,
+    premium: true,
+    notifications: true,
+  });
+  const toggleSection = (key) =>
+    setSectionsOpen((p) => ({ ...p, [key]: !p[key] }));
+
   const loadSettings = useCallback(async () => {
     try {
       const { data: auth } = await supabase.auth.getUser();
@@ -99,7 +116,8 @@ export default function CommunitySettingsScreen({ navigation }) {
         .eq("id", u.id)
         .maybeSingle();
 
-      if (error || !data) return;
+      if (error) { console.warn("[loadSettings] SELECT error:", JSON.stringify(error)); return; }
+      if (!data) return;
 
       if (typeof data.show_local_news === "boolean") setShowNews(data.show_local_news);
       if (typeof data.visible_to_all === "boolean") setVisibleToAll(data.visible_to_all);
@@ -256,8 +274,9 @@ export default function CommunitySettingsScreen({ navigation }) {
   };
 
   const updateProfile = (patch) => {
-    if (!userId) return Promise.resolve();
-    return supabase.from("profiles").update(patch).eq("id", userId);
+    if (!userId) { console.warn("[updateProfile] no userId"); return Promise.resolve(); }
+    return supabase.from("profiles").update(patch).eq("id", userId)
+      .then(({ error }) => { if (error) console.warn("[updateProfile] error:", JSON.stringify(error), "patch:", JSON.stringify(patch)); });
   };
 
   const updateBlockedUsers = (next) => {
@@ -317,6 +336,28 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   const handleLogout = () => setLogoutModalVisible(true);
 
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not logged in.");
+      const API_URL =
+        Constants.expoConfig?.extra?.expoPublic?.API_URL ?? "http://localhost:3000";
+      const res = await fetch(`${API_URL}/delete-account`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Server error");
+      await supabase.auth.signOut().catch(() => {});
+    } catch (e) {
+      Alert.alert("Error", "Could not delete account. Please try again or contact support.");
+    } finally {
+      setDeleting(false);
+      setDeleteModalVisible(false);
+    }
+  };
+
   const handleAdFreePress = () => {
     if (prefs.premiumAdFree) {
       updatePrefs({ premiumAdFree: false });
@@ -325,7 +366,7 @@ export default function CommunitySettingsScreen({ navigation }) {
     setPremiumModal({
       featureName: "Ad-Free",
       description: "Browse Community without ads.",
-      price: "€2.99/month",
+      price: "€5.00/month",
       endpoint: "/create-payment-intent/premium-ad-free",
     });
   };
@@ -414,164 +455,242 @@ export default function CommunitySettingsScreen({ navigation }) {
     return () => clearTimeout(cityDebounceRef.current);
   }, [cityQuery, prefs.premiumTravelerMode]);
 
+  const bg = isDark ? "#1a1a1a" : "#fff";
+  const cardBg = isDark ? "#2b2b2b" : "#f6f8fb";
+  const textColor = theme.text;
+  const secondaryText = isDark ? "#aaa" : "#6F7D95";
+  const borderColor = isDark ? "#444" : "#d9e4f3";
+  const accent = "#00A9FF";
+
+  // Which segment is active for the theme selector
+  const themeSegment = nightAuto ? "auto" : nightOn ? "dark" : "light";
+
+  const renderSectionHeader = (key, label, extraStyle) => (
+    <TouchableOpacity
+      onPress={() => toggleSection(key)}
+      style={[
+        { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16 },
+        extraStyle,
+      ]}
+      activeOpacity={0.7}
+    >
+      <Text style={[styles.sectionLabel, { color: secondaryText, marginTop: 0 }]}>{label}</Text>
+      <Feather
+        name={sectionsOpen[key] ? "chevron-up" : "chevron-down"}
+        size={16}
+        color={secondaryText}
+      />
+    </TouchableOpacity>
+  );
+
   const renderTabContent = () => {
     if (activeTab === "General") {
       return (
         <>
           {/* ── Profile ── */}
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 10 }]}>
-            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              {t("settings_profile_section")}
-            </ThemedText>
-
-            {/* Verification badge */}
-            <TouchableOpacity
-              style={styles.verifiedRow}
-              activeOpacity={isVerified ? 1 : 0.7}
-              onPress={() => { if (!isVerified) navigation.navigate("PreFaceRecognition"); }}
-            >
-              <Feather
-                name={isVerified ? "check-circle" : "alert-circle"}
-                size={15}
-                color={isVerified ? "#4CAF50" : "#F59E0B"}
-                style={{ marginRight: 7 }}
-              />
-              <ThemedText style={[styles.verifiedText, { color: isVerified ? "#4CAF50" : "#F59E0B" }]}>
-                {isVerified ? t("settings_verified") : t("settings_not_verified")}
-              </ThemedText>
-            </TouchableOpacity>
-
-            <TextInput
-              style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder={t("settings_name_placeholder")}
-              placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-              value={editName}
-              onChangeText={setEditName}
-            />
-            <TextInput
-              style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder={t("settings_username_placeholder")}
-              placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={editUsername}
-              onChangeText={setEditUsername}
-            />
-            {usernameStatus === "checking" && (
-              <View style={styles.usernameStatusRow}>
-                <ActivityIndicator size="small" color="#00A9FF" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: isDark ? "#aaa" : "#666" }]}>{t("settings_checking_username")}</ThemedText>
-              </View>
-            )}
-            {usernameStatus === "available" && (
-              <View style={styles.usernameStatusRow}>
-                <Feather name="check-circle" size={13} color="#4CAF50" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: "#4CAF50" }]}>{t("settings_username_available")}</ThemedText>
-              </View>
-            )}
-            {usernameStatus === "taken" && (
-              <View style={styles.usernameStatusRow}>
-                <Feather name="x-circle" size={13} color="#E55353" style={{ marginRight: 5 }} />
-                <ThemedText style={[styles.usernameStatusText, { color: "#E55353" }]}>{t("settings_username_taken")}</ThemedText>
-              </View>
-            )}
-            {usernameStatus === "invalid" && (
-              <View style={styles.usernameStatusRow}>
-                <ThemedText style={[styles.usernameStatusText, { color: "#F59E0B" }]}>{t("settings_username_invalid")}</ThemedText>
-              </View>
-            )}
-            <TextInput
-              style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-              placeholder={t("settings_password_placeholder")}
-              placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-              secureTextEntry
-              value={editPassword}
-              onChangeText={setEditPassword}
-            />
-            {!!editPassword && (
-              <>
-                {[
-                  { key: "length",  label: "At least 8 characters" },
-                  { key: "letter",  label: "Contains a letter" },
-                  { key: "number",  label: "Contains a number" },
-                  { key: "special", label: "Contains a special character (!@#…)" },
-                ].map(({ key, label }) => (
-                  <View key={key} style={styles.pwCheckRow}>
-                    <Feather
-                      name={pwChecks[key] ? "check" : "x"}
-                      size={12}
-                      color={pwChecks[key] ? "#4CAF50" : "#E55353"}
-                      style={{ marginRight: 6 }}
-                    />
-                    <ThemedText style={[styles.pwCheckText, { color: pwChecks[key] ? "#4CAF50" : "#E55353" }]}>
-                      {label}
-                    </ThemedText>
-                  </View>
-                ))}
-                <TextInput
-                  style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: theme.text, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa", marginTop: 8 }]}
-                  placeholder={t("settings_confirm_password")}
-                  placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-                  secureTextEntry
-                  value={editPasswordConfirm}
-                  onChangeText={setEditPasswordConfirm}
+          {renderSectionHeader("profile", t("settings_profile_section"))}
+          {sectionsOpen.profile && (
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            <View style={{ padding: 14 }}>
+              {/* Verification badge */}
+              <TouchableOpacity
+                style={styles.verifiedRow}
+                activeOpacity={isVerified ? 1 : 0.7}
+                onPress={() => { if (!isVerified) navigation.navigate("PreFaceRecognition"); }}
+              >
+                <Feather
+                  name={isVerified ? "check-circle" : "alert-circle"}
+                  size={15}
+                  color={isVerified ? "#4CAF50" : "#F59E0B"}
+                  style={{ marginRight: 7 }}
                 />
-              </>
-            )}
+                <Text style={[styles.verifiedText, { color: isVerified ? "#4CAF50" : "#F59E0B" }]}>
+                  {isVerified ? t("settings_verified") : t("settings_not_verified")}
+                </Text>
+              </TouchableOpacity>
 
-            {!!saveError && (
-              <ThemedText style={styles.saveErrorText}>{saveError}</ThemedText>
-            )}
-            {saveSuccess && (
-              <ThemedText style={styles.saveSuccessText}>{t("settings_saved")}</ThemedText>
-            )}
+              <TextInput
+                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
+                placeholder={t("settings_name_placeholder")}
+                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                value={editName}
+                onChangeText={setEditName}
+              />
+              <TextInput
+                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
+                placeholder={t("settings_username_placeholder")}
+                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={editUsername}
+                onChangeText={setEditUsername}
+              />
+              {usernameStatus === "checking" && (
+                <View style={styles.usernameStatusRow}>
+                  <ActivityIndicator size="small" color={accent} style={{ marginRight: 5 }} />
+                  <Text style={[styles.usernameStatusText, { color: secondaryText }]}>{t("settings_checking_username")}</Text>
+                </View>
+              )}
+              {usernameStatus === "available" && (
+                <View style={styles.usernameStatusRow}>
+                  <Feather name="check-circle" size={13} color="#4CAF50" style={{ marginRight: 5 }} />
+                  <Text style={[styles.usernameStatusText, { color: "#4CAF50" }]}>{t("settings_username_available")}</Text>
+                </View>
+              )}
+              {usernameStatus === "taken" && (
+                <View style={styles.usernameStatusRow}>
+                  <Feather name="x-circle" size={13} color="#E55353" style={{ marginRight: 5 }} />
+                  <Text style={[styles.usernameStatusText, { color: "#E55353" }]}>{t("settings_username_taken")}</Text>
+                </View>
+              )}
+              {usernameStatus === "invalid" && (
+                <View style={styles.usernameStatusRow}>
+                  <Text style={[styles.usernameStatusText, { color: "#F59E0B" }]}>{t("settings_username_invalid")}</Text>
+                </View>
+              )}
+              <TextInput
+                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
+                placeholder={t("settings_password_placeholder")}
+                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                secureTextEntry
+                value={editPassword}
+                onChangeText={setEditPassword}
+              />
+              {!!editPassword && (
+                <>
+                  {[
+                    { key: "length",  label: "At least 8 characters" },
+                    { key: "letter",  label: "Contains a letter" },
+                    { key: "number",  label: "Contains a number" },
+                    { key: "special", label: "Contains a special character (!@#…)" },
+                  ].map(({ key, label }) => (
+                    <View key={key} style={styles.pwCheckRow}>
+                      <Feather
+                        name={pwChecks[key] ? "check" : "x"}
+                        size={12}
+                        color={pwChecks[key] ? "#4CAF50" : "#E55353"}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={[styles.pwCheckText, { color: pwChecks[key] ? "#4CAF50" : "#E55353" }]}>
+                        {label}
+                      </Text>
+                    </View>
+                  ))}
+                  <TextInput
+                    style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa", marginTop: 8 }]}
+                    placeholder={t("settings_confirm_password")}
+                    placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                    secureTextEntry
+                    value={editPasswordConfirm}
+                    onChangeText={setEditPasswordConfirm}
+                  />
+                </>
+              )}
 
-            <TouchableOpacity
-              style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
-              onPress={saveProfile}
-              disabled={saving}
-            >
-              {saving
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <ThemedText style={styles.saveBtnText}>{t("settings_save_changes")}</ThemedText>}
-            </TouchableOpacity>
-          </ThemedView>
+              {!!saveError && (
+                <Text style={styles.saveErrorText}>{saveError}</Text>
+              )}
+              {saveSuccess && (
+                <Text style={styles.saveSuccessText}>{t("settings_saved")}</Text>
+              )}
+
+              <TouchableOpacity
+                style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
+                onPress={saveProfile}
+                disabled={saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={styles.saveBtnText}>{t("settings_save_changes")}</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>)}
 
           {/* ── Appearance ── */}
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 10 }]}>
-            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              {t("appearance_section_title")}
-            </ThemedText>
-            {renderCheckbox(nightAuto, t("night_auto"), () => handleSetMode("auto"))}
-            {renderCheckbox(nightOn, t("night_on"), () => handleSetMode("dark"))}
-            {renderCheckbox(nightOff, t("night_off"), () => handleSetMode("light"))}
-          </ThemedView>
+          {renderSectionHeader("appearance", t("appearance_section_title"))}
+          {sectionsOpen.appearance && (
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            {[
+              { key: "auto",  label: t("night_auto")  || "Auto"  },
+              { key: "light", label: t("night_off")   || "Light" },
+              { key: "dark",  label: t("night_on")    || "Dark"  },
+            ].map(({ key, label }, idx) => (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.listOptionRow,
+                  { borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth, borderTopColor: borderColor },
+                ]}
+                onPress={() => handleSetMode(key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
+                {themeSegment === key && <Feather name="check" size={16} color={accent} />}
+              </TouchableOpacity>
+            ))}
+          </View>)}
 
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 16 }]}>
-            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              {t("language_section_title")}
-            </ThemedText>
-            {renderCheckbox(language === "en", t("language_en"), () => setLanguage("en"))}
-            {renderCheckbox(language === "it", t("language_it"), () => setLanguage("it"))}
-          </ThemedView>
+          {/* ── Language ── */}
+          {renderSectionHeader("language", t("language_section_title"))}
+          {sectionsOpen.language && (
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            {[
+              { key: "en", label: t("language_en") || "English"  },
+              { key: "it", label: t("language_it") || "Italiano" },
+            ].map(({ key, label }, idx) => (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.listOptionRow,
+                  { borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth, borderTopColor: borderColor },
+                ]}
+                onPress={() => setLanguage(key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
+                {language === key && <Feather name="check" size={16} color={accent} />}
+              </TouchableOpacity>
+            ))}
+          </View>)}
 
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 16 }]}>
-            {renderCheckbox(showNews, t("show_local_news"), async () => {
-              const next = !showNews;
-              setShowNews(next);
-              await updateProfile({ show_local_news: next });
-            })}
-            {renderCheckbox(showFollowedPosts, t("show_followed_posts"), async () => {
-              const next = !showFollowedPosts;
-              setShowFollowedPosts(next);
-              await updateProfile({ show_followed_users_posts: next });
-            })}
-          </ThemedView>
+          {/* ── Feed preferences ── */}
+          {renderSectionHeader("feed", "Feed")}
+          {sectionsOpen.feed && (
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            <View style={styles.rowBetween}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("show_local_news")}</Text>
+              </View>
+              <Switch
+                value={showNews}
+                onValueChange={async (val) => {
+                  setShowNews(val);
+                  await updateProfile({ show_local_news: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("show_followed_posts")}</Text>
+              </View>
+              <Switch
+                value={showFollowedPosts}
+                onValueChange={async (val) => {
+                  setShowFollowedPosts(val);
+                  await updateProfile({ show_followed_users_posts: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>)}
 
           {/* ── Alba Premium ── */}
+          {renderSectionHeader("premium", "Alba Premium")}
+          {sectionsOpen.premium && (
           <View style={styles.premiumSection}>
-            <Text style={styles.premiumHeader}>Alba Premium</Text>
-
             {/* Ad-Free checkbox */}
             <TouchableOpacity style={styles.checkboxRow} onPress={handleAdFreePress} activeOpacity={0.7}>
               <View style={[styles.premiumCheckbox, prefs.premiumAdFree && styles.premiumCheckboxChecked]}>
@@ -579,7 +698,7 @@ export default function CommunitySettingsScreen({ navigation }) {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.premiumLabel}>Ad-Free</Text>
-                <Text style={styles.premiumSublabel}>Browse Community without ads — €2.99/month</Text>
+                <Text style={styles.premiumSublabel}>Browse Community without ads — €5.00/month</Text>
               </View>
             </TouchableOpacity>
 
@@ -706,7 +825,41 @@ export default function CommunitySettingsScreen({ navigation }) {
                 </Text>
               </View>
             )}
-          </View>
+          </View>)}
+
+          {/* ── Notifications ── */}
+          {renderSectionHeader("notifications", "Notifications")}
+          {sectionsOpen.notifications && (
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            {[
+              { key: "notifChatMessages",  label: "Direct Messages",               sub: "Notify when you receive a new direct message" },
+              { key: "notifGroupMessages", label: "Group Messages",                sub: "Notify when someone sends a message in a group" },
+              { key: "notifDiffusion",     label: "Diffusion Messages",            sub: "Notify when you receive a broadcast message" },
+              { key: "notifFollowedPosts", label: "Posts from followed accounts",  sub: "Notify when accounts you follow create a new post" },
+            ].map(({ key, label, sub }, idx) => (
+              <View
+                key={key}
+                style={[
+                  styles.rowBetween,
+                  idx > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor },
+                ]}
+              >
+                <View style={{ flex: 1, marginRight: 12 }}>
+                  <Text style={[styles.rowTitle, { color: textColor }]}>{label}</Text>
+                  <Text style={[styles.rowSub, { color: secondaryText }]}>{sub}</Text>
+                </View>
+                <Switch
+                  value={prefs[key] ?? true}
+                  onValueChange={(val) => {
+                    updatePrefs({ [key]: val });
+                    saveNotifPrefs({ ...prefs, [key]: val });
+                  }}
+                  trackColor={{ false: borderColor, true: accent }}
+                  thumbColor="#fff"
+                />
+              </View>
+            ))}
+          </View>)}
         </>
       );
     }
@@ -732,63 +885,89 @@ export default function CommunitySettingsScreen({ navigation }) {
     if (activeTab === "Privacy") {
       return (
         <>
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 10 }]}>
-            {renderCheckbox(visibleToAll, t("profile_visible_to_all"), () =>
-              setVisibleToAll((v) => {
-                const next = !v;
-                updateProfile({ visible_to_all: next });
-                return next;
-              })
-            )}
-            {renderCheckbox(allowDMs, t("allow_dms_anyone"), () =>
-              setAllowDMs((v) => {
-                const next = !v;
-                updateProfile({ allow_dms: next });
-                return next;
-              })
-            )}
-            {renderCheckbox(
-              prefs.blockDiffusionMessages,
-              "Block Diffusion Messages",
-              () => updatePrefs({ blockDiffusionMessages: !prefs.blockDiffusionMessages })
-            )}
-            <ThemedText style={{ fontSize: 12, color: theme.secondaryText, fontFamily: "Poppins", marginLeft: 28, marginTop: -4, marginBottom: 4 }}>
-              You won't receive broadcast messages from other users
-            </ThemedText>
-          </ThemedView>
+          {/* ── Visibility & messaging ── */}
+          <Text style={[styles.sectionLabel, { color: secondaryText, marginTop: 16 }]}>Visibility & messaging</Text>
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            <View style={styles.rowBetween}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("profile_visible_to_all")}</Text>
+              </View>
+              <Switch
+                value={visibleToAll}
+                onValueChange={async (val) => {
+                  setVisibleToAll(val);
+                  await supabase.rpc("update_privacy_settings", { p_visible_to_all: val, p_allow_dms: allowDMs });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("allow_dms_anyone")}</Text>
+              </View>
+              <Switch
+                value={allowDMs}
+                onValueChange={async (val) => {
+                  setAllowDMs(val);
+                  await supabase.rpc("update_privacy_settings", { p_visible_to_all: visibleToAll, p_allow_dms: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>Block Diffusion Messages</Text>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>
+                  You won't receive broadcast messages from other users
+                </Text>
+              </View>
+              <Switch
+                value={prefs.blockDiffusionMessages}
+                onValueChange={(val) => updatePrefs({ blockDiffusionMessages: val })}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
 
-          <ThemedView variant="gray" style={[styles.section, { paddingTop: 16 }]}>
-            <ThemedText style={[styles.sectionTitle, { color: theme.text }]}>
-              {t("settings_blocked_users_title")}
-            </ThemedText>
+          {/* ── Blocked users ── */}
+          <Text style={[styles.sectionLabel, { color: secondaryText }]}>{t("settings_blocked_users_title")}</Text>
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
             {blockedProfiles.length === 0 ? (
-              <ThemedText style={[styles.blockedEmptyText, { color: theme.secondaryText }]}>
-                {t("settings_no_blocked")}
-              </ThemedText>
+              <View style={{ padding: 14 }}>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>{t("settings_no_blocked")}</Text>
+              </View>
             ) : (
               <FlatList
                 data={blockedProfiles}
                 keyExtractor={(item) => item.id || item.username || Math.random().toString()}
                 scrollEnabled={false}
-                style={{ marginTop: 4 }}
-                renderItem={({ item }) => (
-                  <View style={styles.blockedRow}>
+                renderItem={({ item, index }) => (
+                  <View
+                    style={[
+                      styles.blockedRow,
+                      { paddingHorizontal: 14 },
+                      index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor },
+                    ]}
+                  >
                     <View style={{ flex: 1 }}>
-                      <ThemedText style={[styles.blockedName, { color: theme.text }]} numberOfLines={1}>
+                      <Text style={[styles.blockedName, { color: textColor }]} numberOfLines={1}>
                         {item.name || `@${item.username}`}
-                      </ThemedText>
-                      <ThemedText style={[styles.blockedUsername, { color: theme.secondaryText }]} numberOfLines={1}>
+                      </Text>
+                      <Text style={[styles.blockedUsername, { color: secondaryText }]} numberOfLines={1}>
                         @{item.username}
-                      </ThemedText>
+                      </Text>
                     </View>
                     <TouchableOpacity onPress={() => openUnblockModal(item.username)} hitSlop={8}>
-                      <Feather name="x" size={18} color={theme.text} />
+                      <Feather name="x" size={18} color={textColor} />
                     </TouchableOpacity>
                   </View>
                 )}
               />
             )}
-          </ThemedView>
+          </View>
         </>
       );
     }
@@ -854,6 +1033,14 @@ export default function CommunitySettingsScreen({ navigation }) {
             <ThemedText style={styles.logoutBtnText}>Log out</ThemedText>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            onPress={() => setDeleteModalVisible(true)}
+            style={[styles.deleteAccountBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.deleteAccountBtnText}>Delete account</Text>
+          </TouchableOpacity>
+
           <ThemedView variant="gray" style={{ height: 24 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -902,6 +1089,38 @@ export default function CommunitySettingsScreen({ navigation }) {
         </View>
       </Modal>
 
+      {/* ── Delete account confirmation modal ── */}
+      <Modal visible={deleteModalVisible} transparent animationType="fade" onRequestClose={() => setDeleteModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.unblockModalContent, { backgroundColor: isDark ? theme.gray : theme.background }]}>
+            <ThemedText style={[styles.unblockTitle, { color: theme.text }]}>
+              Delete your account?
+            </ThemedText>
+            <ThemedText style={{ fontFamily: "Poppins", fontSize: 13, color: theme.secondaryText, textAlign: "center", marginBottom: 16 }}>
+              This permanently deletes your profile, posts, and all data. This cannot be undone.
+            </ThemedText>
+            <View style={styles.unblockButtonsRow}>
+              <TouchableOpacity
+                style={[styles.unblockBtnSmall, styles.unblockNoBtn]}
+                onPress={() => setDeleteModalVisible(false)}
+                disabled={deleting}
+              >
+                <ThemedText style={styles.unblockBtnSmallText}>Cancel</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.unblockBtnSmall, { backgroundColor: "#E55353", opacity: deleting ? 0.6 : 1 }]}
+                onPress={handleDeleteAccount}
+                disabled={deleting}
+              >
+                {deleting
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>Delete</ThemedText>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {premiumModal && (
         <PremiumPurchaseModal
           visible={!!premiumModal}
@@ -924,6 +1143,8 @@ export default function CommunitySettingsScreen({ navigation }) {
           userId={userId || ""}
         />
       )}
+
+      <OnboardingOverlay screenKey="settings" />
     </SafeAreaView>
   );
 }
@@ -969,13 +1190,45 @@ const styles = StyleSheet.create({
   },
 
   content: { paddingHorizontal: 15 },
-  section: { marginTop: 16 },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    marginBottom: 6,
-    fontFamily: "Poppins",
+
+  // FeedSettings-style card
+  card: {
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: "hidden",
+    marginBottom: 12,
   },
+  sectionLabel: {
+    fontSize: 11,
+    fontFamily: "Poppins",
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+  },
+  rowTitle: {
+    fontSize: 14,
+    fontFamily: "Poppins",
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  rowSub: { fontSize: 12, fontFamily: "Poppins", lineHeight: 16 },
+
+  // List-style option row (theme / language)
+  listOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+
+  // Legacy checkbox (kept for renderCheckbox still used in Premium section indirectly)
   checkboxRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1101,6 +1354,17 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontFamily: "Poppins",
     color: "#E55353",
+  },
+  deleteAccountBtn: {
+    marginTop: 4,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  deleteAccountBtnText: {
+    fontSize: 13,
+    fontFamily: "Poppins",
+    color: "#999",
+    textDecorationLine: "underline",
   },
 
   verifiedRow: {

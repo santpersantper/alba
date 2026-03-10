@@ -29,6 +29,8 @@ import {
   getCachedChatListData,
   preloadChatListData,
   isCacheFresh,
+  invalidateChatListCache,
+  removeChatFromCache,
 } from "../lib/chatListCache";
 
 
@@ -141,7 +143,9 @@ export default function ChatListScreen({ navigation }) {
       setBlockedUsers(fresh.blockedUsers || []);
       setMaxDistanceKm(typeof fresh.maxDistanceKm === "number" ? fresh.maxDistanceKm : 50);
       setMyUsername(fresh.myUsername || null);
-    } catch {}
+    } catch (e) {
+      console.warn("[ChatList] refreshInBackground failed:", e?.message);
+    }
   }, []);
 
   const init = useCallback(async () => {
@@ -188,7 +192,9 @@ export default function ChatListScreen({ navigation }) {
           refreshInBackground(uid);
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (err) console.warn("[ChatList realtime] error:", err.message);
+      });
   }, [hydrateFromCacheFast, refreshInBackground]);
 
   useEffect(() => {
@@ -201,6 +207,7 @@ export default function ChatListScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
+      invalidateChatListCache(); // force fresh fetch every time screen is focused
       init();
       return undefined;
     }, [init])
@@ -240,6 +247,10 @@ export default function ChatListScreen({ navigation }) {
 
       if (isBlocked) {
         lastMessage = t("chat_user_blocked_snippet");
+      } else if (text.startsWith("__feed_video__:")) {
+        lastMessage = isGroup ? `${actorBase}: Shared a video` : "Shared a video";
+      } else if (text.startsWith("__location__:")) {
+        lastMessage = isGroup ? `${actorBase}: Shared a location` : "Shared a location";
       } else if (text) {
         const truncated = text.length > 60 ? `${text.slice(0, 60)}…` : text;
         lastMessage = isGroup ? `${actorBase}: ${truncated}` : truncated;
@@ -396,7 +407,7 @@ export default function ChatListScreen({ navigation }) {
     const username = profile.username;
     if (!username) return;
     const displayName = profile.name || prettifyUsername(profile.username || "");
-    navigation.navigate("SingleChat", { isGroup: false, peerName: displayName, username });
+    navigation.navigate("SingleChat", { isGroup: false, peerName: displayName, username, myUsername: myUsername || undefined });
   };
 
   const openChat = (item) => {
@@ -415,6 +426,7 @@ export default function ChatListScreen({ navigation }) {
         isGroup: false,
         peerName: item.name,
         username: item.username,
+        myUsername: myUsername || undefined,
       });
     }
   };
@@ -630,7 +642,7 @@ export default function ChatListScreen({ navigation }) {
                 setChatMenu(null);
                 Alert.alert(
                   "Delete chat",
-                  `Delete your conversation with ${item?.name}? This only removes it from your view.`,
+                  `Delete your conversation with ${item?.name}? This removes all your messages permanently.`,
                   [
                     { text: "Cancel", style: "cancel" },
                     {
@@ -639,11 +651,37 @@ export default function ChatListScreen({ navigation }) {
                       onPress: async () => {
                         try {
                           if (!currentUserId) return;
+                          // Delete all my message rows for this chat
+                          await supabase
+                            .from("messages")
+                            .delete()
+                            .eq("chat", item?.chatId)
+                            .eq("owner_id", currentUserId);
+                          // Delete the thread entry
                           await supabase
                             .from("chat_threads")
                             .delete()
                             .eq("chat_id", item?.chatId)
                             .eq("owner_id", currentUserId);
+                          // For groups: leave by removing self from members array.
+                          // This covers groups with no messages (no chat_threads row)
+                          // so the group stops reappearing after app restart.
+                          if (item?.type === "group" && myUsername) {
+                            const { data: grp } = await supabase
+                              .from("groups")
+                              .select("members")
+                              .eq("id", item?.chatId)
+                              .maybeSingle();
+                            if (grp?.members) {
+                              await supabase
+                                .from("groups")
+                                .update({ members: grp.members.filter((u) => u !== myUsername) })
+                                .eq("id", item?.chatId);
+                            }
+                          }
+                          // Remove from cache + UI — deletedIds in chatListCache ensures
+                          // this thread never comes back even if DB refresh re-fetches it
+                          removeChatFromCache(item?.chatId, currentUserId);
                           setThreads((prev) => prev.filter((t) => String(t.chat_id) !== String(item?.chatId)));
                           if (item?.type === "group") {
                             setGroupMap((prev) => {

@@ -84,7 +84,7 @@ async function fetchProfileById(id) {
   if (!id) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified")
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
@@ -96,7 +96,7 @@ async function fetchProfileByUsername(username) {
   const uname = asAt(username);
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified")
     .eq("username", uname)
     .maybeSingle();
   if (error) throw error;
@@ -176,6 +176,8 @@ export default function ProfileScreen({ navigation, route }) {
   const [reportText, setReportText] = useState("");
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
+  const [unverifyModalVisible, setUnverifyModalVisible] = useState(false);
+  const [pendingAvatarAsset, setPendingAvatarAsset] = useState(null);
 
   const [toastMessage, setToastMessage] = useState("");
   const toastOpacity = useRef(new Animated.Value(0)).current;
@@ -327,6 +329,7 @@ export default function ProfileScreen({ navigation, route }) {
       avatarLocal: fetched?.avatar_local ?? null,
 
       email: fetched?.email ?? null,
+      isVerified: fetched?.is_verified ?? false,
     };
   }, [fetched, params]);
 
@@ -611,46 +614,19 @@ export default function ProfileScreen({ navigation, route }) {
     }
   };
 
-  const handlePickAvatar = async () => {
-    if (!isSelf || !display.id) return;
+  const doUploadAvatar = async (assetUri, unverify = false) => {
+    setUploadingAvatar(true);
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Permission needed", "Alba needs access to your photos to set a profile picture.");
-        return;
-      }
-
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: false,
-        quality: 0.9,
-      });
-      if (res.canceled) return;
-
-      const asset = res.assets?.[0];
-      if (!asset?.uri) return;
-
-      setUploadingAvatar(true);
-
-      const hasFace = await detectFaceInAvatar(asset.uri);
-      if (!hasFace) {
-        Alert.alert(t("avatar_invalid_title"), t("avatar_invalid_message"));
-        setUploadingAvatar(false);
-        return;
-      }
-
-      const publicUrl = await uploadImageToAlbaMedia(asset.uri, "avatars");
-
-      const { error } = await supabase.from("profiles").update({ avatar_url: publicUrl }).eq("id", display.id);
+      const publicUrl = await uploadImageToAlbaMedia(assetUri, "avatars");
+      const patch = { avatar_url: publicUrl };
+      if (unverify) patch.is_verified = false;
+      const { error } = await supabase.from("profiles").update(patch).eq("id", display.id);
       if (error) throw error;
-
       const local = await cacheImageToDisk(publicUrl);
-
       setFetched((prev) =>
-        prev ? { ...prev, avatar_url: publicUrl, avatar_local: local || prev.avatar_local || null } : prev
+        prev ? { ...prev, avatar_url: publicUrl, avatar_local: local || prev.avatar_local || null, ...(unverify ? { is_verified: false } : {}) } : prev
       );
       setAvatarRenderable(local || publicUrl);
-
       await setCachedProfile(
         { userId: display.id, username: display.username, isMe: true },
         {
@@ -664,11 +640,58 @@ export default function ProfileScreen({ navigation, route }) {
           cover_url: fetched?.cover_url || null,
           cover_local: fetched?.cover_local || null,
           bio: fetched?.bio || null,
+          is_verified: unverify ? false : (fetched?.is_verified ?? false),
         }
       );
     } catch {
       Alert.alert("Error", "Could not update profile picture.");
     } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
+  const handlePickAvatar = async () => {
+    if (!isSelf || !display.id) return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permission needed", "Alba needs access to your photos to set a profile picture.");
+        return;
+      }
+
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: false,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+      if (res.canceled) return;
+
+      const asset = res.assets?.[0];
+      if (!asset?.uri) return;
+
+      setUploadingAvatar(true);
+      const hasFace = await detectFaceInAvatar(asset.uri);
+      setUploadingAvatar(false);
+
+      // No face + not verified → reject outright
+      if (!hasFace && !display.isVerified) {
+        Alert.alert(t("avatar_invalid_title"), t("avatar_invalid_message"));
+        return;
+      }
+
+      // Verified user → always show unverify confirmation (regardless of face)
+      if (display.isVerified) {
+        setPendingAvatarAsset(asset);
+        setUnverifyModalVisible(true);
+        return;
+      }
+
+      // Not verified, has face → normal upload
+      await doUploadAvatar(asset.uri, false);
+    } catch {
+      Alert.alert("Error", "Could not update profile picture.");
       setUploadingAvatar(false);
     }
   };
@@ -815,7 +838,12 @@ export default function ProfileScreen({ navigation, route }) {
 
           {/* Meta */}
           <View style={styles.infoWrap}>
-            <Text style={[styles.name, { color: theme.text }]}>{firstName}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+              <Text style={[styles.name, { color: theme.text }]}>{firstName}</Text>
+              {display.isVerified && (
+                <Feather name="check-circle" size={18} color="#3D8BFF" style={{ marginLeft: 6 }} />
+              )}
+            </View>
             <Text style={[styles.location, { color: theme.secondaryText }]}>{locationText}</Text>
 
             {isSelf ? (
@@ -1086,6 +1114,48 @@ export default function ProfileScreen({ navigation, route }) {
                 <Text style={styles.dialogBtnSubmitText}>{t("profile_unblock_label")}</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Unverify confirmation modal */}
+      <Modal
+        visible={unverifyModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setUnverifyModalVisible(false); setPendingAvatarAsset(null); }}
+      >
+        <View style={styles.centeredOverlay}>
+          <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            {pendingAvatarAsset?.uri && (
+              <Image
+                source={{ uri: pendingAvatarAsset.uri }}
+                style={{ width: 80, height: 80, borderRadius: 40, alignSelf: "center", marginBottom: 16 }}
+              />
+            )}
+            <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111", textAlign: "center" }]}>
+              This picture is unverified
+            </Text>
+            <Text style={{ fontFamily: "Poppins", fontSize: 13, color: theme.secondaryText, marginBottom: 22, textAlign: "center", lineHeight: 18 }}>
+              You will have to verify your identity again to be able to chat with others and make posts.
+            </Text>
+            <TouchableOpacity
+              style={{ backgroundColor: "#d23b3b", borderRadius: 10, paddingVertical: 13, alignItems: "center", marginBottom: 10 }}
+              onPress={async () => {
+                setUnverifyModalVisible(false);
+                const uri = pendingAvatarAsset?.uri;
+                setPendingAvatarAsset(null);
+                if (uri) await doUploadAvatar(uri, true);
+              }}
+            >
+              <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>Change and unverify</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ backgroundColor: isDark ? "#3a3a3a" : "#F3F4F6", borderRadius: 10, paddingVertical: 13, alignItems: "center" }}
+              onPress={() => { setUnverifyModalVisible(false); setPendingAvatarAsset(null); }}
+            >
+              <Text style={{ color: theme.text, fontFamily: "Poppins", fontSize: 14 }}>Keep profile picture</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
