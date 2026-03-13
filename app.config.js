@@ -80,6 +80,7 @@ export default {
     },
     plugins: [
       "expo-image",
+      "expo-system-ui",
       "expo-font",
       "expo-asset",
       "expo-secure-store",
