@@ -34,6 +34,8 @@ const GOOGLE_WEB_CLIENT_ID =
 // iOS OAuth client — bundle ID: host.exp.Exponent (Expo Go testing)
 // For production builds, create a separate iOS client with bundle ID com.alba.app
 const GOOGLE_IOS_CLIENT_ID = '1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi.apps.googleusercontent.com';
+// Android OAuth client — package: com.alba.app, created in Google Cloud Console
+const GOOGLE_ANDROID_CLIENT_ID = '1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq.apps.googleusercontent.com';
 
 export default function StartScreen({ navigation }) {
   const { theme, isDark } = useAlbaTheme();
@@ -61,6 +63,7 @@ export default function StartScreen({ navigation }) {
   const [_request, response, promptAsync] = Google.useAuthRequest({
     webClientId: GOOGLE_WEB_CLIENT_ID,
     iosClientId: GOOGLE_IOS_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
   });
 
   useEffect(() => {
