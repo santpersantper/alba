@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Modal,
   View,
@@ -66,6 +66,10 @@ export default function BuyModal({ visible, onClose, postId }) {
   const [prices, setPrices] = useState([]);
   const [bools, setBools] = useState([]);
   const [requiredInfo, setRequiredInfo] = useState([]);
+  const [productNotes, setProductNotes] = useState([]);
+  const [productRequiredInfo, setProductRequiredInfo] = useState([]);
+  const [productOptions, setProductOptions] = useState([]);
+  const [isAgeRestricted, setIsAgeRestricted] = useState(false);
   const [postType, setPostType] = useState(null);
   const [items, setItems] = useState([]);
 
@@ -109,14 +113,6 @@ export default function BuyModal({ visible, onClose, postId }) {
     };
   }, []);
 
-  const extraFields = useMemo(() => {
-    const r = Array.isArray(requiredInfo) ? requiredInfo : [];
-    return r.filter((f) => {
-      const k = normKey(f);
-      return !BASIC_KEYS.has(k);
-    });
-  }, [requiredInfo]);
-
   // fetch data when modal opens
   useEffect(() => {
     if (!visible || !postId) return;
@@ -133,24 +129,58 @@ export default function BuyModal({ visible, onClose, postId }) {
           looksLikeUuid: looksLikeUuid(String(postId)),
         });
 
-        const { data, error } = await supabase
+        // Try full query with new columns first; fall back if schema cache hasn't refreshed yet
+        let data, fetchError;
+        ({ data, error: fetchError } = await supabase
           .from(POSTS_TABLE)
-          .select("type, product_types, product_prices, product_booleans, required_info")
+          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted")
           .eq("id", postId)
-          .maybeSingle();
+          .maybeSingle());
 
-        if (error) throw error;
+        if (fetchError) {
+          if (fetchError.code === "PGRST204" || fetchError.message?.includes("column") || fetchError.message?.includes("schema")) {
+            // New columns not yet visible in PostgREST schema cache — fall back to basic query
+            let basicErr;
+            ({ data, error: basicErr } = await supabase
+              .from(POSTS_TABLE)
+              .select("type, product_types, product_prices, product_booleans, required_info")
+              .eq("id", postId)
+              .maybeSingle());
+            if (basicErr) throw basicErr;
+          } else {
+            throw fetchError;
+          }
+        }
+
         if (cancelled || !data) return;
 
-        const pTypes = data.product_types || [];
-        const pPrices = data.product_prices || [];
-        const pBools = data.product_booleans || [];
+        // Filter out empty product type names
+        const rawTypes = data.product_types || [];
+        const rawPrices = data.product_prices || [];
+        const rawBools = data.product_booleans || [];
+        const rawNotes = Array.isArray(data.product_notes) ? data.product_notes : [];
+        const rawReqInfo = Array.isArray(data.product_required_info) ? data.product_required_info : [];
+        const rawOptions = Array.isArray(data.product_options) ? data.product_options : [];
+
+        // Build filtered index to remove unnamed types
+        const validIndices = rawTypes.map((t, i) => ({ t, i })).filter(({ t }) => String(t || "").trim());
+        const pTypes  = validIndices.map(({ t }) => t);
+        const pPrices = validIndices.map(({ i }) => rawPrices[i] ?? 0);
+        const pNotes  = validIndices.map(({ i }) => rawNotes[i] ?? "");
+        const pReqInfo = validIndices.map(({ i }) => rawReqInfo[i] ?? []);
+        const pOptions = validIndices.map(({ i }) => rawOptions[i] ?? []);
+
+        const pBools = rawBools;
         const reqInfo = data.required_info || [];
 
         setTypes(pTypes);
         setPrices(pPrices);
         setBools(pBools);
         setRequiredInfo(reqInfo);
+        setProductNotes(pNotes);
+        setProductRequiredInfo(pReqInfo);
+        setProductOptions(pOptions);
+        setIsAgeRestricted(!!data.is_age_restricted);
         setPostType(data.type || null);
 
         const baseToggleState = (pBools || []).reduce((acc, label) => {
@@ -159,13 +189,14 @@ export default function BuyModal({ visible, onClose, postId }) {
         }, {});
 
         setItems(
-          (pTypes || []).map(() => ({
+          pTypes.map(() => ({
             checked: false,
             quantity: "",
             toggles: { ...baseToggleState },
             forMeOnly: true,
             forMeUnit1: false,
             details: {},
+            selectedOptions: [],
           }))
         );
       } catch (e) {
@@ -174,6 +205,10 @@ export default function BuyModal({ visible, onClose, postId }) {
         setPrices([]);
         setBools([]);
         setRequiredInfo([]);
+        setProductNotes([]);
+        setProductRequiredInfo([]);
+        setProductOptions([]);
+        setIsAgeRestricted(false);
         setItems([]);
       } finally {
         if (!cancelled) setLoading(false);
@@ -199,6 +234,19 @@ export default function BuyModal({ visible, onClose, postId }) {
       prev.map((it, i) =>
         i === index ? { ...it, toggles: { ...it.toggles, [key]: !it.toggles[key] } } : it
       )
+    );
+  };
+
+  const toggleOption = (itemIndex, optionIndex) => {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== itemIndex) return it;
+        const cur = it.selectedOptions || [];
+        const next = cur.includes(optionIndex)
+          ? cur.filter((x) => x !== optionIndex)
+          : [...cur, optionIndex];
+        return { ...it, selectedOptions: next };
+      })
     );
   };
 
@@ -263,7 +311,6 @@ export default function BuyModal({ visible, onClose, postId }) {
   const capitalKind = kindWord.charAt(0).toUpperCase() + kindWord.slice(1);
 
   const buildTicketUnits = () => {
-    const rInfo = Array.isArray(requiredInfo) ? requiredInfo : [];
     const units = [];
 
     items.forEach((state, productIndex) => {
@@ -302,6 +349,7 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (isHiddenMe) return;
 
         const details = state.details || {};
+        const rInfo = getRequiredInfoForIndex(productIndex);
 
         // key is `${unitIdx}__${field}` where field="__alba_username" → 4 underscores total
         const usernameVal = details[`${unitIdx}____alba_username`] || "";
@@ -350,8 +398,15 @@ export default function BuyModal({ visible, onClose, postId }) {
     return Number.isFinite(n) ? n : null;
   };
 
+  // Get effective required info for a specific product/ticket index
+  const getRequiredInfoForIndex = (idx) => {
+    const perType = Array.isArray(productRequiredInfo) ? productRequiredInfo[idx] : null;
+    if (Array.isArray(perType) && perType.length > 0) return perType;
+    return Array.isArray(requiredInfo) ? requiredInfo : [];
+  };
+
   const resolvePersonInfo = (unit, profileByUsername) => {
-    const rInfo = Array.isArray(requiredInfo) ? requiredInfo : [];
+    const rInfo = getRequiredInfoForIndex(unit.productIndex);
     const profile = unit.usernameHint ? profileByUsername[unit.usernameHint.toLowerCase()] : null;
 
     const fromProfile = {
@@ -370,34 +425,31 @@ export default function BuyModal({ visible, onClose, postId }) {
     const manualAge = ageField ? manual[ageField] : null;
     const manualGender = genderField ? manual[genderField] : null;
 
+    const unitExtraFields = rInfo.filter((f) => !BASIC_KEYS.has(normKey(f)));
     let extra = {};
     if (unit.isMe) {
       const state = items[unit.productIndex] || {};
       const det = state.details || {};
-      extraFields.forEach((f) => {
+      unitExtraFields.forEach((f) => {
         const k = normKey(f);
         let val = "";
-        // Auto-fill from profile if available
         if (profile) {
           if (k === "city") val = profile.city || "";
           else if (k === "email") val = profile.email || "";
           else if (k === "username") val = profile.username || "";
         }
-        // Fall back to manual input
         if (!val) val = det[`ME__${f}`] || "";
         if (String(val).trim()) extra[f] = val;
       });
     } else {
-      extraFields.forEach((f) => {
+      unitExtraFields.forEach((f) => {
         const k = normKey(f);
         let val = "";
-        // Auto-fill from profile if available
         if (profile) {
           if (k === "city") val = profile.city || "";
           else if (k === "email") val = profile.email || "";
           else if (k === "username") val = profile.username || "";
         }
-        // Fall back to manual input
         if (!val) val = manual?.[f] || "";
         if (String(val).trim()) extra[f] = val;
       });
@@ -432,25 +484,28 @@ export default function BuyModal({ visible, onClose, postId }) {
     if (!postId) return "Missing postId.";
     if (!units.length) return "Select at least one option.";
 
-    const nameField = (requiredInfo || []).find(fieldIsName);
-    if (nameField) {
-      for (const u of units) {
-        if (!u.isMe && !u.usernameHint) {
-          const n = (u.manual?.[nameField] || "").toString().trim();
-          if (!n) return "Please fill in the name for each attendee (or add their @username).";
-        }
+    for (const u of units) {
+      const rInfo = getRequiredInfoForIndex(u.productIndex);
+      const nameField = rInfo.find(fieldIsName);
+      if (nameField && !u.isMe && !u.usernameHint) {
+        const n = (u.manual?.[nameField] || "").toString().trim();
+        if (!n) return "Please fill in the name for each attendee (or add their @username).";
       }
     }
 
-    if (extraFields.length) {
-      for (const u of units) {
-        if (!u.isMe) continue;
-        const state = items[u.productIndex] || {};
-        const det = state.details || {};
-        for (const f of extraFields) {
-          const v = (det[`ME__${f}`] || "").toString().trim();
-          if (!v) return `Please fill in: ${f} (for you).`;
-        }
+    // Validate extra fields per unit
+    for (const u of units) {
+      if (!u.isMe) continue;
+      const rInfo = getRequiredInfoForIndex(u.productIndex);
+      const unitExtraFields = rInfo.filter((f) => {
+        const k = normKey(f);
+        return !BASIC_KEYS.has(k);
+      });
+      const state = items[u.productIndex] || {};
+      const det = state.details || {};
+      for (const f of unitExtraFields) {
+        const v = (det[`ME__${f}`] || "").toString().trim();
+        if (!v) return `Please fill in: ${f} (for you).`;
       }
     }
     return null;
@@ -534,7 +589,12 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (!state.checked) return sum;
         const priceEuros = Number(prices[idx]) || 0;
         const qty = state.forMeOnly ? 1 : parseInt(state.quantity, 10) || 0;
-        return sum + Math.round(priceEuros * 100) * qty;
+        // Add selected options extra costs
+        const opts = productOptions[idx] || [];
+        const optExtra = (state.selectedOptions || []).reduce((s, optIdx) => {
+          return s + (Number(opts[optIdx]?.extraCost) || 0);
+        }, 0);
+        return sum + (Math.round(priceEuros * 100) + Math.round(optExtra * 100)) * qty;
       }, 0);
 
       // === STRIPE PAYMENT GATE (skipped automatically for free events) ===
@@ -579,9 +639,12 @@ export default function BuyModal({ visible, onClose, postId }) {
                 ? 1
                 : parseInt(state.quantity, 10) || 0;
               if (qty <= 0) return null;
+              const opts = productOptions[idx] || [];
+              const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(opts[oIdx]?.extraCost) || 0), 0);
+              const unitPrice = (Number(prices[idx]) || 0) + optExtra;
               return {
                 label: types[idx] || "Ticket",
-                amount: String(((Number(prices[idx]) || 0) * qty).toFixed(2)),
+                amount: String((unitPrice * qty).toFixed(2)),
                 paymentType: "Immediate",
               };
             })
@@ -642,6 +705,17 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (postType === "Ad") {
           // Ad purchase — no event row; track stat and confirm
           supabase.rpc("increment_ad_stat", { p_post_id: postId, p_field: "purchases" }).catch(() => {});
+          // Save individual purchase records for the Buyers section in AdPublisherScreen
+          const purchaseRows = units.map((u) => ({
+            post_id: postId,
+            buyer_id: uid,
+            buyer_username: myUsername || null,
+            product_name: u.productLabel || null,
+            required_info: u.manual && Object.keys(u.manual).length > 0 ? u.manual : null,
+          }));
+          if (purchaseRows.length > 0) {
+            supabase.from("ad_purchases").insert(purchaseRows).catch(() => {});
+          }
           showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); });
           return;
         }
@@ -717,7 +791,7 @@ export default function BuyModal({ visible, onClose, postId }) {
       }
 
       // Duplicate check for manual-entry units (no @username, name typed manually)
-      const nameCheckField = (requiredInfo || []).find(fieldIsName);
+      const nameCheckField = (requiredInfo || []).find(fieldIsName) || getRequiredInfoForIndex(0).find(fieldIsName);
       if (nameCheckField) {
         const purchaseManualNames = new Set();
         for (const u of units) {
@@ -772,6 +846,24 @@ export default function BuyModal({ visible, onClose, postId }) {
       // 3) build ticket_holders additions + attendees_info entries
       const additions = [];
       const attendeesEntries = [];
+
+      // Age restriction check
+      if (isAgeRestricted) {
+        for (const u of units) {
+          const info = resolvePersonInfo(u, profileByUsername);
+          if (info.age != null && Number(info.age) < 18) {
+            const who = info.name || info.username || (u.isMe ? "You" : "One of the attendees");
+            showFeedback("Age restriction", `${who} must be 18 or older to attend this event.`);
+            return;
+          }
+          // If age is required and not provided, block
+          const rInfo = getRequiredInfoForIndex(u.productIndex);
+          if (rInfo.find(fieldIsAge) && info.age == null) {
+            showFeedback("Age required", "Please provide the age for each attendee.");
+            return;
+          }
+        }
+      }
 
       for (const u of units) {
         const info = resolvePersonInfo(u, profileByUsername);
@@ -905,8 +997,15 @@ export default function BuyModal({ visible, onClose, postId }) {
                   const price = prices?.[index];
                   const state = items[index] || {};
                   const qtyNum = parseInt(state.quantity, 10) || 0;
+                  const note = (productNotes || [])[index] || "";
+                  const typeOptions = (productOptions || [])[index] || [];
+                  const typeReqInfo = getRequiredInfoForIndex(index);
+                  const typeExtraFields = typeReqInfo.filter((f) => !BASIC_KEYS.has(normKey(f)));
+                  const showMeExtra = typeExtraFields.length > 0 && (state.forMeOnly || state.forMeUnit1);
 
-                  const showMeExtra = extraFields.length > 0 && (state.forMeOnly || state.forMeUnit1);
+                  // Price including selected options
+                  const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(typeOptions[oIdx]?.extraCost) || 0), 0);
+                  const displayPrice = (Number(price) || 0) + optExtra;
 
                   return (
                     <View key={`${label}-${index}`} style={styles.productBlock}>
@@ -921,8 +1020,34 @@ export default function BuyModal({ visible, onClose, postId }) {
                         <Text style={[styles.productLabel, { color: theme.text }]} numberOfLines={1}>
                           {label}
                         </Text>
-                        <Text style={[styles.priceText, { color: theme.text }]}>{formatPrice(price)}</Text>
+                        <Text style={[styles.priceText, { color: theme.text }]}>{formatPrice(displayPrice)}</Text>
                       </TouchableOpacity>
+                      {!!note && (
+                        <Text style={[styles.noteText, { color: isDark ? "#9CA3AF" : "#888" }]}>{note}</Text>
+                      )}
+                      {typeOptions.length > 0 && (
+                        <View style={styles.optionsList}>
+                          {typeOptions.map((opt, oIdx) => {
+                            const selected = (state.selectedOptions || []).includes(oIdx);
+                            return (
+                              <TouchableOpacity
+                                key={`opt-${index}-${oIdx}`}
+                                style={styles.optionRow}
+                                onPress={() => toggleOption(index, oIdx)}
+                                activeOpacity={0.8}
+                              >
+                                <View style={styles.checkboxOuterSmall}>
+                                  {selected && <View style={styles.checkboxInnerSmall} />}
+                                </View>
+                                <Text style={[styles.booleanLabel, { color: theme.text, flex: 1 }]}>{opt.name}</Text>
+                                {opt.extraCost > 0 && (
+                                  <Text style={[styles.optionPrice, { color: isDark ? "#9CA3AF" : "#888" }]}>+{formatPrice(opt.extraCost)}</Text>
+                                )}
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
 
                       {state.checked && (
                         <View style={styles.detailsArea}>
@@ -963,7 +1088,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                               <Text style={[styles.meExtraTitle, { color: isDark ? "#9CA3AF" : "#666" }]}>
                                 For me (extra info)
                               </Text>
-                              {extraFields.map((f) => {
+                              {typeExtraFields.map((f) => {
                                 const val = state.details?.[`ME__${f}`] || "";
                                 return (
                                   <View key={`me-extra-${f}`} style={styles.unitField}>
@@ -1003,7 +1128,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                                 onChangeText={(v) => changeQty(index, v)}
                               />
 
-                              {requiredInfo?.length > 0 && qtyNum > 0 && (
+                              {typeReqInfo?.length > 0 && qtyNum > 0 && (
                                 <View style={styles.unitsBlock}>
                                   {qtyNum > 1 && (
                                     <TouchableOpacity
@@ -1032,7 +1157,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                                         </Text>
 
                                         <View style={styles.unitRow}>
-                                          {requiredInfo.map((field) => {
+                                          {typeReqInfo.map((field) => {
                                             const key = `${unitIdx}__${field}`;
                                             const val = state.details?.[key] || "";
 
@@ -1220,6 +1345,11 @@ const styles = StyleSheet.create({
   cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
   actionText: { fontWeight: "700", fontFamily: "Poppins" },
   emptyText: { fontFamily: "Poppins", fontSize: 14 },
+
+  noteText: { fontFamily: "Poppins", fontSize: 12, marginTop: 2, marginLeft: 26, marginBottom: 4 },
+  optionsList: { marginLeft: 26, marginTop: 4, marginBottom: 4 },
+  optionRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
+  optionPrice: { fontFamily: "Poppins", fontSize: 12, marginLeft: 6 },
 
   feedbackCard: {
     width: "78%",

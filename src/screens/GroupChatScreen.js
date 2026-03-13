@@ -390,7 +390,8 @@ export default function GroupChatScreen({ navigation, route }) {
         if (mounted && Array.isArray(cachedItems) && cachedItems.length) {
           const filtered = cachedItems.filter((it) => !isJoinBannerItem(it));
           setItems(filtered);
-          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
         }
 
         // 2) refresh (enriched) and persist
@@ -399,7 +400,8 @@ export default function GroupChatScreen({ navigation, route }) {
 
         if (mounted) {
           setItems(filteredFresh);
-          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
         }
 
         await setCachedGroupMessages(chatId, filteredFresh);
@@ -793,9 +795,7 @@ export default function GroupChatScreen({ navigation, route }) {
     const isNewMinuteBlock = !prev || prev.minuteKey !== item.minuteKey;
     const senderChanged = !prev || prev.senderUsername !== item.senderUsername;
     const needsTopMargin = isNewMinuteBlock || senderChanged;
-    // Show time only for the last message in a same-minute same-sender run
-    const isSameMinuteGroup = !!next && next.minuteKey === item.minuteKey && next.senderUsername === item.senderUsername;
-    const displayTime = isSameMinuteGroup ? null : item.time;
+    const displayTime = item.time;
 
     const senderDisplayName = !item.isMe && senderChanged
       ? (profilesMap[item.senderUsername]?.firstName || undefined)
@@ -943,7 +943,6 @@ export default function GroupChatScreen({ navigation, route }) {
           contentContainerStyle={[styles.listContent, { paddingBottom: 8 }]}
           style={{ flex: 1 }}
           showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => listRef.current?.scrollToEnd?.({ animated: false })}
           keyboardShouldPersistTaps="handled"
         />
 

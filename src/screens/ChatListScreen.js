@@ -446,7 +446,7 @@ export default function ChatListScreen({ navigation }) {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
-      <Header title="Chats" onBack={onPressBack} theme={theme} />
+      <Header title={t("chats_title")} onBack={onPressBack} theme={theme} />
 
       <View
         style={[

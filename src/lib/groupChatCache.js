@@ -127,6 +127,7 @@ export function mapMessageRowToItem(row) {
     isMe: !!row.sender_is_me,
     senderUsername: row.sender_username || null,
     minuteKey: makeMinuteKey(row.sent_date, row.sent_time),
+    time: (row.sent_time || "").slice(0, 5),
   };
 
   if (row.group_id) return { ...base, type: "invite", groupId: row.group_id };

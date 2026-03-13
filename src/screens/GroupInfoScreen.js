@@ -455,6 +455,8 @@ export default function GroupInfoScreen() {
       const res = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsMultipleSelection: false,
+        allowsEditing: true,
+        aspect: [1, 1],
         quality: 0.9,
       });
       if (res.canceled) return;
@@ -907,7 +909,7 @@ export default function GroupInfoScreen() {
             onPress={() => handleSubgroupPress(group, isMember)}
           >
             <Text style={styles.subgroupButtonText}>
-              {isMember ? "See" : "Join"}
+              {isMember ? t("group_subgroup_see") : t("group_subgroup_join")}
             </Text>
           </TouchableOpacity>
         )}
@@ -1000,9 +1002,7 @@ export default function GroupInfoScreen() {
                 { color: theme.subtleText || theme.text },
               ]}
             >
-              {`Group · ${memberCount} ${
-                memberCount === 1 ? "member" : "members"
-              }`}
+              {(memberCount === 1 ? t("group_meta") : t("group_meta_plural")).replace("{n}", memberCount)}
             </Text>
 
             {!!groupDesc && (
@@ -1173,8 +1173,8 @@ export default function GroupInfoScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>Require approval to join</Text>
-                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>New members must be approved by an admin</Text>
+                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>{t("group_require_approval")}</Text>
+                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>{t("group_require_approval_sub")}</Text>
                 </View>
                 <View style={[styles.toggleTrack, { backgroundColor: requireApproval ? "#3D8BFF" : (theme.border || "#ccc") }]}>
                   <View style={[styles.toggleThumb, { alignSelf: requireApproval ? "flex-end" : "flex-start" }]} />
@@ -1191,8 +1191,8 @@ export default function GroupInfoScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>Review messages with links</Text>
-                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>Members are warned when sending messages containing links</Text>
+                  <Text style={[styles.approvalToggleLabel, { color: theme.text }]}>{t("group_review_links")}</Text>
+                  <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>{t("group_review_links_sub")}</Text>
                 </View>
                 <View style={[styles.toggleTrack, { backgroundColor: reviewLinks ? "#3D8BFF" : (theme.border || "#ccc") }]}>
                   <View style={[styles.toggleThumb, { alignSelf: reviewLinks ? "flex-end" : "flex-start" }]} />
@@ -1201,7 +1201,7 @@ export default function GroupInfoScreen() {
 
               {pendingMembers.length > 0 && (
                 <View style={styles.pendingList}>
-                  <Text style={[styles.pendingTitle, { color: theme.text }]}>Pending requests ({pendingMembers.length})</Text>
+                  <Text style={[styles.pendingTitle, { color: theme.text }]}>{t("group_pending_requests").replace("{n}", pendingMembers.length)}</Text>
                   {pendingMembers.map((uname) => (
                     <View key={uname} style={styles.pendingRow}>
                       <Text style={[styles.pendingName, { color: theme.text }]}>@{uname}</Text>
@@ -1216,7 +1216,7 @@ export default function GroupInfoScreen() {
                             setMembersUsernames(nextMembers);
                           }}
                         >
-                          <Text style={styles.pendingBtnText}>Approve</Text>
+                          <Text style={styles.pendingBtnText}>{t("group_approve")}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={[styles.pendingBtn, { backgroundColor: "#EF4444" }]}
@@ -1226,7 +1226,7 @@ export default function GroupInfoScreen() {
                             setPendingMembers(nextPending);
                           }}
                         >
-                          <Text style={styles.pendingBtnText}>Decline</Text>
+                          <Text style={styles.pendingBtnText}>{t("group_decline")}</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -1364,7 +1364,7 @@ export default function GroupInfoScreen() {
                 onPress={handleRemoveAdmin}
               >
                 <Text style={[styles.memberMenuText, { color: theme.text }]}>
-                  Remove admin
+                  {t("group_remove_admin")}
                 </Text>
               </TouchableOpacity>
             ) : (

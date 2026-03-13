@@ -439,7 +439,8 @@ export default function SingleChatScreen({ navigation, route }) {
           setItems(cached);
           prefetchForItems(cached);
           setBooting(false);
-          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
         }
       } catch (e) {
         console.log("", { runId, ...safeErr(e) });
@@ -478,7 +479,8 @@ export default function SingleChatScreen({ navigation, route }) {
         setBooting(false);
 
         setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh }).catch(() => {});
-        setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
+        setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
+        setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
       } catch (e) {
                 if (mounted) setBooting(false);
       }
@@ -585,7 +587,8 @@ export default function SingleChatScreen({ navigation, route }) {
       setItems(fresh);
       prefetchForItems(fresh);
       await setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh });
-      setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 0);
+      setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
+      setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
     } catch (e) {
       console.log("[SingleChat][UNBLOCK] refresh error", safeErr(e));
     }
@@ -831,9 +834,7 @@ export default function SingleChatScreen({ navigation, route }) {
     const isNewMinuteBlock = !prev || prev.minuteKey !== item.minuteKey;
     const senderChanged = !prev || prev.isMe !== item.isMe;
     const needsTopMargin = isNewMinuteBlock || senderChanged;
-    // Show time only for the last message in a same-minute same-sender run
-    const isSameMinuteGroup = !!next && next.minuteKey === item.minuteKey && next.isMe === item.isMe;
-    const displayTime = isSameMinuteGroup ? null : item.time;
+    const displayTime = item.time;
 
     let body = null;
     switch (item.type) {
@@ -935,7 +936,6 @@ export default function SingleChatScreen({ navigation, route }) {
                     backgroundColor: theme.background,
                   }}
                   showsVerticalScrollIndicator={false}
-                  onContentSizeChange={() => listRef.current?.scrollToEnd?.({ animated: false })}
                   keyboardShouldPersistTaps="handled"
                 />
 

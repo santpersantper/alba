@@ -234,20 +234,20 @@ export default function AdSettings({ navigation }) {
         activeOpacity={0.7}
       >
         <Feather name="refresh-ccw" size={13} color="#888" style={{ marginRight: 5 }} />
-        <ThemedText style={styles.resetBtnText}>Reset ad preference settings</ThemedText>
+        <ThemedText style={styles.resetBtnText}>{t("payout_reset_ad")}</ThemedText>
       </TouchableOpacity>
 
       {/* ── Product-sale payout setup ── */}
       <View style={styles.payoutSection}>
         <ThemedText style={[styles.payoutTitle, { color: theme.text }]}>
-          Product sale payouts
+          {t("payout_product_title")}
         </ThemedText>
         <ThemedText style={[styles.payoutHelper, { color: theme.secondaryText || "#888" }]}>
           {payoutStatus === "complete"
-            ? "Your bank account is connected. Payments from product sales will be transferred to you automatically, minus a small platform fee."
+            ? t("payout_product_connected")
             : payoutStatus === "pending"
-            ? "Onboarding started — please complete verification on Stripe to receive payments."
-            : "If you sell products directly from your ads on Alba, connect a bank account here to receive payments. Alba collects a small platform fee per transaction; the rest goes straight to you."}
+            ? t("payout_product_pending")
+            : t("payout_product_not_setup")}
         </ThemedText>
         <View style={styles.payoutRow}>
           <View
@@ -270,7 +270,7 @@ export default function AdSettings({ navigation }) {
               style={{ marginRight: 4 }}
             />
             <ThemedText style={{ fontSize: 12, fontFamily: "Poppins", color: payoutStatus === "complete" ? "#059669" : payoutStatus === "pending" ? "#D97706" : "#9CA3AF" }}>
-              {payoutStatus === "complete" ? "Connected" : payoutStatus === "pending" ? "Pending verification" : "Not set up"}
+              {payoutStatus === "complete" ? t("payout_status_connected") : payoutStatus === "pending" ? t("payout_status_pending") : t("payout_status_not_setup")}
             </ThemedText>
           </View>
           {payoutStatus !== "complete" && (
@@ -283,7 +283,7 @@ export default function AdSettings({ navigation }) {
               {payoutLoading
                 ? <ActivityIndicator size="small" color="#fff" />
                 : <ThemedText style={styles.payoutBtnText}>
-                    {payoutStatus === "pending" ? "Continue setup" : "Set up payouts"}
+                    {payoutStatus === "pending" ? t("payout_continue_setup") : t("payout_setup")}
                   </ThemedText>
               }
             </TouchableOpacity>

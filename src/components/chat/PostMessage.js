@@ -12,10 +12,12 @@ import {
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { VideoView, useVideoPlayer } from "expo-video";
-import { Feather } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
+import { translateText } from "../../utils/translate";
 import ShareMenu from "../ShareMenu";
 
 // tiny in-memory cache to avoid re-fetching the same post repeatedly
@@ -52,6 +54,10 @@ export default function PostMessage({
 }) {
   const navigation = useNavigation();
   const { theme, isDark } = useAlbaTheme();
+  const { t, language } = useAlbaLanguage();
+  const [translated, setTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [translatedDesc, setTranslatedDesc] = useState("");
 
   const previewPost = useMemo(() => {
     if (!postId && !postPreview) return null;
@@ -219,6 +225,22 @@ export default function PostMessage({
     setShareVisible(true);
   };
 
+  const handleTranslate = async () => {
+    const src = post?.description;
+    if (translated) { setTranslated(false); return; }
+    if (!src || src === "View post") return;
+    setTranslating(true);
+    try {
+      const result = await translateText(src, language);
+      setTranslatedDesc(result);
+      setTranslated(true);
+    } catch {
+      setTranslated(false);
+    } finally {
+      setTranslating(false);
+    }
+  };
+
   const goToSinglePost = () => {
     const pid = post?.id || postId;
     if (!pid) return;
@@ -315,24 +337,35 @@ export default function PostMessage({
 
               {/* Snippet */}
               <Text style={[styles.excerpt, { color: isDark ? "#E1E5EE" : "#3A3F46" }]} numberOfLines={2}>
-                {post?.description || "View post"}
+                {translated && translatedDesc ? translatedDesc : (post?.description || "View post")}
               </Text>
             </View>
-
-            {!!time && (
-              <Text
-                style={[
-                  styles.time,
-                  { color: isDark ? "#A0A7B3" : "#9AA4AE" },
-                  isMe ? styles.timeRight : styles.timeLeft,
-                ]}
-              >
-                {time}
-              </Text>
-            )}
           </View>
         </View>
       </TouchableOpacity>
+
+      {/* Time + translate icon — below the bubble */}
+      <View style={[styles.timeLine, { justifyContent: isMe ? "flex-end" : "flex-start" }]}>
+        {!!time && (
+          <Text style={[styles.time, { color: isDark ? "#A0A7B3" : "#9AA4AE" }]}>{time}</Text>
+        )}
+        {!isMe && !!(post?.description) && post.description !== "View post" && (
+          <TouchableOpacity
+            onPress={handleTranslate}
+            disabled={translating}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            {translating
+              ? <ActivityIndicator size="small" color="#59A7FF" style={{ width: 14, height: 14 }} />
+              : <MaterialCommunityIcons
+                  name="translate"
+                  size={14}
+                  color={translated ? "#59A7FF" : "#A2AAB4"}
+                />
+            }
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* bottom sheet menu */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
@@ -364,10 +397,10 @@ export default function PostMessage({
       <Modal visible={reportVisible} transparent animationType="fade" onRequestClose={() => setReportVisible(false)}>
         <View style={styles.overlay}>
           <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>Report message</Text>
+            <Text style={styles.reportTitle}>{t("report_message_title")}</Text>
             <TextInput
               style={styles.reportInput}
-              placeholder="Tell us briefly what is wrong"
+              placeholder={t("report_group_placeholder")}
               placeholderTextColor="#9CA3AF"
               value={reportText}
               onChangeText={setReportText}
@@ -375,14 +408,14 @@ export default function PostMessage({
             />
             <View style={styles.reportRow}>
               <TouchableOpacity style={[styles.reportBtn, { backgroundColor: "#b0b6c0" }]} onPress={() => setReportVisible(false)}>
-                <Text style={styles.reportBtnText}>Cancel</Text>
+                <Text style={styles.reportBtnText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.reportBtn, { backgroundColor: "#3D8BFF", opacity: reportText.trim() ? 1 : 0.6 }]}
                 onPress={submitReport}
                 disabled={!reportText.trim()}
               >
-                <Text style={styles.reportBtnText}>Send</Text>
+                <Text style={styles.reportBtnText}>{t("submit_button")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -454,9 +487,8 @@ const styles = StyleSheet.create({
   },
   excerpt: { paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontFamily: "Poppins" },
 
-  time: { marginTop: 4, fontSize: 10, fontFamily: "Poppins" },
-  timeLeft: { alignSelf: "flex-start", paddingLeft: 6 },
-  timeRight: { alignSelf: "flex-end", paddingRight: 6 },
+  timeLine: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 3, gap: 4, paddingHorizontal: 2 },
+  time: { fontSize: 11, fontFamily: "Poppins" },
 
   menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
   menuCard: {

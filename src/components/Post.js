@@ -29,7 +29,7 @@ import { useNavigation } from "@react-navigation/native";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { useEvent } from "expo";
 import { Image as ExpoImage } from "expo-image";
-import { Feather, Ionicons } from "@expo/vector-icons";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
 
 import ShareMenu from "../components/ShareMenu";
@@ -39,6 +39,7 @@ import ThemedView from "../theme/ThemedView";
 import ThemedText from "../theme/ThemedText";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { translateText } from "../utils/translate";
 
 import {
   preloadProfileData,
@@ -305,7 +306,7 @@ export default function Post(props) {
 
   const navigation = useNavigation();
   const { isDark } = useAlbaTheme();
-  const { t } = useAlbaLanguage();
+  const { t, language } = useAlbaLanguage();
 
   const toImageSource = (v) => (typeof v === "string" ? { uri: v } : v || null);
 
@@ -445,6 +446,11 @@ export default function Post(props) {
 
   const [shareVisible, setShareVisible] = useState(false);
   const [buyVisible, setBuyVisible] = useState(false);
+
+  // Translation
+  const [translated, setTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [translatedCaption, setTranslatedCaption] = useState("");
 
   const [authUserId, setAuthUserId] = useState(null);
   const [authUsername, setAuthUsername] = useState(null);
@@ -678,8 +684,30 @@ export default function Post(props) {
     }
   };
 
+  /* ---------- translation ---------- */
+  const handleTranslate = async () => {
+    if (translated) {
+      setTranslated(false);
+      return;
+    }
+    const src = description || basePost.description || "";
+    if (!src) return;
+    setTranslating(true);
+    try {
+      const result = await translateText(src, language);
+      setTranslatedCaption(result);
+      setTranslated(true);
+    } catch {
+      setTranslated(false);
+    } finally {
+      setTranslating(false);
+    }
+  };
+
   /* ---------- caption ---------- */
-  const captionText = description || basePost.description || "";
+  const captionText = translated && translatedCaption
+    ? translatedCaption
+    : (description || basePost.description || "");
   const [showFullCaption, setShowFullCaption] = useState(false);
   const [isLongCaption, setIsLongCaption] = useState(false);
   const [hasMeasuredCaption, setHasMeasuredCaption] = useState(false);
@@ -781,6 +809,14 @@ export default function Post(props) {
           const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
           if (postTypeStr === "ad" && effectivePostId) {
             supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" }).then(() => {}).catch(() => {});
+            supabase.auth.getUser().then(({ data: authData }) => {
+              const cid = authData?.user?.id;
+              if (!cid) return;
+              supabase.from("ad_contacts").upsert(
+                { post_id: effectivePostId, contacter_id: cid },
+                { onConflict: "post_id,contacter_id" }
+              ).catch(() => {});
+            }).catch(() => {});
           }
           if (onPressMessage) onPressMessage();
           else goToDm();
@@ -819,16 +855,36 @@ export default function Post(props) {
   const rawDate = props.date || basePost.date;
   const rawTime = props.time || basePost.time;
   const rawLocation = props.location || basePost.location;
+  const rawEndDate = props.end_date || basePost.end_date;
   const rawEndTime = props.end_time || basePost.end_time;
 
-
-  const prettyDate = rawDate ? formatMonDD(rawDate) : null; // "Dec 22"
-  const prettyTime = rawTime ? normalizeTime(rawTime) : null; // "21:30"
+  const prettyTime = rawTime ? normalizeTime(rawTime) : null;
   const prettyEndTime = rawEndTime ? normalizeTime(rawEndTime) : null;
-  const timeRange =  prettyTime && prettyEndTime ? `${prettyTime} - ${prettyEndTime}` : prettyTime || prettyEndTime || null;
+
+  // Date range: "14 Mar to 19 Mar" — year only if start/end differ
+  const prettyDateRange = (() => {
+    if (!rawDate) return null;
+    const startYear = rawDate.slice(0, 4);
+    const endYear = rawEndDate ? rawEndDate.slice(0, 4) : null;
+    const showYear = endYear && startYear !== endYear;
+    const fmt = (d, withYear) =>
+      new Date(d + "T12:00:00").toLocaleDateString("en-GB", {
+        day: "numeric", month: "short", ...(withYear ? { year: "numeric" } : {}),
+      });
+    const startStr = fmt(rawDate, false);
+    if (rawEndDate) {
+      const endStr = fmt(rawEndDate, showYear);
+      return `${startStr} to ${endStr}`;
+    }
+    return startStr;
+  })();
+
+  const timeRange = prettyTime && prettyEndTime
+    ? `${prettyTime} to ${prettyEndTime}`
+    : prettyTime || prettyEndTime || null;
 
   const subtitle = isEventPost
-    ? [prettyDate, timeRange, rawLocation].filter(Boolean).join(", ")
+    ? [prettyDateRange, timeRange, rawLocation].filter(Boolean).join(", ")
     : [rawLocation].filter(Boolean).join(", ");
 
   return (
@@ -853,11 +909,11 @@ export default function Post(props) {
           <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
             <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
           </TouchableOpacity>
-          {(isEventPost ? (prettyDate || timeRange || rawLocation) : rawLocation) && (
+          {(isEventPost ? (prettyDateRange || timeRange || rawLocation) : rawLocation) && (
             <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" }}>
-              {isEventPost && (prettyDate || timeRange) && (
+              {isEventPost && (prettyDateRange || timeRange) && (
                 <ThemedText style={styles.subtitle}>
-                  {[prettyDate, timeRange].filter(Boolean).join(", ")}{rawLocation ? ",\u00A0" : ""}
+                  {[prettyDateRange, timeRange].filter(Boolean).join(", ")}{rawLocation ? ",\u00A0" : ""}
                 </ThemedText>
               )}
               {!!rawLocation && (
@@ -877,6 +933,21 @@ export default function Post(props) {
             </View>
           )}
         </View>
+
+        {/* Translate icon */}
+        {!!(description || basePost.description) && (
+          <TouchableOpacity
+            style={[styles.kebabBtn, { marginRight: 4 }]}
+            onPress={handleTranslate}
+            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+            disabled={translating}
+          >
+            {translating
+              ? <ActivityIndicator size="small" color="#59A7FF" />
+              : <MaterialCommunityIcons name="translate" size={18} color={translated ? "#59A7FF" : (isDark ? "#FFFFFF" : "#111111")} />
+            }
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
           style={styles.kebabBtn}

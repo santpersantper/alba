@@ -688,7 +688,7 @@ export default function CommunitySettingsScreen({ navigation }) {
           </View>)}
 
           {/* ── Alba Premium ── */}
-          {renderSectionHeader("premium", "Alba Premium")}
+          {renderSectionHeader("premium", t("premium_section_title"))}
           {sectionsOpen.premium && (
           <View style={styles.premiumSection}>
             {/* Ad-Free checkbox */}
@@ -697,8 +697,8 @@ export default function CommunitySettingsScreen({ navigation }) {
                 {prefs.premiumAdFree && <Feather name="check" size={12} color="#00A9FF" />}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.premiumLabel}>Ad-Free</Text>
-                <Text style={styles.premiumSublabel}>Browse Community without ads — €5.00/month</Text>
+                <Text style={styles.premiumLabel}>{t("premium_ad_free_label")}</Text>
+                <Text style={styles.premiumSublabel}>{t("premium_ad_free_sub")}</Text>
               </View>
             </TouchableOpacity>
 
@@ -708,8 +708,8 @@ export default function CommunitySettingsScreen({ navigation }) {
                 {prefs.premiumTravelerMode && <Feather name="check" size={12} color="#00A9FF" />}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.premiumLabel}>Traveler Mode</Text>
-                <Text style={styles.premiumSublabel}>Access Community in any city worldwide — €4.99/month</Text>
+                <Text style={styles.premiumLabel}>{t("premium_traveler_label")}</Text>
+                <Text style={styles.premiumSublabel}>{t("premium_traveler_sub")}</Text>
               </View>
             </TouchableOpacity>
 
@@ -718,7 +718,7 @@ export default function CommunitySettingsScreen({ navigation }) {
               <View style={{ marginTop: 12 }}>
                 <TextInput
                   style={styles.premiumInput}
-                  placeholder="Search for a city..."
+                  placeholder={t("premium_traveler_city_placeholder")}
                   placeholderTextColor="rgba(255,255,255,0.5)"
                   value={cityQuery}
                   onChangeText={setCityQuery}
@@ -742,8 +742,8 @@ export default function CommunitySettingsScreen({ navigation }) {
                 )}
                 <Text style={styles.premiumSublabel}>
                   {prefs.travelerModeCity
-                    ? `Currently browsing as: ${prefs.travelerModeCity}`
-                    : "No city selected — Community will use your real location"}
+                    ? t("premium_traveler_browsing").replace("{city}", prefs.travelerModeCity)
+                    : t("premium_traveler_no_city")}
                 </Text>
               </View>
             )}
@@ -754,8 +754,8 @@ export default function CommunitySettingsScreen({ navigation }) {
                 {prefs.premiumDiffusionList && <Feather name="check" size={12} color="#00A9FF" />}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.premiumLabel}>Diffusion List</Text>
-                <Text style={styles.premiumSublabel}>Broadcast a message to all Alba users nearby — €1.00 per message</Text>
+                <Text style={styles.premiumLabel}>{t("premium_diffusion_label")}</Text>
+                <Text style={styles.premiumSublabel}>{t("premium_diffusion_sub")}</Text>
               </View>
             </TouchableOpacity>
 
@@ -763,7 +763,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             {prefs.premiumDiffusionList && (
               <View style={{ marginTop: 12 }}>
                 <Text style={[styles.premiumSublabel, { fontWeight: "600", marginBottom: 8 }]}>
-                  Broadcast radius
+                  {t("premium_broadcast_radius")}
                 </Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <TouchableOpacity
@@ -815,27 +815,26 @@ export default function CommunitySettingsScreen({ navigation }) {
                 </View>
 
                 <Text style={[styles.premiumSublabel, { marginTop: 4 }]}>
-                  Min 1 {diffusionRadiusUnit} · Max 50 {diffusionRadiusUnit}
+                  {t("premium_radius_hint").replace(/{unit}/g, diffusionRadiusUnit)}
                 </Text>
 
                 {/* Estimated users — placeholder formula, replace with real DB query once density data exists */}
                 <Text style={[styles.premiumSublabel, { marginTop: 6 }]}>
-                  Your message will reach approximately{" "}
-                  {Math.round(prefs.diffusionRadiusKm * prefs.diffusionRadiusKm * Math.PI * 0.8)} users
+                  {t("premium_reach_users").replace("{n}", Math.round(prefs.diffusionRadiusKm * prefs.diffusionRadiusKm * Math.PI * 0.8))}
                 </Text>
               </View>
             )}
           </View>)}
 
           {/* ── Notifications ── */}
-          {renderSectionHeader("notifications", "Notifications")}
+          {renderSectionHeader("notifications", t("notif_section_title"))}
           {sectionsOpen.notifications && (
           <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
             {[
-              { key: "notifChatMessages",  label: "Direct Messages",               sub: "Notify when you receive a new direct message" },
-              { key: "notifGroupMessages", label: "Group Messages",                sub: "Notify when someone sends a message in a group" },
-              { key: "notifDiffusion",     label: "Diffusion Messages",            sub: "Notify when you receive a broadcast message" },
-              { key: "notifFollowedPosts", label: "Posts from followed accounts",  sub: "Notify when accounts you follow create a new post" },
+              { key: "notifChatMessages",  label: t("notif_direct_messages"),   sub: t("notif_direct_messages_sub") },
+              { key: "notifGroupMessages", label: t("notif_group_messages"),     sub: t("notif_group_messages_sub") },
+              { key: "notifDiffusion",     label: t("notif_diffusion"),          sub: t("notif_diffusion_sub") },
+              { key: "notifFollowedPosts", label: t("notif_followed_posts"),     sub: t("notif_followed_posts_sub") },
             ].map(({ key, label, sub }, idx) => (
               <View
                 key={key}
@@ -1030,7 +1029,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
             activeOpacity={0.7}
           >
-            <ThemedText style={styles.logoutBtnText}>Log out</ThemedText>
+            <ThemedText style={styles.logoutBtnText}>{t("settings_logout")}</ThemedText>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1038,7 +1037,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             style={[styles.deleteAccountBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
             activeOpacity={0.7}
           >
-            <Text style={styles.deleteAccountBtnText}>Delete account</Text>
+            <Text style={styles.deleteAccountBtnText}>{t("settings_delete_account")}</Text>
           </TouchableOpacity>
 
           <ThemedView variant="gray" style={{ height: 24 }} />
@@ -1094,10 +1093,10 @@ export default function CommunitySettingsScreen({ navigation }) {
         <View style={styles.modalOverlay}>
           <View style={[styles.unblockModalContent, { backgroundColor: isDark ? theme.gray : theme.background }]}>
             <ThemedText style={[styles.unblockTitle, { color: theme.text }]}>
-              Delete your account?
+              {t("settings_delete_title")}
             </ThemedText>
             <ThemedText style={{ fontFamily: "Poppins", fontSize: 13, color: theme.secondaryText, textAlign: "center", marginBottom: 16 }}>
-              This permanently deletes your profile, posts, and all data. This cannot be undone.
+              {t("settings_delete_body")}
             </ThemedText>
             <View style={styles.unblockButtonsRow}>
               <TouchableOpacity
@@ -1105,7 +1104,7 @@ export default function CommunitySettingsScreen({ navigation }) {
                 onPress={() => setDeleteModalVisible(false)}
                 disabled={deleting}
               >
-                <ThemedText style={styles.unblockBtnSmallText}>Cancel</ThemedText>
+                <ThemedText style={styles.unblockBtnSmallText}>{t("cancel_button")}</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.unblockBtnSmall, { backgroundColor: "#E55353", opacity: deleting ? 0.6 : 1 }]}
@@ -1114,7 +1113,7 @@ export default function CommunitySettingsScreen({ navigation }) {
               >
                 {deleting
                   ? <ActivityIndicator size="small" color="#fff" />
-                  : <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>Delete</ThemedText>}
+                  : <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>{t("settings_delete_confirm")}</ThemedText>}
               </TouchableOpacity>
             </View>
           </View>

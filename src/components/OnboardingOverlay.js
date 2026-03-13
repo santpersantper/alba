@@ -16,14 +16,14 @@ import { supabase } from "../lib/supabase";
 // ── TESTING FLAG ──────────────────────────────────────────────────────────────
 // Set to true during QA to show the overlay on every launch.
 // Set to false before shipping to production.
-const ALWAYS_SHOW_ONBOARDING = true;
+const ALWAYS_SHOW_ONBOARDING = false;
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Per-screen copy
 const CONTENT = {
   community: {
     title: "Welcome to Community",
-    body: "Find events and things going on around you.\n\n Get tickets in a few clicks, join a group chat with people who are going, and use the filters at the top to find what matters to you. \n\n ",
+    body: "Discover events and things going on around you.\n\n Get tickets in a few clicks, join a group chat with people who are going, and use the filters at the top to find what matters to you. \n\n ",
   },
   settings: {
     title: "Community Settings",

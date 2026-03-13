@@ -12,12 +12,19 @@ import {
 } from "react-native";
 import { supabase } from "../../lib/supabase";
 import ShareMenu from "../ShareMenu";
-import { useAlbaTheme } from "../../theme/ThemeContext"; // ✅ NEW
+import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
+import { translateText } from "../../utils/translate";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 
 export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick }) {
-  const { theme, isDark } = useAlbaTheme(); // ✅ NEW
+  const { theme, isDark } = useAlbaTheme();
+  const { language, t } = useAlbaLanguage();
 
   const [menuVisible, setMenuVisible] = useState(false);
+  const [translated, setTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [translatedText, setTranslatedText] = useState("");
   const [reportVisible, setReportVisible] = useState(false);
   const [reportText, setReportText] = useState("");
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -57,6 +64,21 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
       Alert.alert("Error", "Could not delete this message.");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleTranslate = async () => {
+    if (translated) { setTranslated(false); return; }
+    if (!text) return;
+    setTranslating(true);
+    try {
+      const result = await translateText(text, language);
+      setTranslatedText(result);
+      setTranslated(true);
+    } catch {
+      setTranslated(false);
+    } finally {
+      setTranslating(false);
     }
   };
 
@@ -117,13 +139,31 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
             <Text
               style={[
                 styles.msgText,
-                isMe ? { color: "#fff" } : { color: isDark ? "#fff" : "#1A1F27" }, // optional: keep readable
+                isMe ? { color: "#fff" } : { color: isDark ? "#fff" : "#1A1F27" },
               ]}
             >
-              {text}
+              {translated && translatedText ? translatedText : text}
             </Text>
           </View>
-          <Text style={styles.time}>{time}</Text>
+          <View style={styles.timeLine}>
+            <Text style={styles.time}>{time}</Text>
+            {!isMe && (
+              <TouchableOpacity
+                onPress={handleTranslate}
+                disabled={translating}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                {translating
+                  ? <ActivityIndicator size="small" color="#59A7FF" style={{ width: 14, height: 14 }} />
+                  : <MaterialCommunityIcons
+                      name="translate"
+                      size={14}
+                      color={translated ? "#59A7FF" : "#A2AAB4"}
+                    />
+                }
+              </TouchableOpacity>
+            )}
+          </View>
         </TouchableOpacity>
       </View>
 
@@ -180,10 +220,10 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
       >
         <View style={styles.overlay}>
           <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>Report message</Text>
+            <Text style={styles.reportTitle}>{t("report_message_title")}</Text>
             <TextInput
               style={styles.reportInput}
-              placeholder="Tell us briefly what is wrong"
+              placeholder={t("report_group_placeholder")}
               placeholderTextColor="#9CA3AF"
               value={reportText}
               onChangeText={setReportText}
@@ -194,7 +234,7 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
                 style={[styles.reportBtn, { backgroundColor: "#b0b6c0" }]}
                 onPress={() => setReportVisible(false)}
               >
-                <Text style={styles.reportBtnText}>Cancel</Text>
+                <Text style={styles.reportBtnText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -204,7 +244,7 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
                 onPress={submitReport}
                 disabled={!reportText.trim()}
               >
-                <Text style={styles.reportBtnText}>Send</Text>
+                <Text style={styles.reportBtnText}>{t("submit_button")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -277,12 +317,15 @@ const styles = StyleSheet.create({
   msgText: { fontSize: 14, lineHeight: 20, fontFamily: "Poppins" },
   line1: { width: "100%", flexDirection: "row", alignItems: "flex-end" },
   line2: { width: "100%", marginTop: 3 },
+  timeLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 3,
+    gap: 4,
+  },
   time: {
     fontSize: 11,
     color: "#A2AAB4",
-    paddingTop: 5,
-    paddingLeft: 2,
-    paddingRight: 2,
     fontFamily: "Poppins",
   },
 

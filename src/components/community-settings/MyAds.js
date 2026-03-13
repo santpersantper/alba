@@ -13,8 +13,9 @@ import {
 import { useFonts } from "expo-font";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
 
-function AdCard({ title, when, where, onPressSettings, theme, isDark }) {
+function AdCard({ title, when, where, onPressSettings, theme, isDark, t }) {
   const cardBg = theme.card || (isDark ? "#222" : "#fff");
   const border = theme.border || (isDark ? "#333" : "#e8f4fb");
   const titleColor = theme.text || (isDark ? "#fff" : "#1b1b1b");
@@ -57,7 +58,7 @@ function AdCard({ title, when, where, onPressSettings, theme, isDark }) {
               style={styles.pillIcon}
               resizeMode="contain"
             />
-            <Text style={styles.pillText}>Ad settings</Text>
+            <Text style={styles.pillText}>{t("my_ads_settings")}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -67,6 +68,7 @@ function AdCard({ title, when, where, onPressSettings, theme, isDark }) {
 
 export default function MyAds({ navigation }) {
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../../assets/fonts/Poppins-Regular.ttf"),
@@ -168,6 +170,7 @@ export default function MyAds({ navigation }) {
             where={row.where}
             theme={theme}
             isDark={isDark}
+            t={t}
             onPressSettings={() => navigation?.navigate?.("AdPublisher")}
           />
         ))

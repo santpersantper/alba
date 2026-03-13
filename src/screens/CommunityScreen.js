@@ -549,6 +549,11 @@ export default function CommunityScreen() {
       if (blockedUsers.length && blockedUsers.includes(asAt(p.user))) return acc;
 
       if (type === "Ad") {
+        // Creator always sees their own ad directly
+        if (p.author_id && uid && p.author_id === uid) {
+          acc.push(p);
+          return acc;
+        }
         if (adMatchesUserTags(p, adTags)) {
           acc.push(p);
         } else {
@@ -671,6 +676,7 @@ export default function CommunityScreen() {
     followedUserIds,
     adMatchesUserTags,
     prefs.premiumAdFree,
+    uid,
   ]);
 
   const dateLabel = selectedDate

@@ -960,7 +960,12 @@ export default function ProfileScreen({ navigation, route }) {
           ) : (
             posts.map((item) => (
               <View key={item.id} style={{ backgroundColor: theme.gray, paddingHorizontal: 0, marginBottom: 12 }}>
-                <Post {...item} />
+                <Post
+                  {...item}
+                  postId={item.id}
+                  authorId={item.author_id}
+                  onDeleted={(id) => setPosts((prev) => prev.filter((p) => p.id !== id))}
+                />
               </View>
             ))
           )}

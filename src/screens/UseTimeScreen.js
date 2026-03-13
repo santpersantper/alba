@@ -21,6 +21,7 @@ import Slider from "@react-native-community/slider";
 import { useUserPreferences } from "../hooks/useUserPreferences";
 import OnboardingOverlay from "../components/OnboardingOverlay";
 import { useScreenTime } from "../hooks/useScreenTime";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 import {
   evaluateStreak,
   evaluateWeekRollover,
@@ -128,21 +129,21 @@ const SCHEMES = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const DAY_NAMES_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function getDailyGoalText(todayMin, goalMin) {
+function getDailyGoalText(todayMin, goalMin, t) {
   if (goalMin == null) return null;
   const diff = goalMin - todayMin;
-  if (diff > 0) return `You are ${formatMinutes(diff)} from your daily goal`;
-  if (diff < 0) return `You are ${formatMinutes(-diff)} over your daily goal`;
-  return "You've hit your daily goal exactly";
+  if (diff > 0) return t("usetime_from_goal").replace("{time}", formatMinutes(diff));
+  if (diff < 0) return t("usetime_over_goal").replace("{time}", formatMinutes(-diff));
+  return t("usetime_hit_goal");
 }
 
-function getComparisonText(todayMin, compareMin, label) {
+function getComparisonText(todayMin, compareMin, label, t) {
   if (compareMin == null || compareMin === 0) return null;
   const diff = todayMin - compareMin;
   const pct = Math.round((Math.abs(diff) / compareMin) * 100);
-  if (diff < 0) return `You are ${pct}% below ${label}`;
-  if (diff > 0) return `You are ${pct}% above ${label}`;
-  return `Same as ${label}`;
+  if (diff < 0) return t("usetime_below_label").replace("{pct}", pct).replace("{label}", label);
+  if (diff > 0) return t("usetime_above_label").replace("{pct}", pct).replace("{label}", label);
+  return t("usetime_same_as").replace("{label}", label);
 }
 
 function getDaysUntilWeekComplete(trackingStartDate) {
@@ -155,21 +156,17 @@ function getDaysUntilWeekComplete(trackingStartDate) {
   return Math.max(0, 7 - elapsed);
 }
 
-function getMotivationalTitle(scheme, streakCount, daysLeft) {
-  if (daysLeft > 0) {
-    return `Building good habits 🎯`;
-  }
+function getMotivationalTitle(scheme, streakCount, daysLeft, t) {
+  if (daysLeft > 0) return t("usetime_building_habits");
   switch (scheme) {
     case "green":
-      return streakCount >= 7
-        ? "You're on fire! 🔥"
-        : "Keep the streak going! 💚";
+      return streakCount >= 7 ? t("usetime_on_fire") : t("usetime_keep_streak");
     case "red":
-      return "Let's get back on track 💪";
+      return t("usetime_back_on_track");
     case "white":
-      return "Good recovery! Keep going 💪";
+      return t("usetime_good_recovery");
     default:
-      return "You're making progress! 🎯";
+      return t("usetime_making_progress");
   }
 }
 
@@ -280,7 +277,7 @@ function UsageHistogram({ days, dailyGoal, cs }) {
   );
 }
 
-function CollapsibleAppList({ label, totalMinutes, appsData, cs }) {
+function CollapsibleAppList({ label, totalMinutes, appsData, cs, noDataText = "No data yet" }) {
   const [open, setOpen] = useState(true);
   const apps = Object.entries(appsData || {})
     .map(([name, data]) => ({ name, minutes: data?.minutes ?? 0 }))
@@ -323,7 +320,7 @@ function CollapsibleAppList({ label, totalMinutes, appsData, cs }) {
           </View>
         ))}
       {open && apps.length === 0 && (
-        <Text style={[cc.collEmpty, { color: cs.sub }]}>No data yet</Text>
+        <Text style={[cc.collEmpty, { color: cs.sub }]}>{noDataText}</Text>
       )}
     </View>
   );
@@ -333,6 +330,7 @@ function CollapsibleAppList({ label, totalMinutes, appsData, cs }) {
 
 export default function UseTimeScreen() {
   const navigation = useNavigation();
+  const { t, language } = useAlbaLanguage();
   const { prefs, updatePrefs, loaded } = useUserPreferences();
   const {
     authorized,
@@ -452,8 +450,8 @@ export default function UseTimeScreen() {
   const sevenDaysAgoMinutes = sevenDaysAgoEntry?.minutes ?? null;
   const sevenDaysAgoDayName = sevenDaysAgoEntry
     ? new Date(sevenDaysAgoStr + "T12:00:00")
-        .toLocaleDateString("en-US", { weekday: "long" })
-    : "7 days ago";
+        .toLocaleDateString(language === "it" ? "it-IT" : "en-US", { weekday: "long" })
+    : null;
 
   // Background scheme
   const scheme = computeStreakBackground({
@@ -469,13 +467,17 @@ export default function UseTimeScreen() {
   const lastSevenDays = getLastSevenDays(prefs.dailyHistory, dailyGoal);
 
   // Comparison sentences
+  const yesterdayLabel = t("usetime_yesterday");
+  const sevenDaysLabel = sevenDaysAgoDayName
+    ? t("usetime_last_day").replace("{day}", sevenDaysAgoDayName)
+    : null;
   const vsYesterday = firstWeekComplete
-    ? getComparisonText(todayMinutes, yesterdayMinutes, "yesterday")
+    ? getComparisonText(todayMinutes, yesterdayMinutes, yesterdayLabel, t)
     : null;
-  const vs7Days = firstWeekComplete
-    ? getComparisonText(todayMinutes, sevenDaysAgoMinutes, `last ${sevenDaysAgoDayName}`)
+  const vs7Days = firstWeekComplete && sevenDaysLabel
+    ? getComparisonText(todayMinutes, sevenDaysAgoMinutes, sevenDaysLabel, t)
     : null;
-  const vsGoal = firstWeekComplete ? getDailyGoalText(todayMinutes, dailyGoal) : null;
+  const vsGoal = firstWeekComplete ? getDailyGoalText(todayMinutes, dailyGoal, t) : null;
 
   // ── Deactivation handlers ─────────────────────────────────────────────────
   const handleToggleTracking = (value) => {
@@ -527,8 +529,8 @@ export default function UseTimeScreen() {
   function fmtDailyGoal(minutes) {
     const h = Math.floor(minutes / 60);
     const m = minutes % 60;
-    if (m === 0) return `Less than ${h}h a day`;
-    return `Less than ${h}h ${m}min a day`;
+    if (m === 0) return t("usetime_less_than_h").replace("{h}", h);
+    return t("usetime_less_than_hm").replace("{h}", h).replace("{m}", m);
   }
 
   // ── Skeleton ──────────────────────────────────────────────────────────────
@@ -548,10 +550,10 @@ export default function UseTimeScreen() {
     <View style={[cc.card, { backgroundColor: cs.card, borderColor: cs.cardBorder, alignItems: "center", paddingVertical: 28 }]}>
       <Feather name="clock" size={40} color={cs.text} style={{ marginBottom: 12 }} />
       <Text style={[cc.cardTitle, { color: cs.text }]}>
-        Allow Alba to track your social media time
+        {t("usetime_allow_track")}
       </Text>
       <Text style={[cc.cardBody, { color: cs.sub, marginBottom: 22 }]}>
-        We use Apple's Screen Time framework on iOS{"\n"}and Usage Access on Android.{"\n"}Your data never leaves your device.
+        {t("usetime_ios_android")}
       </Text>
       <TouchableOpacity
         style={[s.enableBtn, { backgroundColor: cs.text }]}
@@ -559,7 +561,7 @@ export default function UseTimeScreen() {
         activeOpacity={0.85}
       >
         <Text style={[s.enableBtnText, { color: scheme === "white" || scheme === "yellow" ? "#fff" : cs.card.replace("0.55", "1") }]}>
-          Enable Screen Time
+          {t("usetime_enable")}
         </Text>
       </TouchableOpacity>
     </View>
@@ -584,7 +586,7 @@ export default function UseTimeScreen() {
           >
             <Feather name="arrow-left" size={24} color={cs.text} />
           </TouchableOpacity>
-          <Text style={[s.navTitle, { color: cs.text }]}>Screen Time</Text>
+          <Text style={[s.navTitle, { color: cs.text }]}>{t("usetime_title")}</Text>
           <View style={{ width: 24 }} />
         </View>
 
@@ -599,7 +601,7 @@ export default function UseTimeScreen() {
             <>
               {/* ── Motivational header ── */}
               <Text style={[s.bigTitle, { color: cs.text }]}>
-                {getMotivationalTitle(scheme, streakCount, daysLeft)}
+                {getMotivationalTitle(scheme, streakCount, daysLeft, t)}
               </Text>
 
               {!!error && (
@@ -616,12 +618,14 @@ export default function UseTimeScreen() {
                     <View style={[cc.card, { backgroundColor: cs.card, borderColor: cs.cardBorder, marginBottom: 18 }]}>
                       <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
                         <Feather name="eye" size={18} color={cs.text} style={{ marginRight: 8 }} />
-                        <Text style={[cc.cardTitle, { color: cs.text }]}>Observation period</Text>
+                        <Text style={[cc.cardTitle, { color: cs.text }]}>{t("usetime_observation_title")}</Text>
                       </View>
                       <Text style={[cc.cardBody, { color: cs.sub }]}>
                         {daysLeft > 0
-                          ? `Alba is learning your habits. ${daysLeft} day${daysLeft !== 1 ? "s" : ""} until your personalised goal is set.`
-                          : "Computing your first-week baseline…"}
+                          ? (language === "it"
+                              ? t("usetime_observation_days").replace("{n}", daysLeft).replace("{s}", daysLeft !== 1 ? "i" : "o")
+                              : t("usetime_observation_days").replace("{n}", daysLeft).replace("{s}", daysLeft !== 1 ? "s" : ""))
+                          : t("usetime_observation_computing")}
                       </Text>
                     </View>
                   )}
@@ -656,13 +660,13 @@ export default function UseTimeScreen() {
                   {/* ── GOALS (post-week-1) ── */}
                   {firstWeekComplete && (
                     <View style={s.goalsBlock}>
-                      <Text style={[s.sectionTitle, { color: cs.text }]}>My current goals:</Text>
+                      <Text style={[s.sectionTitle, { color: cs.text }]}>{t("usetime_my_goals")}</Text>
                       <View style={s.goalRow}>
                         <Text style={[s.goalText, { color: cs.text }]}>
-                          {prefs.screenTimeGoalReductionPercent ?? 10}% reduction per week
+                          {t("usetime_reduction_pct").replace("{n}", prefs.screenTimeGoalReductionPercent ?? 10)}
                         </Text>
                         <TouchableOpacity onPress={openWeeklyModal} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                          <Text style={[s.changeText, { color: cs.changeText }]}>Change</Text>
+                          <Text style={[s.changeText, { color: cs.changeText }]}>{t("usetime_change")}</Text>
                         </TouchableOpacity>
                       </View>
                       <View style={s.goalRow}>
@@ -670,7 +674,7 @@ export default function UseTimeScreen() {
                           {fmtDailyGoal(prefs.screenTimeGoalDailyMaxMinutes ?? 180)}
                         </Text>
                         <TouchableOpacity onPress={openDailyModal} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                          <Text style={[s.changeText, { color: cs.changeText }]}>Change</Text>
+                          <Text style={[s.changeText, { color: cs.changeText }]}>{t("usetime_change")}</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -678,28 +682,28 @@ export default function UseTimeScreen() {
 
                   {/* ── COLLAPSIBLE APP LISTS ── */}
                   <CollapsibleAppList
-                    label="Social media time today"
+                    label={t("usetime_social_today")}
                     totalMinutes={todayMinutes}
                     appsData={usageData?.today?.apps}
                     cs={cs}
+                    noDataText={t("usetime_no_data")}
                   />
                   <CollapsibleAppList
-                    label="Social media time this week"
+                    label={t("usetime_social_week")}
                     totalMinutes={weekMinutes}
                     appsData={usageData?.thisWeek?.apps}
                     cs={cs}
+                    noDataText={t("usetime_no_data")}
                   />
 
                   {/* ── DEACTIVATION TOGGLE ── */}
                   <View style={[s.toggleRow, { borderTopColor: cs.divider }]}>
                     <View>
                       <Text style={[s.toggleLabel, { color: cs.text }]}>
-                        {trackingActive ? "Tracking active" : "Tracking paused"}
+                        {trackingActive ? t("usetime_tracking_active") : t("usetime_tracking_paused")}
                       </Text>
                       <Text style={[s.toggleSub, { color: cs.sub }]}>
-                        {trackingActive
-                          ? "Tap to deactivate"
-                          : "Tap to re-enable tracking"}
+                        {trackingActive ? t("usetime_tap_deactivate") : t("usetime_tap_reenable")}
                       </Text>
                     </View>
                     <Switch
@@ -726,9 +730,9 @@ export default function UseTimeScreen() {
       >
         <View style={s.modalOverlay}>
           <View style={s.goalModalCard}>
-            <Text style={s.goalModalTitle}>Weekly reduction goal</Text>
+            <Text style={s.goalModalTitle}>{t("usetime_weekly_goal_title")}</Text>
             <Text style={[s.goalModalValue, { color: cs.modalBtn }]}>
-              {editReductionPct}% per week
+              {editReductionPct}{t("usetime_per_week")}
             </Text>
             <Slider
               style={{ width: "100%", height: 40, marginVertical: 8 }}
@@ -747,10 +751,10 @@ export default function UseTimeScreen() {
             </View>
             <View style={s.goalModalBtns}>
               <TouchableOpacity style={s.goalModalCancelBtn} onPress={() => setGoalModalType(null)}>
-                <Text style={s.goalModalCancelText}>Cancel</Text>
+                <Text style={s.goalModalCancelText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[s.goalModalSaveBtn, { backgroundColor: cs.modalBtn }]} onPress={handleSaveWeeklyGoal}>
-                <Text style={s.goalModalSaveText}>Save</Text>
+                <Text style={s.goalModalSaveText}>{t("settings_save_changes")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -766,7 +770,7 @@ export default function UseTimeScreen() {
       >
         <View style={s.modalOverlay}>
           <View style={s.goalModalCard}>
-            <Text style={s.goalModalTitle}>Daily maximum</Text>
+            <Text style={s.goalModalTitle}>{t("usetime_daily_max_title")}</Text>
             <View style={s.stepperRow}>
               <TouchableOpacity
                 style={[s.stepperBtn, { backgroundColor: cs.modalBtn }]}
@@ -783,14 +787,14 @@ export default function UseTimeScreen() {
               </TouchableOpacity>
             </View>
             <Text style={[s.sliderLabel, { textAlign: "center", marginBottom: 20 }]}>
-              30 min – 8 hours, in 15-minute steps
+              {t("usetime_steps_hint")}
             </Text>
             <View style={s.goalModalBtns}>
               <TouchableOpacity style={s.goalModalCancelBtn} onPress={() => setGoalModalType(null)}>
-                <Text style={s.goalModalCancelText}>Cancel</Text>
+                <Text style={s.goalModalCancelText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[s.goalModalSaveBtn, { backgroundColor: cs.modalBtn }]} onPress={handleSaveDailyGoal}>
-                <Text style={s.goalModalSaveText}>Save</Text>
+                <Text style={s.goalModalSaveText}>{t("settings_save_changes")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -806,9 +810,9 @@ export default function UseTimeScreen() {
       >
         <View style={s.modalOverlay}>
           <View style={s.deactivateCard}>
-            <Text style={s.deactivateTitle}>Pause tracking?</Text>
+            <Text style={s.deactivateTitle}>{t("usetime_pause_title")}</Text>
             <Text style={s.deactivateSub}>
-              Please let us know why you want to stop — it helps us improve Alba.
+              {t("usetime_pause_sub")}
             </Text>
 
             {/* Checkbox 1 */}
@@ -820,7 +824,7 @@ export default function UseTimeScreen() {
               <View style={[s.checkbox, reasonAccomplished && s.checkboxChecked]}>
                 {reasonAccomplished && <Feather name="check" size={13} color="#fff" />}
               </View>
-              <Text style={s.checkLabel}>Already accomplished my goal</Text>
+              <Text style={s.checkLabel}>{t("usetime_reason_accomplished")}</Text>
             </TouchableOpacity>
 
             {/* Checkbox 2 */}
@@ -832,7 +836,7 @@ export default function UseTimeScreen() {
               <View style={[s.checkbox, reasonNoLonger && s.checkboxChecked]}>
                 {reasonNoLonger && <Feather name="check" size={13} color="#fff" />}
               </View>
-              <Text style={s.checkLabel}>No longer want to reduce screen time</Text>
+              <Text style={s.checkLabel}>{t("usetime_reason_no_longer")}</Text>
             </TouchableOpacity>
 
             {/* Checkbox 3 + optional text */}
@@ -844,12 +848,12 @@ export default function UseTimeScreen() {
               <View style={[s.checkbox, reasonOther && s.checkboxChecked]}>
                 {reasonOther && <Feather name="check" size={13} color="#fff" />}
               </View>
-              <Text style={s.checkLabel}>Other</Text>
+              <Text style={s.checkLabel}>{t("usetime_reason_other")}</Text>
             </TouchableOpacity>
             {reasonOther && (
               <TextInput
                 style={s.otherInput}
-                placeholder="Tell us more…"
+                placeholder={t("usetime_other_placeholder")}
                 placeholderTextColor="#aaa"
                 value={otherText}
                 onChangeText={setOtherText}
@@ -864,7 +868,7 @@ export default function UseTimeScreen() {
                 style={s.goalModalCancelBtn}
                 onPress={() => setDeactivateModalVisible(false)}
               >
-                <Text style={s.goalModalCancelText}>Cancel</Text>
+                <Text style={s.goalModalCancelText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -880,7 +884,7 @@ export default function UseTimeScreen() {
                     { color: canConfirmDeactivation ? "#fff" : "#bbb" },
                   ]}
                 >
-                  Confirm
+                  {t("usetime_confirm")}
                 </Text>
               </TouchableOpacity>
             </View>

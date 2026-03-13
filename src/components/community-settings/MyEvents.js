@@ -13,6 +13,7 @@ import {
 import { useFonts } from "expo-font";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
 
 function EventCard({
   title,
@@ -22,6 +23,7 @@ function EventCard({
   onPressSettings,
   theme,
   isDark,
+  t,
 }) {
   const cardBg = theme.card || (isDark ? "#222" : "#fff");
   const border = theme.border || (isDark ? "#333" : "#e8f4fb");
@@ -65,7 +67,7 @@ function EventCard({
               style={styles.pillIcon}
               resizeMode="contain"
             />
-            <Text style={styles.pillText}>Event chat</Text>
+            <Text style={styles.pillText}>{t("my_events_chat")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -78,7 +80,7 @@ function EventCard({
               style={styles.pillIcon}
               resizeMode="contain"
             />
-            <Text style={styles.pillText}>Settings</Text>
+            <Text style={styles.pillText}>{t("my_events_settings")}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -88,6 +90,7 @@ function EventCard({
 
 export default function MyEvents({ navigation }) {
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../../assets/fonts/Poppins-Regular.ttf"),
@@ -185,6 +188,7 @@ export default function MyEvents({ navigation }) {
             where={row.where}
             theme={theme}
             isDark={isDark}
+            t={t}
             onPressChat={() => {
               // keep your existing behavior (if you later want: navigate by group_id)
               navigation?.navigate?.("GroupChat", {

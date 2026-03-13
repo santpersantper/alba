@@ -14,8 +14,10 @@ import {
 import { Image as ExpoImage } from "expo-image";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Feather } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
+import { translateText } from "../../utils/translate";
 import ShareMenu from "../ShareMenu";
 
 const VIDEO_EXTS = ["mp4", "mov", "m4v", "webm", "avi"];
@@ -131,6 +133,10 @@ export default function MediaMessage({
   isMe = false,
   onDeleted,
 }) {
+  const { t, language } = useAlbaLanguage();
+  const [translated, setTranslated] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [translatedCaption, setTranslatedCaption] = useState("");
   const [viewerUri, setViewerUri] = useState(null);
   const [menuVisible, setMenuVisible] = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
@@ -138,6 +144,21 @@ export default function MediaMessage({
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [shareVisible, setShareVisible] = useState(false);
+
+  const handleTranslate = async () => {
+    if (translated) { setTranslated(false); return; }
+    if (!caption) return;
+    setTranslating(true);
+    try {
+      const result = await translateText(caption, language);
+      setTranslatedCaption(result);
+      setTranslated(true);
+    } catch {
+      setTranslated(false);
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const openReport = () => {
     setMenuVisible(false);
@@ -226,7 +247,7 @@ export default function MediaMessage({
               >
                 <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
                   <Text style={[styles.msgText, isMe ? { color: "#fff" } : { color: "#1A1F27" }]}>
-                    {caption}
+                    {translated && translatedCaption ? translatedCaption : caption}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -234,8 +255,24 @@ export default function MediaMessage({
           </View>
         </View>
 
-        <View style={[styles.line2, { alignItems: isMe ? "flex-end" : "flex-start" }]}>
+        <View style={[styles.timeLine, { justifyContent: isMe ? "flex-end" : "flex-start" }]}>
           <Text style={styles.time}>{time}</Text>
+          {!isMe && !!caption && (
+            <TouchableOpacity
+              onPress={handleTranslate}
+              disabled={translating}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              {translating
+                ? <ActivityIndicator size="small" color="#59A7FF" style={{ width: 14, height: 14 }} />
+                : <MaterialCommunityIcons
+                    name="translate"
+                    size={14}
+                    color={translated ? "#59A7FF" : "#A2AAB4"}
+                  />
+              }
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -288,10 +325,10 @@ export default function MediaMessage({
       >
         <View style={styles.overlay}>
           <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>Report message</Text>
+            <Text style={styles.reportTitle}>{t("report_message_title")}</Text>
             <TextInput
               style={styles.reportInput}
-              placeholder="Tell us briefly what is wrong"
+              placeholder={t("report_group_placeholder")}
               placeholderTextColor="#9CA3AF"
               value={reportText}
               onChangeText={setReportText}
@@ -302,14 +339,14 @@ export default function MediaMessage({
                 style={[styles.reportBtn, { backgroundColor: "#b0b6c0" }]}
                 onPress={() => setReportVisible(false)}
               >
-                <Text style={styles.reportBtnText}>Cancel</Text>
+                <Text style={styles.reportBtnText}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.reportBtn, { backgroundColor: "#3D8BFF", opacity: reportText.trim() ? 1 : 0.6 }]}
                 onPress={submitReport}
                 disabled={!reportText.trim()}
               >
-                <Text style={styles.reportBtnText}>Send</Text>
+                <Text style={styles.reportBtnText}>{t("submit_button")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -379,8 +416,8 @@ const styles = StyleSheet.create({
   bubbleOther: { backgroundColor: "#EAEFF4", borderTopLeftRadius: 4 },
   msgText: { fontSize: 14, lineHeight: 20, fontFamily: "Poppins" },
   line1: { width: "100%", flexDirection: "row", alignItems: "flex-end" },
-  line2: { width: "100%", marginTop: 3 },
-  time: { fontSize: 11, color: "#A2AAB4", paddingTop: 5, paddingLeft: 2, paddingRight: 2, fontFamily: "Poppins" },
+  timeLine: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 3, gap: 4 },
+  time: { fontSize: 11, color: "#A2AAB4", fontFamily: "Poppins", paddingLeft: 2 },
 
   // video thumbnail overlay
   vidOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.2)" },
