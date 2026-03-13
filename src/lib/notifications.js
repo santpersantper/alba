@@ -12,25 +12,9 @@
 import { supabase } from "./supabase";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STUB BLOCK — active until the dev client is rebuilt with expo-notifications
+// NATIVE BLOCK — active in dev/release builds with expo-notifications
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function registerForPushNotifications() {
-  return null;
-}
-
-export function addNotificationTapListener(_handler) {
-  return () => {};
-}
-
-export async function savePushToken(_token) {
-  // no-op until native module is available
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// NATIVE BLOCK — uncomment once dev client has been rebuilt
-// ─────────────────────────────────────────────────────────────────────────────
-/*
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
@@ -96,7 +80,6 @@ export async function savePushToken(token) {
     console.warn("[Push] savePushToken failed:", e?.message);
   }
 }
-*/
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Notification preferences — always active (no native module needed)

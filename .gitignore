@@ -40,4 +40,4 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-credentials.json
+credentials.json".idea/" 
