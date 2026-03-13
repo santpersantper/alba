@@ -123,11 +123,19 @@ function patchMainApplicationKt(filePath) {
   // Already patched?
   if (src.includes("AlbaScreenTimePackage") && src.includes("VPNDetectorPackage")) return;
 
-  // Expo's generated MainApplication.kt always has this line in getPackages()
-  src = src.replace(
-    /(val packages = PackageList\(this\)\.packages)/,
-    `$1\n      packages.add(AlbaScreenTimePackage())\n      packages.add(VPNDetectorPackage())`
-  );
+  // New Expo template: PackageList(this).packages.apply { // comment }
+  if (src.includes("PackageList(this).packages.apply {")) {
+    src = src.replace(
+      /PackageList\(this\)\.packages\.apply \{[^\}]*\}/,
+      `PackageList(this).packages.apply {\n              add(AlbaScreenTimePackage())\n              add(VPNDetectorPackage())\n            }`
+    );
+  // Old Expo template: val packages = PackageList(this).packages
+  } else if (src.includes("val packages = PackageList(this).packages")) {
+    src = src.replace(
+      /(val packages = PackageList\(this\)\.packages)/,
+      `$1\n      packages.add(AlbaScreenTimePackage())\n      packages.add(VPNDetectorPackage())`
+    );
+  }
 
   if (!src.includes("AlbaScreenTimePackage")) {
     console.warn("[withAndroidNativeModules] Could not inject packages into MainApplication.kt — pattern not found");
