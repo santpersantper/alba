@@ -232,25 +232,33 @@ module.exports = function withScreenTime(config) {
   config = withDangerousMod(config, [
     "ios",
     (config) => {
-      // ── Copy AlbaScreenTime native sources into ios/ ───────────────────────
-      // EAS Build clears ios/ via `prebuild --clean`. The AlbaScreenTime Swift/ObjC
-      // sources are stored in modules/AlbaScreenTime/ (outside ios/, so never wiped)
-      // and copied here so Xcode can find them at build time.
+      // ── Copy native sources into ios/ ─────────────────────────────────────
+      // EAS Build clears ios/ via `prebuild --clean`. All custom Swift/ObjC
+      // sources are stored in modules/<Dir>/ (outside ios/, never wiped) and
+      // copied here unconditionally so Xcode can find them at build time.
+      // This covers:
+      //   modules/AlbaScreenTime/         → ios/AlbaScreenTime/
+      //   modules/AlbaDeviceActivityExtension/ → ios/AlbaDeviceActivityExtension/
+      //   modules/AlbaDeviceActivityReport/    → ios/AlbaDeviceActivityReport/
       const iosRoot = config.modRequest.platformProjectRoot;
       const projectRoot = config.modRequest.projectRoot;
-      const screenTimeSrcDir = path.join(projectRoot, "modules", "AlbaScreenTime");
-      const screenTimeDstDir = path.join(iosRoot, "AlbaScreenTime");
-      if (fs.existsSync(screenTimeSrcDir)) {
-        fs.mkdirSync(screenTimeDstDir, { recursive: true });
-        for (const file of fs.readdirSync(screenTimeSrcDir)) {
-          fs.copyFileSync(
-            path.join(screenTimeSrcDir, file),
-            path.join(screenTimeDstDir, file)
-          );
+      const nativeModuleDirs = [
+        "AlbaScreenTime",
+        "AlbaDeviceActivityExtension",
+        "AlbaDeviceActivityReport",
+      ];
+      for (const dirName of nativeModuleDirs) {
+        const srcDir = path.join(projectRoot, "modules", dirName);
+        const dstDir = path.join(iosRoot, dirName);
+        if (fs.existsSync(srcDir)) {
+          fs.mkdirSync(dstDir, { recursive: true });
+          for (const file of fs.readdirSync(srcDir)) {
+            fs.copyFileSync(path.join(srcDir, file), path.join(dstDir, file));
+          }
+          process.stderr.write(`[withScreenTime] Copied ${dirName} sources to ios/${dirName}/\n`);
+        } else {
+          process.stderr.write(`[withScreenTime] WARNING: modules/${dirName}/ not found\n`);
         }
-        process.stderr.write(`[withScreenTime] Copied AlbaScreenTime sources to ios/AlbaScreenTime/\n`);
-      } else {
-        process.stderr.write(`[withScreenTime] WARNING: modules/AlbaScreenTime/ not found — AlbaScreenTime sources will be missing\n`);
       }
 
       // ── Recreate extension support files ──────────────────────────────────
