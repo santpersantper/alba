@@ -28,8 +28,6 @@ struct AlbaHiddenReportView: View {
         segment: .daily(
           during: Calendar.current.dateInterval(of: .day, for: Date()) ?? DateInterval()
         ),
-        users: .current,
-        devices: DeviceActivityFilter.DeviceTypes([.iPhone, .iPad]),
         applications: selection.applicationTokens,
         categories: selection.categoryTokens,
         webDomains: selection.webDomainTokens
