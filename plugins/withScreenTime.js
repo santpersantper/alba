@@ -100,6 +100,22 @@ module.exports = function withScreenTime(config) {
           addFileToTarget(proj, file, stGroupKey, mainTarget.uuid);
         }
       }
+
+      // Ensure SWIFT_OBJC_BRIDGING_HEADER is set so Swift sees ObjC types
+      // from <React/RCTBridgeModule.h> (RCTPromiseResolveBlock etc.).
+      // Expo SDK 54 usually generates this header, but the build setting may
+      // be missing if this is the first prebuild on a clean machine.
+      const mainBridgingHeader = "Alba/Alba-Bridging-Header.h";
+      const mainNative = mainTarget?.pbxNativeTarget ?? mainTarget;
+      const mainListUUID = mainNative?.buildConfigurationList;
+      const mainConfigList = proj.hash.project.objects["XCConfigurationList"]?.[mainListUUID];
+      for (const ref of mainConfigList?.buildConfigurations || []) {
+        const uuid = typeof ref === "object" ? ref.value : ref;
+        const cfg = proj.hash.project.objects["XCBuildConfiguration"]?.[uuid];
+        if (cfg?.buildSettings && !cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"]) {
+          cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"] = `"${mainBridgingHeader}"`;
+        }
+      }
     }
 
     // ── Extension targets ─────────────────────────────────────────────────────
@@ -259,6 +275,28 @@ module.exports = function withScreenTime(config) {
         } else {
           process.stderr.write(`[withScreenTime] WARNING: modules/${dirName}/ not found\n`);
         }
+      }
+
+      // ── Patch bridging header for RCTBridgeModule ─────────────────────────
+      // AlbaScreenTimeModule.swift uses RCTPromiseResolveBlock / RCTPromiseRejectBlock
+      // (ObjC typedefs from <React/RCTBridgeModule.h>). Expo SDK 54 generates
+      // ios/Alba/Alba-Bridging-Header.h but only imports ExpoModulesCore — it
+      // does not import the React bridge module header. Without it, Swift sees
+      // "cannot find type 'RCTPromiseResolveBlock' in scope".
+      const bridgingHeaderPath = path.join(iosRoot, "Alba", "Alba-Bridging-Header.h");
+      const rctImport = "#import <React/RCTBridgeModule.h>";
+      if (fs.existsSync(bridgingHeaderPath)) {
+        const existing = fs.readFileSync(bridgingHeaderPath, "utf8");
+        if (!existing.includes("RCTBridgeModule.h")) {
+          fs.writeFileSync(bridgingHeaderPath, existing.trimEnd() + "\n" + rctImport + "\n");
+          process.stderr.write("[withScreenTime] Added RCTBridgeModule.h to Alba-Bridging-Header.h\n");
+        }
+      } else {
+        // Bridging header doesn't exist yet — create it. withXcodeProject
+        // ensures SWIFT_OBJC_BRIDGING_HEADER points here.
+        fs.mkdirSync(path.join(iosRoot, "Alba"), { recursive: true });
+        fs.writeFileSync(bridgingHeaderPath, rctImport + "\n");
+        process.stderr.write("[withScreenTime] Created Alba-Bridging-Header.h with RCTBridgeModule.h\n");
       }
 
       // ── Recreate extension support files ──────────────────────────────────
