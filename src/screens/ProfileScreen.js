@@ -1188,7 +1188,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingRight: 4, paddingVertical: 4 },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   menuBtn: { paddingLeft: 8, paddingVertical: 4 },
-  title: { fontSize: 15.5, fontWeight: "700", fontFamily: "Poppins", alignItems: "center" },
+  title: { fontSize: 15.5, fontFamily: "PoppinsBold", alignItems: "center" },
 
   coverWrap: { width: "100%", height: 132, position: "relative" },
   coverImg: { width: "100%", height: "100%" },
@@ -1208,7 +1208,7 @@ const styles = StyleSheet.create({
   avatarOuter: { position: "relative" },
   avatar: { width: 96, height: 96, borderRadius: 48 },
   avatarFallback: { alignItems: "center", justifyContent: "center" },
-  avatarText: { fontWeight: "800", color: "#596576", fontSize: 28, fontFamily: "Poppins" },
+  avatarText: { color: "#596576", fontSize: 28, fontFamily: "PoppinsBold" },
   addAvatarBtn: {
     position: "absolute",
     bottom: 0,
@@ -1222,15 +1222,15 @@ const styles = StyleSheet.create({
   },
 
   infoWrap: { paddingHorizontal: 20, paddingTop: 10 },
-  name: { fontSize: 20, fontWeight: "800", textAlign: "center", fontFamily: "Poppins" },
+  name: { fontSize: 20, textAlign: "center", fontFamily: "PoppinsBold" },
   location: { fontSize: 13, textAlign: "center", marginTop: 4, fontFamily: "Poppins" },
   bio: { fontSize: 13, textAlign: "center", marginTop: 8, lineHeight: 18, fontFamily: "Poppins" },
-  readMore: { fontWeight: "700", fontFamily: "Poppins" },
+  readMore: { fontFamily: "PoppinsBold" },
 
   actionsRow: { flexDirection: "row", marginTop: 14, gap: 10, justifyContent: "center", marginBottom: 14 },
   btn: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, height: 38, borderRadius: 10 },
   btnPrimary: { backgroundColor: "#12A7E0" },
-  btnText: { fontSize: 14, fontWeight: "200", fontFamily: "Poppins" },
+  btnText: { fontSize: 14, fontFamily: "Poppins" },
   squareBtn: {
     width: 38,
     height: 38,

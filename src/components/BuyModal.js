@@ -8,6 +8,7 @@ import {
   TextInput,
   ScrollView,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
@@ -1209,7 +1210,7 @@ export default function BuyModal({ visible, onClose, postId }) {
           )}
 
           <View style={styles.bottomRow}>
-            {platformPayAvailable ? (
+            {platformPayAvailable && Platform.OS !== "android" ? (
               <PlatformPayButton
                 onPress={handlePay}
                 type="buy"
@@ -1276,7 +1277,7 @@ const styles = StyleSheet.create({
   },
   checkboxInner: { width: 10, height: 10, borderRadius: 2, backgroundColor: "#3D8BFF" },
   productLabel: { flex: 1, fontFamily: "Poppins", fontSize: 14 },
-  priceText: { fontFamily: "Poppins", fontSize: 14, fontWeight: "600", marginLeft: 8 },
+  priceText: { fontFamily: "PoppinsBold", fontSize: 14, marginLeft: 8 },
 
   detailsArea: { marginTop: 8, marginLeft: 26 },
   booleanList: { flexDirection: "row", flexWrap: "wrap", marginBottom: 6 },
@@ -1343,7 +1344,7 @@ const styles = StyleSheet.create({
   payBtn: { backgroundColor: "#4EBCFF", borderColor: "#4EBCFF" },
   platformPayBtn: { minWidth: 110, height: 42 },
   cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
-  actionText: { fontWeight: "700", fontFamily: "Poppins" },
+  actionText: { fontFamily: "PoppinsBold" },
   emptyText: { fontFamily: "Poppins", fontSize: 14 },
 
   noteText: { fontFamily: "Poppins", fontSize: 12, marginTop: 2, marginLeft: 26, marginBottom: 4 },
@@ -1359,9 +1360,8 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   feedbackTitle: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 16,
-    fontWeight: "700",
     textAlign: "center",
     marginBottom: 8,
   },
@@ -1378,8 +1378,7 @@ const styles = StyleSheet.create({
   },
   feedbackOkText: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
 });

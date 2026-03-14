@@ -269,9 +269,9 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 10 },
   loadingBox: { alignItems: "center", justifyContent: "center", paddingVertical: 24 },
   loadingText: { marginTop: 8, fontFamily: "Poppins", fontSize: 14 },
-  featureName: { fontFamily: "Poppins", fontSize: 18, fontWeight: "700", marginBottom: 6 },
+  featureName: { fontFamily: "PoppinsBold", fontSize: 18, marginBottom: 6 },
   description: { fontFamily: "Poppins", fontSize: 14, marginBottom: 8 },
-  price: { fontFamily: "Poppins", fontSize: 16, fontWeight: "600" },
+  price: { fontFamily: "PoppinsBold", fontSize: 16 },
   bottomRow: { flexDirection: "row", justifyContent: "center", gap: 12, paddingTop: 16 },
   actionBtn: {
     height: 42,
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
   payBtn: { backgroundColor: "#4EBCFF", borderColor: "#4EBCFF" },
   platformPayBtn: { minWidth: 110, height: 42 },
   cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
-  actionText: { fontWeight: "700", fontFamily: "Poppins" },
+  actionText: { fontFamily: "PoppinsBold" },
   feedbackCard: {
     width: "78%",
     borderRadius: 18,
@@ -293,12 +293,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     elevation: 4,
   },
-  feedbackTitle: { fontFamily: "Poppins", fontSize: 16, fontWeight: "700", marginBottom: 8 },
+  feedbackTitle: { fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 8 },
   feedbackMessage: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", marginBottom: 18 },
   feedbackOkBtn: {
     paddingHorizontal: 28,
     paddingVertical: 10,
     borderRadius: 10,
   },
-  feedbackOkText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 14 },
+  feedbackOkText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 },
 });

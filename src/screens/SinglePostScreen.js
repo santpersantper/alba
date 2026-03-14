@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  headerTitle: { fontFamily: "Poppins", fontSize: 18, fontWeight: "700" },
+  headerTitle: { fontFamily: "PoppinsBold", fontSize: 18 },
   body: { flex: 1, paddingTop: 10 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 });

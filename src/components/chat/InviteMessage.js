@@ -412,7 +412,7 @@ const styles = StyleSheet.create({
   },
   avatarFallback: { backgroundColor: "#E5ECF4" },
   textCol: { flex: 1 },
-  title: { fontFamily: "Poppins", fontWeight: "700", fontSize: 16, marginBottom: 2 },
+  title: { fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 2 },
   members: { fontFamily: "Poppins", fontSize: 11, marginBottom: 4, opacity: 0.9 },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   joinBtn: { paddingHorizontal: 14, paddingVertical: 4, borderRadius: 5, backgroundColor: "#4EBCFF" },
@@ -424,7 +424,7 @@ const styles = StyleSheet.create({
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
   menuCard: {

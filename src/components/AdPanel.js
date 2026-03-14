@@ -309,7 +309,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#2F91FF", paddingVertical: 10, paddingHorizontal: 18,
     borderRadius: 10, marginTop: 14,
   },
-  addBtnText: { color: "#fff", fontSize: 14, fontWeight: "600", fontFamily: "Poppins" },
+  addBtnText: { color: "#fff", fontSize: 14, fontFamily: "PoppinsBold" },
 
   labelsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   labelChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20, borderWidth: 1 },

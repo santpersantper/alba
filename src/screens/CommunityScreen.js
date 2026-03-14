@@ -750,6 +750,7 @@ export default function CommunityScreen() {
         ref={scrollRef}
         data={visiblePosts}
         keyExtractor={(item) => String(item.id)}
+        style={{ backgroundColor: isDark ? theme.background : "#FFFFFF" }}
         onScroll={handleScroll}
         scrollEventThrottle={16}
         viewabilityConfig={viewabilityConfig}
@@ -946,7 +947,7 @@ export default function CommunityScreen() {
                   {
                     backgroundColor: isDark ? theme.gray : "#FFFFFF",
                     borderColor: isDark ? "#FFFFFF" : "#d9e4f3",
-                    borderWidth: StyleSheet.hairlineWidth,
+                    borderWidth: 1,
                   },
                 ]}
               >
@@ -1308,18 +1309,17 @@ const styles = StyleSheet.create({
   },
   adPromptBtnText: {
     color: "#fff",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
-    fontWeight: "600",
   },
 
   vpnOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.5)" },
   vpnCard: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28, alignItems: "center" },
   vpnHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#ddd", marginBottom: 16 },
-  vpnTitle: { fontFamily: "Poppins", fontWeight: "700", fontSize: 20, marginBottom: 8 },
+  vpnTitle: { fontFamily: "PoppinsBold", fontSize: 20, marginBottom: 8 },
   vpnBody: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", lineHeight: 22, marginBottom: 24, opacity: 0.75 },
   vpnBtn: { backgroundColor: "#2F91FF", borderRadius: 14, paddingVertical: 14, paddingHorizontal: 40, marginBottom: 12 },
-  vpnBtnText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 15 },
+  vpnBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
   vpnTravelerBtn: { paddingVertical: 8 },
   vpnTravelerText: { fontFamily: "Poppins", fontSize: 13, textAlign: "center" },
 });

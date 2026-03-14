@@ -879,7 +879,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     backgroundColor: "#E5ECF4",
   },
-  handle: { fontWeight: "700", fontFamily: "Poppins" },
+  handle: { fontFamily: "PoppinsBold" },
   underline: {
     width: 56,
     height: 3,
@@ -925,5 +925,5 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderColor: "#E3E8EE",
   },
-  actionText: { fontWeight: "700", fontFamily: "Poppins" },
+  actionText: { fontFamily: "PoppinsBold" },
 });

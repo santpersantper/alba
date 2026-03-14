@@ -202,9 +202,8 @@ const styles = StyleSheet.create({
   },
   textCol: { flex: 1 },
   addressText: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 13,
-    fontWeight: "600",
     marginBottom: 8,
     lineHeight: 18,
   },
@@ -229,7 +228,7 @@ const styles = StyleSheet.create({
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
   menuCard: {

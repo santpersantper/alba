@@ -306,8 +306,7 @@ const styles = StyleSheet.create({
   bubbleOther: { backgroundColor: "#EAEFF4", borderTopLeftRadius: 4 },
   senderName: {
     fontSize: 12,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     color: "#374151",
     marginBottom: 3,
     paddingBottom: 3,
@@ -381,7 +380,7 @@ const styles = StyleSheet.create({
   },
   reportRow: { flexDirection: "row", gap: 10 },
   reportBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  reportBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  reportBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   confirmCard: {
     width: "100%",
@@ -397,5 +396,5 @@ const styles = StyleSheet.create({
   },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });

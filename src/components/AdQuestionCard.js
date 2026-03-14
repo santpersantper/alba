@@ -1,40 +1,42 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useAlbaTheme } from '../theme/ThemeContext';
 
-export default function AdQuestionCard({product}) {
+export default function AdQuestionCard({ product }) {
+  const { isDark } = useAlbaTheme();
+
   return (
-
-    <View style={styles.questionCard}>
-        <Text style={styles.questionText}>Are you interested in receiving ads about</Text>
-        <Text style={[styles.questionText, styles.questionEmphasis]}>{product}?</Text>
-        <View style={styles.questionActions}>
-            <TouchableOpacity style={styles.questionBtn} activeOpacity={0.8}>
-            <Text style={styles.questionBtnLabel}>Yes</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.questionBtn, styles.questionBtnOutline]} activeOpacity={0.8}>
-            <Text style={[styles.questionBtnLabel, styles.questionBtnOutlineLabel]}>No</Text>
-            </TouchableOpacity>
-        </View>
+    <View style={[styles.questionCard, { backgroundColor: isDark ? '#1E2A3A' : '#D9ECFF' }]}>
+      <Text style={[styles.questionText, { color: isDark ? '#E0EEFF' : '#1B1D28' }]}>
+        Are you interested in seeing ads about
+      </Text>
+      <Text style={[styles.questionText, styles.questionEmphasis, { color: isDark ? '#FFFFFF' : '#1B1D28' }]}>
+        {product}?
+      </Text>
+      <View style={styles.questionActions}>
+        <TouchableOpacity style={styles.questionBtn} activeOpacity={0.8}>
+          <Text style={styles.questionBtnLabel}>Yes</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.questionBtn, styles.questionBtnOutline, { backgroundColor: isDark ? '#2A3A4A' : '#FFFFFF', borderColor: isDark ? '#3A5A7A' : '#B9D7FF' }]} activeOpacity={0.8}>
+          <Text style={[styles.questionBtnLabel, { color: isDark ? '#E0EEFF' : '#1B1D28' }]}>No</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-    questionCard: {
-    backgroundColor: '#D9ECFF',
+  questionCard: {
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
   },
   questionText: {
     fontSize: 14,
-    color: '#1B1D28',
-    fontWeight: '100',
-    fontFamily: 'Poppins'
+    fontFamily: 'Poppins',
   },
   questionEmphasis: {
-    fontWeight: '800',
-    fontFamily: 'Poppins'
+    fontFamily: 'PoppinsBold',
   },
   questionActions: {
     flexDirection: 'row',
@@ -49,15 +51,9 @@ const styles = StyleSheet.create({
   },
   questionBtnLabel: {
     color: '#fff',
-    fontWeight: '700',
-    fontFamily: 'Poppins'
+    fontFamily: 'PoppinsBold',
   },
   questionBtnOutline: {
-    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#B9D7FF',
   },
-  questionBtnOutlineLabel: {
-    color: '#1B1D28',
-  }
 });

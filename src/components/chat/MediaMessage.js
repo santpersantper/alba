@@ -502,11 +502,11 @@ const styles = StyleSheet.create({
   },
   reportRow: { flexDirection: "row", gap: 10 },
   reportBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  reportBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  reportBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   confirmCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });

@@ -1163,8 +1163,7 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: "center",
     fontSize: 18,
-    fontWeight: "700",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
 
   tabBar: {
@@ -1184,8 +1183,7 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 13,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
   },
 
   content: { paddingHorizontal: 15 },
@@ -1199,8 +1197,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: 11,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
     letterSpacing: 0.5,
     marginBottom: 8,
     marginLeft: 2,
@@ -1212,8 +1209,7 @@ const styles = StyleSheet.create({
   },
   rowTitle: {
     fontSize: 14,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
     marginBottom: 2,
   },
   rowSub: { fontSize: 12, fontFamily: "Poppins", lineHeight: 16 },
@@ -1261,15 +1257,13 @@ const styles = StyleSheet.create({
   },
   premiumHeader: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
     marginBottom: 10,
   },
   premiumLabel: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
   premiumSublabel: {
@@ -1340,8 +1334,7 @@ const styles = StyleSheet.create({
   },
   savedPostsBtnText: {
     fontSize: 16,
-    fontWeight: "700",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
   logoutBtn: {
     marginTop: 12,
@@ -1350,8 +1343,7 @@ const styles = StyleSheet.create({
   },
   logoutBtnText: {
     fontSize: 16,
-    fontWeight: "700",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     color: "#E55353",
   },
   deleteAccountBtn: {
@@ -1395,9 +1387,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   saveBtnText: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
-    fontWeight: "700",
     color: "#fff",
   },
   saveErrorText: {
@@ -1444,8 +1435,7 @@ const styles = StyleSheet.create({
   },
   blockedName: {
     fontSize: 14,
-    fontWeight: "600",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
   blockedUsername: {
     fontSize: 12,
@@ -1466,8 +1456,7 @@ const styles = StyleSheet.create({
   },
   unblockTitle: {
     fontSize: 15,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     marginBottom: 12,
   },
   unblockButtonsRow: {

@@ -429,9 +429,8 @@ const styles = StyleSheet.create({
   },
 
   headerTitle: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 17,
-    fontWeight: "600",
     color: 'white',
   },
 
@@ -449,9 +448,8 @@ const styles = StyleSheet.create({
   },
 
   title: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 16,
-    fontWeight: "700",
     flex: 1,
     color: 'white',
   },
@@ -511,9 +509,8 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   cancelTitle: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 16,
-    fontWeight: "700",
     color: "#111",
     textAlign: "center",
     marginBottom: 8,
@@ -552,9 +549,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#E55353",
   },
   cancelBtnText: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
-    fontWeight: "600",
     color: "#fff",
   },
 });

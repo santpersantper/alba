@@ -194,7 +194,7 @@ function ImageSlide({ uri, width, height, index }) {
       source={{ uri }}
       style={[styles.mediaItem, { width, height }]}
       contentFit="cover"
-      cachePolicy="immutable"
+      cachePolicy="memory-disk"
     />
   );
 }
@@ -1187,16 +1187,16 @@ const styles = StyleSheet.create({
     marginHorizontal: 10,
     marginBottom: 4,
   },
-  postLabelText: { fontSize: 12, color: "#fff", fontFamily: "Poppins", fontWeight: "700" },
+  postLabelText: { fontSize: 12, color: "#fff", fontFamily: "PoppinsBold" },
 
   headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 10, paddingLeft: 10, paddingRight: 10, paddingTop: 10 },
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10, backgroundColor: "#18314f" },
-  handleLine: { fontSize: 14, fontWeight: "700", fontFamily: "Poppins" },
+  handleLine: { fontSize: 14, fontFamily: "PoppinsBold" },
   subtitle: { fontSize: 12, fontFamily: "Poppins" },
 
-  title: { fontSize: 18, fontWeight: "800", marginBottom: 8, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },
+  title: { fontSize: 18, marginBottom: 8, fontFamily: "PoppinsBold", paddingLeft: 10, paddingRight: 10 },
   description: { fontSize: 14, marginBottom: 4, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },
-  readMoreText: { fontSize: 12, fontFamily: "Poppins", fontWeight: "700", paddingLeft: 10, paddingRight: 10, marginBottom: 8 },
+  readMoreText: { fontSize: 12, fontFamily: "PoppinsBold", paddingLeft: 10, paddingRight: 10, marginBottom: 8 },
 
   carouselWrap: { width: "100%", overflow: "hidden", marginBottom: 12 },
   mediaItem: { width: "100%", height: "100%" },
@@ -1207,7 +1207,7 @@ const styles = StyleSheet.create({
   ctaScroll: { paddingTop: 6, paddingRight: 4, padding: 10 },
   ctaButton: { height: 40, borderRadius: 10, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginRight: 8, overflow: "hidden", flexShrink: 0 },
   ctaIcon: { width: 16, height: 16, marginRight: 6 },
-  ctaLabel: { color: "#FFFFFF", fontSize: 14, fontWeight: "100", fontFamily: "Poppins" },
+  ctaLabel: { color: "#FFFFFF", fontSize: 14, fontFamily: "Poppins" },
 
   kebabBtn: { paddingHorizontal: 6, paddingVertical: 4, marginLeft: 6, alignItems: "center", justifyContent: "center" },
 
@@ -1224,7 +1224,7 @@ const styles = StyleSheet.create({
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10, width: "100%" },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   muteButton: { position: "absolute", right: 10, bottom: 10, width: 30, height: 30, borderRadius: 15, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", alignItems: "center" },
   reportInput: { borderWidth: 1, borderRadius: 8, padding: 8, marginBottom: 12 },
@@ -1234,5 +1234,5 @@ const styles = StyleSheet.create({
   reportCardInput: { borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 10, minHeight: 80, paddingHorizontal: 10, paddingVertical: 8, fontFamily: "Poppins", fontSize: 14, textAlignVertical: "top", marginBottom: 12 },
   reportCardRow: { flexDirection: "row", gap: 10 },
   reportCardBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  reportCardBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  reportCardBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });

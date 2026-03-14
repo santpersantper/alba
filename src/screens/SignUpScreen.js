@@ -613,7 +613,6 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontFamily: "PoppinsBold",
-    fontWeight: "700",
   },
   alertOverlay: {
     flex: 1,
@@ -632,7 +631,6 @@ const styles = StyleSheet.create({
   alertTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 17,
-    fontWeight: "700",
     marginBottom: 10,
     textAlign: "center",
   },
@@ -652,7 +650,6 @@ const styles = StyleSheet.create({
   alertBtnText: {
     fontFamily: "PoppinsBold",
     fontSize: 14,
-    fontWeight: "700",
     color: "#fff",
   },
 });

@@ -258,7 +258,6 @@ const styles = StyleSheet.create({
   },
   tagLabel: {
     fontSize: 14,
-    fontWeight: "100",
     color: "#FFFFFF",
     fontFamily: "Poppins",
   },
@@ -269,7 +268,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#2F91FF",
     fontFamily: "Poppins",
-    fontWeight: "500",
   },
   addChip: {
     backgroundColor: "#ecf2ff",
@@ -279,7 +277,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#2F91FF",
     fontFamily: "Poppins",
-    fontWeight: "500",
   },
   addInput: {
     minWidth: 80,

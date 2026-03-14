@@ -216,9 +216,8 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: "center",
     fontSize: 18,
-    fontWeight: "700",
     color: "#111",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
 
   container: { flex: 1 },

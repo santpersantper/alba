@@ -1117,9 +1117,8 @@ const styles = StyleSheet.create({
   headerTitle: {
     textAlign: "center",
     fontSize: 16,
-    fontWeight: "700",
     color: "#111",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
   loadingBar: {
     height: 28,
@@ -1174,8 +1173,7 @@ const styles = StyleSheet.create({
   },
   unblockBtnText: {
     fontSize: 14,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
   },
   modalOverlay: {
     flex: 1,
@@ -1191,8 +1189,7 @@ const styles = StyleSheet.create({
   },
   unblockTitle: {
     fontSize: 15,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     marginBottom: 14,
   },
   unblockButtonsRow: {
@@ -1234,8 +1231,7 @@ const styles = StyleSheet.create({
   },
   locationSheetTitle: {
     fontSize: 17,
-    fontWeight: "700",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     marginBottom: 16,
     textAlign: "center",
   },
@@ -1248,7 +1244,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 14,
   },
-  locationOptionText: { fontFamily: "Poppins", fontSize: 14, fontWeight: "600" },
+  locationOptionText: { fontFamily: "PoppinsBold", fontSize: 14 },
   locationOrLabel: { fontSize: 12, fontFamily: "Poppins", marginBottom: 8 },
   locationSearchWrap: {
     flexDirection: "row",

@@ -41,5 +41,6 @@ yarn-error.*
 *.tsbuildinfo
 
 credentials.json
+google-services.json
 .idea/
 .expo/

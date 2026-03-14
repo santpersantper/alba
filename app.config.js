@@ -58,6 +58,7 @@ export default {
       },
       edgeToEdgeEnabled: true,
       package: "com.alba.app",
+      googleServicesFile: "./google-services.json",
     },
     web: {
       favicon: "./assets/favicon.png",

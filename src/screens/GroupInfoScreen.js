@@ -1654,9 +1654,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   subgroupsCount: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
-    fontWeight: "700",
   },
   subgroupButton: {
     paddingHorizontal: 14,

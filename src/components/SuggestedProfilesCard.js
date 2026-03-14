@@ -29,10 +29,9 @@ const styles = StyleSheet.create({
   peopleTitle: {
     fontSize: 20,
     padding: 10,
-    fontWeight: '800',
     color: '#1B1D28',
     marginBottom: 12,
-    fontFamily: 'Poppins'
+    fontFamily: 'PoppinsBold'
   },
   peopleRow: {
     flexDirection: 'row',
@@ -52,9 +51,8 @@ const styles = StyleSheet.create({
   personName: {
     fontSize: 14,
     color: '#1B1D28',
-    fontWeight: '700',
     marginBottom: 8,
-    fontFamily: 'Poppins'
+    fontFamily: 'PoppinsBold'
   },
   followBtn: {
     paddingVertical: 8,
@@ -67,7 +65,6 @@ const styles = StyleSheet.create({
     borderColor: 'grey',
   },
   followLabel: {
-    fontWeight: '100',
     color: 'grey',
     fontFamily: 'Poppins'
   }

@@ -339,7 +339,7 @@ const styles = StyleSheet.create({
   },
   avatar: { width: 26, height: 26, borderRadius: 13, marginRight: 8 },
   handle: { fontSize: 11, fontFamily: "Poppins" },
-  title: { fontSize: 13, fontWeight: "700", fontFamily: "Poppins" },
+  title: { fontSize: 13, fontFamily: "PoppinsBold" },
 
   time: { marginTop: 4, fontSize: 10, fontFamily: "Poppins" },
   timeLeft: { alignSelf: "flex-start", paddingLeft: 6 },
@@ -377,5 +377,5 @@ const styles = StyleSheet.create({
   },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });

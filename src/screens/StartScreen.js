@@ -433,7 +433,6 @@ const styles = StyleSheet.create({
   googleG: {
     fontFamily: 'PoppinsBold',
     fontSize: 16,
-    fontWeight: '700',
   },
   googleBtnText: {
     fontFamily: 'Poppins',
@@ -441,7 +440,6 @@ const styles = StyleSheet.create({
   },
   link: {
     fontFamily: 'PoppinsBold',
-    fontWeight: '700',
     padding: 5,
   },
   forgotLink: {
@@ -465,7 +463,6 @@ const styles = StyleSheet.create({
   alertTitle: {
     fontFamily: 'PoppinsBold',
     fontSize: 17,
-    fontWeight: '700',
     marginBottom: 10,
     textAlign: 'center',
   },
@@ -485,7 +482,6 @@ const styles = StyleSheet.create({
   alertBtnText: {
     fontFamily: 'PoppinsBold',
     fontSize: 14,
-    fontWeight: '700',
     color: '#fff',
   },
   forgotOverlay: {
@@ -510,7 +506,6 @@ const styles = StyleSheet.create({
   forgotTitle: {
     fontFamily: 'PoppinsBold',
     fontSize: 17,
-    fontWeight: '700',
     marginBottom: 10,
   },
   forgotCaption: {
@@ -548,7 +543,6 @@ const styles = StyleSheet.create({
   forgotBtnText: {
     fontFamily: 'PoppinsBold',
     fontSize: 14,
-    fontWeight: '700',
     color: '#fff',
   },
 });

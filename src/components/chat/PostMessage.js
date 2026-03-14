@@ -473,7 +473,7 @@ const styles = StyleSheet.create({
   },
   avatar: { width: 26, height: 26, borderRadius: 13, marginRight: 8 },
   handle: { fontSize: 12, fontFamily: "Poppins" },
-  title: { fontSize: 14, fontWeight: "700", fontFamily: "Poppins" },
+  title: { fontSize: 14, fontFamily: "PoppinsBold" },
 
   media: { width: "100%", height: 180, overflow: "hidden" },
   playOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: "center", alignItems: "center" },
@@ -529,11 +529,11 @@ const styles = StyleSheet.create({
   },
   reportRow: { flexDirection: "row", gap: 10 },
   reportBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  reportBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  reportBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   confirmCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
-  confirmBtnText: { color: "#fff", fontFamily: "Poppins", fontSize: 15, fontWeight: "600" },
+  confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });

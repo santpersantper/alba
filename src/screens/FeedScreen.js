@@ -1237,8 +1237,7 @@ const styles = StyleSheet.create({
   timerText: {
     color: "#fff",
     fontSize: 13,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
   },
   itemContainer: {
     width: "100%",
@@ -1269,9 +1268,8 @@ const styles = StyleSheet.create({
   },
   usernameText: {
     color: "#fff",
-    fontWeight: "700",
     marginBottom: 4,
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
   captionText: {
     color: "#fff",
@@ -1284,8 +1282,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
     fontSize: 12,
     marginTop: 2,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
   },
   actionsColumn: {
     marginLeft: 16,
@@ -1388,8 +1385,7 @@ const styles = StyleSheet.create({
   confirmBtnText: {
     color: "#fff",
     fontSize: 15,
-    fontWeight: "600",
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
 
   reportCard: {
@@ -1400,8 +1396,7 @@ const styles = StyleSheet.create({
   },
   reportTitle: {
     fontSize: 16,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     color: "#fff",
     marginBottom: 10,
   },
@@ -1454,8 +1449,7 @@ const styles = StyleSheet.create({
   },
   blockTitle: {
     fontSize: 15,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     color: "#fff",
     marginBottom: 12,
   },
@@ -1512,9 +1506,8 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   timerAlertTitle: {
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
     fontSize: 16,
-    fontWeight: "700",
     color: "#fff",
     textAlign: "center",
     marginBottom: 8,
@@ -1534,8 +1527,7 @@ const styles = StyleSheet.create({
   },
   timerAlertOkText: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
   },
 });

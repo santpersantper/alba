@@ -136,12 +136,10 @@ const styles = StyleSheet.create({
 
   name: {
     fontSize: 15,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
   },
   nameUnread: {
     fontFamily: "PoppinsBold",
-    fontWeight: "700",
   },
 
   last: {
@@ -151,7 +149,6 @@ const styles = StyleSheet.create({
   },
   lastUnread: {
     fontFamily: "PoppinsBold",
-    fontWeight: "700",
   },
 
   right: {

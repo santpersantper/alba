@@ -224,9 +224,8 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 14,
-    fontWeight: "700",
     marginBottom: 12,
-    fontFamily: "Poppins",
+    fontFamily: "PoppinsBold",
   },
   card: {
     flexDirection: "row",
@@ -247,8 +246,7 @@ const styles = StyleSheet.create({
   iconDot: { width: 26, height: 26, borderRadius: 13 },
   cardTitle: {
     fontSize: 14,
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
   },
   cardSubtitle: {
     fontSize: 12,
@@ -266,7 +264,6 @@ const styles = StyleSheet.create({
   pillIcon: { width: 16, height: 16, marginRight: 6 },
   pillText: {
     color: "#fff",
-    fontWeight: "200",
     fontSize: 14,
     fontFamily: "Poppins",
   },
@@ -278,5 +275,5 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginTop: 6,
   },
-  addBtnText: { color: "#fff", fontWeight: "700", fontFamily: "Poppins" },
+  addBtnText: { color: "#fff", fontFamily: "PoppinsBold" },
 });

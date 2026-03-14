@@ -215,8 +215,7 @@ const styles = StyleSheet.create({
   },
   username: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
     textShadowColor: "rgba(0,0,0,0.6)",
     textShadowOffset: { width: 0, height: 1 },

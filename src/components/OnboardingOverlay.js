@@ -185,6 +185,5 @@ const styles = StyleSheet.create({
     color: "#000",
     fontSize: 15,
     fontFamily: "PoppinsBold",
-    fontWeight: "700",
   },
 });

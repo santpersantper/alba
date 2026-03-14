@@ -738,8 +738,7 @@ const styles = StyleSheet.create({
   },
   cardHeader: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
   },
   cardSubheader: {
@@ -827,8 +826,7 @@ const styles = StyleSheet.create({
   },
   sendBtnText: {
     color: BLUE,
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
   cancelLink: {
@@ -884,8 +882,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   receivedHeader: {
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
   receivedMeta: {
@@ -901,8 +898,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
   receivedName: {
-    fontFamily: "Poppins",
-    fontWeight: "600",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
   receivedDist: {
@@ -928,8 +924,7 @@ const styles = StyleSheet.create({
   },
   replyBtnText: {
     color: "#fff",
-    fontFamily: "Poppins",
-    fontWeight: "700",
+    fontFamily: "PoppinsBold",
     fontSize: 14,
   },
 });

@@ -7,6 +7,7 @@ import {
   Animated,
   Image,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { supabase } from "../lib/supabase";
 
@@ -19,6 +20,7 @@ export default function NavigationBar({ state, navigation }) {
   const params = currentRoute.params || {};
 
   const { theme, isDark } = useAlbaTheme();
+  const insets = useSafeAreaInsets();
 
   // base rule: only Feed & Community can show the bar
   let shouldShow = false;
@@ -101,6 +103,7 @@ export default function NavigationBar({ state, navigation }) {
           transform: [{ translateY }],
           backgroundColor: theme.gray,
           shadowColor: isDark ? "#000000" : "#0C1A4B",
+          paddingBottom: Math.max(insets.bottom, 12),
         },
       ]}
       pointerEvents={shouldShow ? "auto" : "none"}
@@ -176,7 +179,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: -6 },
     elevation: 6,
-    paddingBottom: 20,
   },
   bottomItem: {
     flex: 1,

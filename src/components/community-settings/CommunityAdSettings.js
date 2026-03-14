@@ -318,10 +318,10 @@ const styles = StyleSheet.create({
   resetBtn: { flexDirection: "row", alignItems: "center", marginTop: 14, alignSelf: "flex-start" },
   resetBtnText: { fontFamily: "Poppins", fontSize: 13, color: "#888" },
   payoutSection: { marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
-  payoutTitle: { fontFamily: "Poppins", fontWeight: "700", fontSize: 14, marginBottom: 4 },
+  payoutTitle: { fontFamily: "PoppinsBold", fontSize: 14, marginBottom: 4 },
   payoutHelper: { fontFamily: "Poppins", fontSize: 12, lineHeight: 17, marginBottom: 10 },
   payoutRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   payoutBadge: { flexDirection: "row", alignItems: "center", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   payoutBtn: { backgroundColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, minWidth: 44, alignItems: "center" },
-  payoutBtnText: { color: "#fff", fontFamily: "Poppins", fontWeight: "700", fontSize: 13 },
+  payoutBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 13 },
 });

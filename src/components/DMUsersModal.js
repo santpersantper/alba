@@ -285,5 +285,5 @@ const styles = StyleSheet.create({
   },
   sendBtn: { backgroundColor: "#4EBCFF", borderColor: "#4EBCFF", marginBottom: 20 },
   cancelBtn: { backgroundColor: "#fff", borderColor: "#E3E8EE", marginBottom: 20 },
-  actionText: { fontWeight: "700", fontFamily: "Poppins" },
+  actionText: { fontFamily: "PoppinsBold" },
 });

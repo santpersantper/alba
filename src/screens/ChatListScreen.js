@@ -728,7 +728,7 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   menuBtn: { paddingLeft: 8, paddingVertical: 4 },
 
-  title: { fontSize: 15.5, fontWeight: "700", fontFamily: "Poppins", alignItems: "center" },
+  title: { fontSize: 15.5, fontFamily: "PoppinsBold", alignItems: "center" },
 
   searchWrap: {
     flexDirection: "row",
