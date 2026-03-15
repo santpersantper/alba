@@ -46,7 +46,7 @@ const EXTENSIONS = [
     // Path to provisioning profile relative to project root.
     // EAS only installs the main app's profile; we install extension profiles
     // ourselves (see withDangerousMod step) and reference them by UUID here.
-    profilePath: "certs/AlbaDeviceActivityExtension.mobileprovision",
+    profilePath: "certs/AlbaDeviceActivityExtension2.mobileprovision",
   },
   {
     name: "AlbaDeviceActivityReport",
@@ -55,7 +55,7 @@ const EXTENSIONS = [
     entitlements:
       "AlbaDeviceActivityReport/AlbaDeviceActivityReport.entitlements",
     infoPlist: "AlbaDeviceActivityReport/Info.plist",
-    profilePath: "certs/AlbaDeviceActivityReport.mobileprovision",
+    profilePath: "certs/AlbaDeviceActivityReport2.mobileprovision",
   },
 ];
 
@@ -772,6 +772,9 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
         isa: "PBXBuildFile",
         fileRef: productRef,
         fileRef_comment: `${extName}.appex`,
+        // Required for App Store archive validation: tells Xcode to strip
+        // public headers when copying the .appex into PlugIns/.
+        settings: { ATTRIBUTES: ["RemoveHeadersOnCopy"] },
       };
       objects["PBXBuildFile"][`${bfUuid}_comment`] =
         `${extName}.appex in Embed App Extensions`;
