@@ -174,10 +174,12 @@ module.exports = function withScreenTime(config) {
             SKIP_INSTALL: "YES",
             TARGETED_DEVICE_FAMILY: '"1,2"',
             ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: "NO",
-            CODE_SIGN_STYLE: profileUUID ? "Manual" : "Automatic",
-            // Ad-hoc profiles require a Distribution certificate. Debug builds
-            // default to "iPhone Developer" which causes "No signing certificate
-            // iOS Development found" when only a Distribution cert is available.
+            // Always use Manual signing for extension targets. Setting
+            // CODE_SIGN_STYLE = Automatic while CODE_SIGN_IDENTITY = "iPhone
+            // Distribution" causes Xcode to error: "conflicting provisioning
+            // settings". Manual + iPhone Distribution is correct for all
+            // distribution builds (production and ad-hoc).
+            CODE_SIGN_STYLE: "Manual",
             CODE_SIGN_IDENTITY: '"iPhone Distribution"',
           };
 
