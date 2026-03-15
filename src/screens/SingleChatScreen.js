@@ -61,7 +61,7 @@ const prefetchForItems = (items) => {
       if (it?.postPreview?.media) uris.push(it.postPreview.media);
       if (it?.senderProfile?.avatarUrl) uris.push(it.senderProfile.avatarUrl);
     }
-    Array.from(new Set(uris)).forEach(prefetchUri);
+    Array.from(new Set(uris)).slice(0, 10).forEach(prefetchUri);
   } catch {}
 };
 
@@ -78,7 +78,9 @@ async function getCachedSingleMessagesLocal({ chatId, peerUsername }) {
   const raw = await AsyncStorage.getItem(key);
   if (!raw) return [];
   const parsed = JSON.parse(raw);
-  return Array.isArray(parsed?.items) ? parsed.items : [];
+  const items = Array.isArray(parsed?.items) ? parsed.items : [];
+  // Trim to last 50 to prevent old 200-item caches from flooding memory on render
+  return items.length > 50 ? items.slice(-50) : items;
 }
 
 async function setCachedSingleMessagesLocal({ chatId, peerUsername, items }) {
@@ -241,26 +243,35 @@ function mapRowToItem(row) {
 
 /* ---------------- fetch messages (no cache lib dependency) ---------------- */
 async function fetchSingleMessagesDirect(chatId, limit = 200) {
-  const { data, error } = await supabase
-    .from("messages")
-    .select(
-      "id, chat, is_group, sender_username, sender_is_me, content, media_reference, post_id, group_id, sent_date, sent_time, is_read"
-    )
-    .eq("chat", chatId)
-    .eq("is_group", false)
-    .order("sent_date", { ascending: true })
-    .order("sent_time", { ascending: true })
-    .limit(limit);
+  const { trackRequest } = require("../lib/requestTracker");
+  const done = trackRequest(`SingleChat.fetchMessages chat=${chatId} limit=${limit}`);
+  try {
+    const { data, error } = await supabase
+      .from("messages")
+      .select(
+        "id, chat, is_group, sender_username, sender_is_me, content, media_reference, post_id, group_id, sent_date, sent_time, is_read"
+      )
+      .eq("chat", chatId)
+      .eq("is_group", false)
+      .order("sent_date", { ascending: true })
+      .order("sent_time", { ascending: true })
+      .limit(limit);
 
-  if (error) throw error;
+    if (error) throw error;
 
-  const items = (data || []).map(mapRowToItem).filter(Boolean);
-  return items;
+    const items = (data || []).map(mapRowToItem).filter(Boolean);
+    return items;
+  } finally {
+    done();
+  }
 }
 
 /* Shows first frame of a local or remote video as a static thumbnail */
 function PendingVideoThumb({ uri, style }) {
-  const player = useVideoPlayer(uri, (p) => { p.muted = true; });
+  const player = useVideoPlayer(uri, (p) => {
+    p.muted = true;
+    p.bufferOptions = { preferredForwardBufferDuration: 3, minBufferForPlayback: 1, maxBufferBytes: 5 * 1024 * 1024 };
+  });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
 
@@ -470,7 +481,7 @@ export default function SingleChatScreen({ navigation, route }) {
 
       // 4) fetch messages direct
       try {
-                const fresh = await fetchSingleMessagesDirect(chatId, 200);
+                const fresh = await fetchSingleMessagesDirect(chatId, 50);
  
         if (!mounted) return;
 
@@ -515,10 +526,8 @@ export default function SingleChatScreen({ navigation, route }) {
       prefetchForItems([mapped]);
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
 
-      // background refresh to stay consistent
-      fetchSingleMessagesDirect(chatId, 200)
-        .then((fresh) => setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh }))
-        .catch(() => {});
+      // background re-fetch intentionally omitted — fetching 200 msgs on every insert
+      // exhausted Android heap (OOM). Cache is updated on screen load.
     });
 
     return un;
@@ -894,7 +903,7 @@ export default function SingleChatScreen({ navigation, route }) {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: theme.background }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
       <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
@@ -932,11 +941,16 @@ export default function SingleChatScreen({ navigation, route }) {
                   style={{ flex: 1 }}
                   contentContainerStyle={{
                     padding: 16,
+                    paddingTop: 24,
                     paddingBottom: 8,
                     backgroundColor: theme.background,
                   }}
                   showsVerticalScrollIndicator={false}
                   keyboardShouldPersistTaps="handled"
+                  initialNumToRender={15}
+                  maxToRenderPerBatch={8}
+                  windowSize={5}
+                  removeClippedSubviews
                 />
 
                 <View

@@ -1,6 +1,7 @@
 // lib/chatListCache.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+import { trackRequest } from "./requestTracker";
 
 const mem = {
   uid: null,
@@ -20,69 +21,90 @@ const CACHE_TTL_MS = 1000 * 60 * 10; // 10 min
 const keyFor = (uid) => `chatlist_cache_v${CACHE_VERSION}_${uid}`;
 
 async function fetchThreads(ownerId, limit = 80) {
-  const { data, error } = await supabase
-    .from("chat_threads")
-    .select(
-      "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference,unread_count"
-    )
-    .eq("owner_id", ownerId)
-    .order("last_sent_at", { ascending: false, nullsFirst: true })
-    .limit(limit);
+  const done = trackRequest(`chatList.fetchThreads limit=${limit}`);
+  try {
+    const { data, error } = await supabase
+      .from("chat_threads")
+      .select(
+        "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference,unread_count"
+      )
+      .eq("owner_id", ownerId)
+      .order("last_sent_at", { ascending: false, nullsFirst: true })
+      .limit(limit);
 
-  if (error) throw error;
-  return data || [];
+    if (error) throw error;
+    return data || [];
+  } finally {
+    done();
+  }
 }
 
 async function fetchProfilesByIds(ids) {
   const uniq = Array.from(new Set((ids || []).filter(Boolean)));
   if (!uniq.length) return {};
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, username, name, avatar_url")
-    .in("id", uniq);
+  const done = trackRequest(`chatList.fetchProfilesByIds count=${uniq.length}`);
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, name, avatar_url")
+      .in("id", uniq);
 
-  if (error || !data) return {};
-  const map = {};
-  for (const row of data) {
-    map[row.id] = {
-      username: row.username,
-      name: row.name || null,
-      avatarUrl: row.avatar_url || null,
-    };
+    if (error || !data) return {};
+    const map = {};
+    for (const row of data) {
+      map[row.id] = {
+        username: row.username,
+        name: row.name || null,
+        avatarUrl: row.avatar_url || null,
+      };
+    }
+    return map;
+  } finally {
+    done();
   }
-  return map;
 }
 
 async function fetchGroupsByIds(ids) {
   const uniq = Array.from(new Set((ids || []).filter(Boolean)));
   if (!uniq.length) return {};
-  const { data, error } = await supabase
-    .from("groups")
-    .select("id, groupname, group_pic_link, members")
-    .in("id", uniq);
+  const done = trackRequest(`chatList.fetchGroupsByIds count=${uniq.length}`);
+  try {
+    const { data, error } = await supabase
+      .from("groups")
+      .select("id, groupname, group_pic_link, members")
+      .in("id", uniq);
 
-  if (error || !data) return {};
-  const map = {};
-  for (const g of data) {
-    map[g.id] = {
-      name: g.groupname || "Group",
-      avatarUrl: g.group_pic_link || null,
-      members: Array.isArray(g.members) ? g.members : [],
-    };
+    if (error || !data) return {};
+    const map = {};
+    for (const g of data) {
+      map[g.id] = {
+        name: g.groupname || "Group",
+        avatarUrl: g.group_pic_link || null,
+        members: Array.isArray(g.members) ? g.members : [],
+      };
+    }
+    return map;
+  } finally {
+    done();
   }
-  return map;
 }
 
 async function fetchMyGroupsByUsername(myUsername) {
   if (!myUsername) return [];
-  const { data, error } = await supabase
-    .from("groups")
-    .select("id, groupname, group_pic_link, members")
-    .contains("members", [myUsername])
-    .order("updated_at", { ascending: false, nullsFirst: true });
+  const done = trackRequest(`chatList.fetchMyGroupsByUsername user=${myUsername}`);
+  try {
+    const { data, error } = await supabase
+      .from("groups")
+      .select("id, groupname, group_pic_link, members")
+      .contains("members", [myUsername])
+      .order("updated_at", { ascending: false, nullsFirst: true })
+      .limit(50);
 
-  if (error) throw error;
-  return data || [];
+    if (error) throw error;
+    return data || [];
+  } finally {
+    done();
+  }
 }
 
 async function fetchSenderProfilesByUsernames(usernames) {

@@ -4,7 +4,7 @@
 
 #import <React/RCTBridgeModule.h>
 
-RCT_EXTERN_MODULE(AlbaScreenTimeModule, NSObject)
+@interface RCT_EXTERN_MODULE(AlbaScreenTimeModule, NSObject)
 
 RCT_EXTERN_METHOD(requestAuthorization:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
@@ -27,3 +27,5 @@ RCT_EXTERN_METHOD(refreshReport:(RCTPromiseResolveBlock)resolve
 
 RCT_EXTERN_METHOD(getUsageData:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
+
+@end

@@ -32,6 +32,11 @@ function isVideoUrl(uri) {
 function VideoFirstFrame({ videoUrl, style }) {
   const player = useVideoPlayer(videoUrl, (p) => {
     p.muted = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 3,
+      minBufferForPlayback: 1,
+      maxBufferBytes: 5 * 1024 * 1024,
+    };
   });
   return (
     <VideoView
@@ -48,6 +53,11 @@ function FullscreenVideo({ videoUrl }) {
   const [playing, setPlaying] = useState(true);
   const player = useVideoPlayer(videoUrl, (p) => {
     p.loop = false;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 10,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 15 * 1024 * 1024,
+    };
     p.play();
   });
 

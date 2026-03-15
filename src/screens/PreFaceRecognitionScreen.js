@@ -1,13 +1,13 @@
 // screens/PreFaceRecognitionScreen.js
 import React, { useEffect, useState } from "react";
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useFonts } from "expo-font";
@@ -125,7 +125,7 @@ export default function PreFaceRecognitionScreen() {
     : t("verification_pre_button_upload");
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.container}>
         {/* Back arrow */}
         <TouchableOpacity

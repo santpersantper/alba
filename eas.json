@@ -24,6 +24,7 @@
       }
     },
     "production": {
+      "credentialsSource": "local",
       "autoIncrement": true,
       "prebuildCommand": "npx expo prebuild --clean",
       "ios": {

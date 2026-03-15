@@ -360,10 +360,13 @@ export default function CommunityScreen() {
         console.warn("[Community] location update error", upErr);
       }
 
+      const { trackRequest } = require("../lib/requestTracker");
+      const _doneNearby = trackRequest(`Community.nearby_posts radius=${DEFAULT_RADIUS_KM}km`);
       const { data, error: rpcErr } = await supabase.rpc("nearby_posts", {
         uid: userId,
         radius_m: DEFAULT_RADIUS_KM * 1000,
-      });
+      }).limit(50);
+      _doneNearby();
 
       if (rpcErr) {
         console.warn("[Community] nearby_posts error", rpcErr);
@@ -376,12 +379,14 @@ export default function CommunityScreen() {
       const showFollowed = pref?.show_followed_users_posts === true;
       if (showFollowed && followedIds.length > 0) {
         try {
+          const _doneFollowed = trackRequest(`Community.followedPosts count=${followedIds.length}`);
           const { data: followedPostsData } = await supabase
             .from("posts")
             .select("*")
             .in("author_id", followedIds)
             .order("created_at", { ascending: false })
-            .limit(30);
+            .limit(20);
+          _doneFollowed();
           if (Array.isArray(followedPostsData) && followedPostsData.length > 0) {
             const existingIds = new Set(arr.map((p) => String(p.id)));
             const newPosts = followedPostsData.filter((p) => !existingIds.has(String(p.id)));
@@ -750,7 +755,7 @@ export default function CommunityScreen() {
         ref={scrollRef}
         data={visiblePosts}
         keyExtractor={(item) => String(item.id)}
-        style={{ backgroundColor: isDark ? theme.background : "#FFFFFF" }}
+        style={{ backgroundColor: isDark ? theme.gray : "#FFFFFF" }}
         onScroll={handleScroll}
         scrollEventThrottle={16}
         viewabilityConfig={viewabilityConfig}
@@ -984,15 +989,15 @@ export default function CommunityScreen() {
         }
         ListHeaderComponentStyle={styles.headerWrapper}
         ListFooterComponent={<ThemedView variant="gray" style={{ height: 60 }} />}
-        ListEmptyComponent={<ThemedView style={{ paddingVertical: 24 }} />}
+        ListEmptyComponent={<ThemedView variant="gray" style={{ paddingVertical: 24 }} />}
         renderItem={({ item, index }) => {
           // Inline ad-interest prompt card
           if (item.type === "ad_prompt") {
             return (
-              <View style={styles.adPromptCard}>
-                <Text style={styles.adPromptTitle}>
+              <View style={[styles.adPromptCard, { backgroundColor: isDark ? theme.gray : "#FFFFFF" }]}>
+                <Text style={[styles.adPromptTitle, { color: theme.text }]}>
                   Are you interested in seeing ads about{" "}
-                  <Text style={{ fontWeight: "700" }}>{item.category}</Text>?
+                  <Text style={{ fontFamily: "PoppinsBold" }}>{item.category}</Text>?
                 </Text>
                 <View style={styles.adPromptRow}>
                   <TouchableOpacity
@@ -1255,7 +1260,7 @@ const styles = StyleSheet.create({
   ticketsWidget: {
     position: "absolute",
     right: 16,
-    bottom: 86,
+    bottom: Platform.OS === "android" ? 104 : 86,
     width: 40,
     height: 40,
     borderRadius: 12,
@@ -1289,7 +1294,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     borderRadius: 14,
     padding: 16,
-    backgroundColor: "#FFFFFF",
   },
   adPromptTitle: {
     fontFamily: "Poppins",

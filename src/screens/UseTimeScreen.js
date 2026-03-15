@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
   Dimensions,
   PanResponder,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
@@ -428,8 +428,13 @@ export default function UseTimeScreen() {
   ).current;
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const todayMinutes = usageData?.today?.totalMinutes ?? 0;
-  const weekMinutes = usageData?.thisWeek?.totalMinutes ?? 0;
+  // Compute totals from per-app data (sum of deduplicated entries) rather than
+  // trusting totalMinutes from the native module, which can be inflated on Android
+  // because queryUsageStats may return multiple overlapping records for the same package.
+  const todayMinutes = Object.values(usageData?.today?.apps ?? {})
+    .reduce((sum, app) => sum + (app?.minutes ?? 0), 0);
+  const weekMinutes = Object.values(usageData?.thisWeek?.apps ?? {})
+    .reduce((sum, app) => sum + (app?.minutes ?? 0), 0);
   const dailyGoal = prefs.firstWeekComplete
     ? (prefs.screenTimeGoalDailyMaxMinutes ?? 180)
     : null;
@@ -577,7 +582,7 @@ export default function UseTimeScreen() {
       {...panResponder.panHandlers}
     >
       <StatusBar barStyle={scheme === "white" ? "dark-content" : "light-content"} />
-      <SafeAreaView style={s.safeArea}>
+      <SafeAreaView style={s.safeArea} edges={["top"]}>
         {/* Top nav row */}
         <View style={s.navRow}>
           <TouchableOpacity
@@ -998,7 +1003,7 @@ const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === "android" ? 12 : 4,
+    paddingTop: 4,
     paddingBottom: 4,
   },
   navTitle: { fontFamily: "PoppinsBold", fontSize: 16 },

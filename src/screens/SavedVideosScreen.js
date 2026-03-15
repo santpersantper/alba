@@ -38,6 +38,11 @@ function VideoItem({ item, isActive, itemHeight, safeBottom, onUnsave }) {
 
   const player = useVideoPlayer(item.videoUrl, (p) => {
     p.loop = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 10,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 15 * 1024 * 1024, // 15 MB cap
+    };
   });
 
   React.useEffect(() => {
@@ -153,7 +158,7 @@ export default function SavedVideosScreen({ navigation }) {
           return {
             id: String(row.id),
             userId: row.user_id,
-            username: row.username || "alba_user",
+            username: row.user_id || row.username || "alba_user",
             caption: row.caption || "",
             videoUrl,
           };

@@ -22,6 +22,7 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
+import * as Linking from 'expo-linking';
 
 // Required for expo-web-browser to close the auth session on redirect
 WebBrowser.maybeCompleteAuthSession();
@@ -34,7 +35,9 @@ const GOOGLE_WEB_CLIENT_ID =
 // iOS OAuth client — bundle ID: host.exp.Exponent (Expo Go testing)
 // For production builds, create a separate iOS client with bundle ID com.alba.app
 const GOOGLE_IOS_CLIENT_ID = '1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi.apps.googleusercontent.com';
-// Android OAuth client — package: com.alba.app, created in Google Cloud Console
+// Android OAuth client — required by expo-auth-session to satisfy its invariant check on
+// Android (it throws at mount if androidClientId is absent). The actual sign-in on Android
+// goes through handleAndroidGoogleSignIn (Supabase OAuth) — promptAsync is never called.
 const GOOGLE_ANDROID_CLIENT_ID = '1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq.apps.googleusercontent.com';
 
 export default function StartScreen({ navigation }) {
@@ -60,6 +63,9 @@ export default function StartScreen({ navigation }) {
   const showAlert = (title, message) => setAlertConfig({ title, message });
 
   // Google OAuth via expo-auth-session → signInWithIdToken (no redirect URL needed)
+  // androidClientId is required here to satisfy expo-auth-session's invariant check on Android
+  // (it throws at mount if absent). promptAsync is never called on Android — the button routes
+  // to handleAndroidGoogleSignIn which uses Supabase OAuth instead.
   const [_request, response, promptAsync] = Google.useAuthRequest({
     webClientId: GOOGLE_WEB_CLIENT_ID,
     iosClientId: GOOGLE_IOS_CLIENT_ID,
@@ -146,9 +152,89 @@ export default function StartScreen({ navigation }) {
     }
   };
 
-  const onGoogleSignIn = () => {
+  // Android: Google blocks Android-type OAuth clients in browser flows (Error 400).
+  // Use Supabase's OAuth flow instead. Note: openAuthSessionAsync on Android sometimes
+  // returns just 'alba://' (bare scheme, no params) because the Chrome Custom Tab closes
+  // when the Android intent system intercepts the deep link. We use Linking.addEventListener
+  // as the primary URL capture and fall back to openAuthSessionAsync's return value.
+  const handleAndroidGoogleSignIn = async () => {
     setGoogleLoading(true);
-    promptAsync();
+    let settled = false;
+
+    const finish = async (url) => {
+      if (settled) return;
+      settled = true;
+      try {
+        // PKCE flow: code in query string (?code= or &code=)
+        const codeMatch = url?.match(/[?&]code=([^&#]+)/);
+        if (codeMatch?.[1]) {
+          const { error } = await supabase.auth.exchangeCodeForSession(codeMatch[1]);
+          if (error) throw error;
+          return; // onAuthStateChange in AppNavigator handles navigation
+        }
+        // Implicit flow fallback: tokens in hash fragment
+        const fragMatch = url?.match(/#(.+)/);
+        if (fragMatch) {
+          const params = new URLSearchParams(fragMatch[1]);
+          const access_token = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
+          if (access_token) {
+            const { error } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
+            if (error) throw error;
+            return;
+          }
+        }
+        throw new Error('Authentication failed. Please try again.');
+      } catch (e) {
+        showAlert('Google sign in failed', e.message || 'Please try again.');
+      } finally {
+        setGoogleLoading(false);
+      }
+    };
+
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: 'alba://', skipBrowserRedirect: true },
+      });
+      if (error) throw error;
+      if (!data?.url) throw new Error('No OAuth URL received');
+
+      // Primary: listen for the deep link via Linking (more reliable on Android)
+      const subscription = Linking.addEventListener('url', ({ url }) => {
+        subscription.remove();
+        finish(url);
+      });
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, 'alba://');
+
+      // Fallback: if Linking didn't fire but openAuthSessionAsync captured the full URL
+      if (!settled && result.type === 'success' && result.url && result.url.length > 'alba://'.length) {
+        subscription.remove();
+        finish(result.url);
+      } else if (!settled && result.type !== 'success') {
+        // User cancelled
+        subscription.remove();
+        settled = true;
+        setGoogleLoading(false);
+      }
+      // If already settled by the Linking listener, do nothing
+    } catch (e) {
+      if (!settled) {
+        settled = true;
+        showAlert('Google sign in failed', e.message || 'Please try again.');
+        setGoogleLoading(false);
+      }
+    }
+  };
+
+  const onGoogleSignIn = () => {
+    if (Platform.OS === 'android') {
+      handleAndroidGoogleSignIn();
+    } else {
+      setGoogleLoading(true);
+      promptAsync();
+    }
   };
 
   const onForgotPassword = async () => {

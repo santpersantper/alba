@@ -34,6 +34,11 @@ function resolveVideoUrl(storagePath) {
 function VideoPlayer({ videoUrl }) {
   const player = useVideoPlayer(videoUrl, (p) => {
     p.loop = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 10,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 15 * 1024 * 1024, // 15 MB cap
+    };
     p.play();
   });
   return (

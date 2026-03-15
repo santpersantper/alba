@@ -7,6 +7,7 @@ import {
   TextInput,
 } from "react-native";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { useAlbaTheme } from "../theme/ThemeContext";
 
 const CHIP_GAP = 8; // marginRight between chips
 // Estimated widths (chip content + padding, before measurement) used in 2-row computation.
@@ -26,6 +27,7 @@ export default function LabelsCard({
   const [draft, setDraft] = useState("");
   const [showAll, setShowAll] = useState(false);
   const { t } = useAlbaLanguage();
+  const { theme, isDark } = useAlbaTheme();
 
   // Mutable refs so layout callbacks don't stale-close
   const containerW = useRef(0);
@@ -196,7 +198,7 @@ export default function LabelsCard({
 
       {/* "+" Add button — always shown, to the left of See all / See less */}
       {adding ? (
-        <View style={[styles.tagChip, styles.addChip]}>
+        <View style={[styles.tagChip, { backgroundColor: theme.gray }]}>
           <TextInput
             autoFocus
             value={draft}
@@ -212,7 +214,7 @@ export default function LabelsCard({
       ) : (
         <TouchableOpacity
           activeOpacity={0.85}
-          style={[styles.tagChip, styles.addChip]}
+          style={[styles.tagChip, { backgroundColor: theme.gray, borderWidth: isDark ? 1 : 0, borderColor: "#2F91FF" }]}
           onPress={() => setAdding(true)}
         >
           <Text style={styles.addText}>+</Text>
@@ -223,7 +225,7 @@ export default function LabelsCard({
       {hasMore && !showAll && (
         <TouchableOpacity
           activeOpacity={0.85}
-          style={[styles.tagChip, styles.seeAllChip]}
+          style={[styles.tagChip, { backgroundColor: theme.gray }]}
           onPress={() => setShowAll(true)}
         >
           <Text style={styles.seeAllText}>See all</Text>
@@ -232,7 +234,7 @@ export default function LabelsCard({
       {showAll && (
         <TouchableOpacity
           activeOpacity={0.85}
-          style={[styles.tagChip, styles.seeAllChip]}
+          style={[styles.tagChip, { backgroundColor: theme.gray }]}
           onPress={() => setShowAll(false)}
         >
           <Text style={styles.seeAllText}>See less</Text>
@@ -261,17 +263,10 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontFamily: "Poppins",
   },
-  seeAllChip: {
-    backgroundColor: "#ecf2ff",
-  },
   seeAllText: {
     fontSize: 14,
     color: "#2F91FF",
     fontFamily: "Poppins",
-  },
-  addChip: {
-    backgroundColor: "#ecf2ff",
-    borderColor: "transparent",
   },
   addText: {
     fontSize: 14,

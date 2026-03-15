@@ -93,7 +93,14 @@ function FeedItem({
   // (so swiping forward is instant). All other items get null — no buffering.
   const player = useVideoPlayer(
     isActive || isPreloading ? item.videoUrl : null,
-    (playerInstance) => { playerInstance.loop = true; }
+    (playerInstance) => {
+      playerInstance.loop = true;
+      playerInstance.bufferOptions = {
+        preferredForwardBufferDuration: 10,
+        minBufferForPlayback: 2,
+        maxBufferBytes: 15 * 1024 * 1024, // 15 MB cap
+      };
+    }
   );
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -186,6 +193,7 @@ function FeedItem({
         style={StyleSheet.absoluteFill}
         contentFit="cover"
         player={player}
+        nativeControls={false}
         allowsPictureInPicture={false}
         onError={(e) =>
           console.log("VideoView onError for", item.id, e?.nativeEvent)

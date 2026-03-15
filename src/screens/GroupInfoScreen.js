@@ -134,6 +134,7 @@ export default function GroupInfoScreen() {
   // exit/report
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportText, setReportText] = useState("");
+  const [reportSending, setReportSending] = useState(false);
   const [exiting, setExiting] = useState(false);
 
   // Alba-native info modal (replaces Alert.alert success messages)
@@ -429,9 +430,34 @@ export default function GroupInfoScreen() {
 
   /* ---------------- report group ---------------- */
 
-  const handleSubmitReport = () => {
-    console.log("You reported this group");
-    console.log("Reported group:", resolvedGroupName, "Reason:", reportText);
+  const handleSubmitReport = async () => {
+    const reason = reportText.trim();
+    if (!reason) return;
+    setReportSending(true);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      const reporterId = auth?.user?.id || null;
+
+      await supabase.from("reports").insert({
+        group_id: groupId || null,
+        reported_by: reporterId,
+        reason,
+      }).throwOnError().catch(() => {});
+
+      supabase.functions.invoke("send-report", {
+        body: {
+          type: "group",
+          reported_by_id: reporterId,
+          reported_by_username: myUsername || null,
+          reason,
+          context: {
+            group_id: groupId,
+            group_name: resolvedGroupName,
+          },
+        },
+      }).catch(() => {});
+    } catch {}
+    setReportSending(false);
     setReportText("");
     setReportModalVisible(false);
     setInfoModal({ visible: true, message: t("group_report_success") || "Thanks for your report." });
@@ -1280,7 +1306,7 @@ export default function GroupInfoScreen() {
       >
         <KeyboardAvoidingView
           style={styles.modalOuter}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           <View
             style={[
@@ -1315,13 +1341,13 @@ export default function GroupInfoScreen() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.modalSubmit}
+                style={[styles.modalSubmit, { opacity: reportText.trim() && !reportSending ? 1 : 0.5 }]}
                 onPress={handleSubmitReport}
-                disabled={!reportText.trim()}
+                disabled={!reportText.trim() || reportSending}
               >
-                <Text style={styles.modalSubmitText}>
-                  {t("submit_button") || "Send"}
-                </Text>
+                {reportSending
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={styles.modalSubmitText}>{t("submit_button") || "Send"}</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -1337,7 +1363,7 @@ export default function GroupInfoScreen() {
       >
         <KeyboardAvoidingView
           style={styles.modalOuter}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           <View
             style={[

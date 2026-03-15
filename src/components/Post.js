@@ -46,6 +46,7 @@ import {
   getCachedProfile,
   cacheImageToDisk,
 } from "../lib/profileCache";
+import { trackRequest } from "../lib/requestTracker";
 
 /* ---------- config ---------- */
 const DEFAULT_MEDIA_HEIGHT = 300;
@@ -186,6 +187,44 @@ const normalizeTime = (raw) => {
 // Session-level set so each ad post is counted as a view at most once per app session
 const _adViewsTracked = new Set();
 
+// Module-level auth cache — one getUser() + profiles fetch shared across all Post instances
+let _cachedAuth = null; // { uid, username, isVerified }
+let _cachedAuthTs = 0;
+const AUTH_CACHE_TTL = 5 * 60 * 1000;
+
+export function invalidateAuthCache() {
+  _cachedAuth = null;
+  _cachedAuthTs = 0;
+}
+let _authFetchPromise = null; // deduplicates in-flight fetches
+async function getAuthCached() {
+  if (_cachedAuth && Date.now() - _cachedAuthTs < AUTH_CACHE_TTL) return _cachedAuth;
+  if (_authFetchPromise) return _authFetchPromise;
+  _authFetchPromise = (async () => {
+    const done = trackRequest("Post.getAuthCached (getUser+profiles)");
+    try {
+      const { data } = await supabase.auth.getUser();
+      const uid = data?.user?.id;
+      if (!uid) return null;
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("username, is_verified")
+        .eq("id", uid)
+        .maybeSingle();
+      _cachedAuth = { uid, username: prof?.username || null, isVerified: !!prof?.is_verified };
+      _cachedAuthTs = Date.now();
+      return _cachedAuth;
+    } finally {
+      done();
+      _authFetchPromise = null;
+    }
+  })();
+  return _authFetchPromise;
+}
+
+// Module-level image dimensions cache — avoids redundant Image.getSize() fetches on re-mount
+const _dimCache = {}; // uri → { width, height }
+
 /* ---------- media subcomponents ---------- */
 function ImageSlide({ uri, width, height, index }) {
   return (
@@ -194,7 +233,7 @@ function ImageSlide({ uri, width, height, index }) {
       source={{ uri }}
       style={[styles.mediaItem, { width, height }]}
       contentFit="cover"
-      cachePolicy="memory-disk"
+      cachePolicy="disk"
     />
   );
 }
@@ -205,6 +244,11 @@ function VideoSlide({ uri, width, height, index, autoPlay }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
     p.muted = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 8,
+      minBufferForPlayback: 2,
+      maxBufferBytes: 10 * 1024 * 1024, // 10 MB cap
+    };
   });
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
@@ -392,9 +436,23 @@ export default function Post(props) {
       if (!m || isVideoUrl(hint) || isVideoUrl(m)) return;
       if (!isHttp(m) && !String(m).startsWith("file://")) return;
 
+      // Use session-level cache to avoid re-fetching dimensions on every mount/unmount
+      if (_dimCache[m]) {
+        setMediaDims((prev) => {
+          const next = [...prev];
+          if (next[index]?.width && next[index]?.height) return prev;
+          next[index] = _dimCache[m];
+          return next;
+        });
+        return;
+      }
+
+      const doneSize = trackRequest(`Post.Image.getSize idx=${index}`);
       Image.getSize(
         m,
         (width, height) => {
+          doneSize();
+          _dimCache[m] = { width, height };
           setMediaDims((prev) => {
             const next = [...prev];
             if (next[index]?.width && next[index]?.height) return prev;
@@ -402,7 +460,7 @@ export default function Post(props) {
             return next;
           });
         },
-        () => {}
+        () => { doneSize(); }
       );
     });
   }, []); // once
@@ -443,6 +501,7 @@ export default function Post(props) {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportText, setReportText] = useState("");
   const [reportSending, setReportSending] = useState(false);
+  const [reportSuccessOpen, setReportSuccessOpen] = useState(false);
 
   const [shareVisible, setShareVisible] = useState(false);
   const [buyVisible, setBuyVisible] = useState(false);
@@ -460,35 +519,26 @@ export default function Post(props) {
     let mounted = true;
     (async () => {
       try {
-        const { data } = await supabase.auth.getUser();
-        const uid = data?.user?.id;
-        if (uid) {
-          const { data: prof } = await supabase
-            .from("profiles")
-            .select("username, is_verified")
-            .eq("id", uid)
-            .maybeSingle();
-          if (mounted) {
-            setAuthUserId(uid);
-            setAuthUsername(prof?.username || null);
-            setIsVerified(!!prof?.is_verified);
+        const auth = await getAuthCached();
+        if (!mounted || !auth) return;
+        setAuthUserId(auth.uid);
+        setAuthUsername(auth.username);
+        setIsVerified(auth.isVerified);
 
-            // Track ad view — once per session, skip own posts
-            const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
-            const postAuthor = String(displayUser || "").toLowerCase();
-            const myUser = String(prof?.username || "").toLowerCase();
-            if (
-              postTypeStr === "ad" &&
-              effectivePostId &&
-              myUser &&
-              postAuthor &&
-              postAuthor !== myUser &&
-              !_adViewsTracked.has(effectivePostId)
-            ) {
-              _adViewsTracked.add(effectivePostId);
-              supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" }).then(() => {}).catch(() => {});
-            }
-          }
+        // Track ad view — once per session, skip own posts
+        const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
+        const postAuthor = String(displayUser || "").toLowerCase();
+        const myUser = String(auth.username || "").toLowerCase();
+        if (
+          postTypeStr === "ad" &&
+          effectivePostId &&
+          myUser &&
+          postAuthor &&
+          postAuthor !== myUser &&
+          !_adViewsTracked.has(effectivePostId)
+        ) {
+          _adViewsTracked.add(effectivePostId);
+          supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" }).then(() => {}).catch(() => {});
         }
       } catch {
         if (mounted) {
@@ -973,8 +1023,13 @@ export default function Post(props) {
             ref={scrollRef}
             horizontal
             pagingEnabled
+            snapToInterval={slideWidth}
+            snapToAlignment="start"
+            decelerationRate="fast"
+            disableIntervalMomentum
             showsHorizontalScrollIndicator={false}
             onMomentumScrollEnd={onScrollEnd}
+            style={{ width: slideWidth }}
           >
             {media.map((m, i) => {
               const hint = mediaHint[i] || m;
@@ -1140,12 +1195,31 @@ export default function Post(props) {
                   } catch {}
                   setReportSending(false);
                   setReportOpen(false);
-                  Alert.alert(t("group_report_success") || "Report sent", t("report_sent_body") || "Thanks, we'll review this post.");
+                  setReportSuccessOpen(true);
                 }}
               >
                 {reportSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.reportCardBtnText}>{t("confirm_yes") || "Send"}</Text>}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={reportSuccessOpen} transparent animationType="fade" onRequestClose={() => setReportSuccessOpen(false)}>
+        <View style={styles.reportOverlay}>
+          <View style={styles.reportCard}>
+            <Text style={[styles.reportCardTitle, { marginBottom: 6 }]}>
+              {t("group_report_success") || "Thanks for your report."}
+            </Text>
+            <Text style={{ fontFamily: "Poppins", fontSize: 13, color: "#6B7280", marginBottom: 16, textAlign: "center" }}>
+              {t("report_sent_body") || "We'll review it and take action if it goes against our guidelines."}
+            </Text>
+            <TouchableOpacity
+              style={[styles.reportCardBtn, { backgroundColor: "#3D8BFF", alignSelf: "stretch" }]}
+              onPress={() => setReportSuccessOpen(false)}
+            >
+              <Text style={styles.reportCardBtnText}>OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

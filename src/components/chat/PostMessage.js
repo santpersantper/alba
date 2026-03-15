@@ -33,6 +33,11 @@ const prefetchUri = (uri) => {
 function VideoThumbnail({ uri, style }) {
   const player = useVideoPlayer(uri, (p) => {
     p.muted = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 3,
+      minBufferForPlayback: 1,
+      maxBufferBytes: 5 * 1024 * 1024,
+    };
   });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }

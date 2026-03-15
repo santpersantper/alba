@@ -1,12 +1,13 @@
 // navigation/AppNavigator.js — auth-gated root (FIXED)
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   NavigationContainer,
   DefaultTheme,
   DarkTheme,
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { View, ActivityIndicator } from "react-native";
+import { View, ActivityIndicator, AppState } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
 import { LanguageProvider } from "../theme/LanguageContext";
@@ -157,6 +158,11 @@ export default function AppNavigator() {
 
       const { data: listener } = supabase.auth.onAuthStateChange(
         async (_event, session) => {
+          // Navigate immediately — don't block on the async profile check below.
+          // ProfileSetupModal is rendered above the nav tree so it can appear
+          // after navigation has already occurred.
+          setSignedIn(!!session);
+
           if (session?.user) {
             // Only show profile setup for Google OAuth users who have no profile yet
             const isGoogleUser =
@@ -197,8 +203,6 @@ export default function AppNavigator() {
             setNeedsProfileSetup(false);
             setPendingGoogleUser(null);
           }
-
-          setSignedIn(!!session);
         }
       );
 
@@ -206,6 +210,20 @@ export default function AppNavigator() {
     })();
 
     return () => sub?.unsubscribe?.();
+  }, []);
+
+  // Clear expo-image in-memory LRU cache when app returns to foreground.
+  // Decoded bitmaps (up to ~4MB each) accumulate in the LRU and can fill the heap.
+  // Re-decoding on re-display costs a little CPU but prevents OOM.
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (appStateRef.current.match(/inactive|background/) && next === "active") {
+        ExpoImage.clearMemoryCache?.().catch(() => {});
+      }
+      appStateRef.current = next;
+    });
+    return () => sub.remove();
   }, []);
 
   // Register push token when user signs in

@@ -4,7 +4,7 @@
 // Ad tracking: fires a belt-and-suspenders ad_stats INSERT when type=Ad
 // (DB trigger trg_create_ad_stats handles it too; both are safe with ON CONFLICT DO NOTHING).
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, Image,
   ScrollView, StyleSheet, ActivityIndicator, Alert,
@@ -139,6 +139,19 @@ export default function CreatePost() {
   const [locationText,        setLocationText]        = useState("");
   const [locationSuggestions, setLocationSuggestions] = useState([]);
   const locationDebounceRef = useRef(null);
+  const userCoordsRef = useRef(null);
+
+  // Silently pre-fetch last-known position so proximity biasing works immediately
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== "granted") return;
+        const pos = await Location.getLastKnownPositionAsync({});
+        if (pos?.coords) userCoordsRef.current = pos.coords;
+      } catch {}
+    })();
+  }, []);
 
   const [adNotes,  setAdNotes]  = useState("");
   const [feedTags, setFeedTags] = useState([]);
@@ -632,7 +645,14 @@ export default function CreatePost() {
         const token = Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
         if (!token) return;
         const q = encodeURIComponent(text.trim());
-        const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?types=poi,place,address&limit=5&access_token=${token}`);
+        const coords = userCoordsRef.current;
+        const proximityParam = coords
+          ? `&proximity=${coords.longitude},${coords.latitude}`
+          : "";
+        const res = await fetch(
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json` +
+          `?types=poi,address,neighborhood,locality${proximityParam}&limit=8&access_token=${token}`
+        );
         const json = await res.json();
         setLocationSuggestions(Array.isArray(json.features) ? json.features : []);
       } catch { setLocationSuggestions([]); }
@@ -840,16 +860,29 @@ export default function CreatePost() {
             </View>
             {locationSuggestions.length > 0 && (
               <View style={[cs.suggestionsBox, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#ddd" }]}>
-                {locationSuggestions.map((s) => (
-                  <TouchableOpacity
-                    key={s.id}
-                    style={cs.suggestionItem}
-                    onPress={() => { setLocationText(s.place_name); setLocationSuggestions([]); }}
-                  >
-                    <Feather name="map-pin" size={13} color="#2F91FF" style={{ marginRight: 8 }} />
-                    <Text style={[cs.suggestionText, { color: theme.text }]} numberOfLines={2}>{s.place_name}</Text>
-                  </TouchableOpacity>
-                ))}
+                {locationSuggestions.map((s) => {
+                  const primaryName = s.text || s.place_name;
+                  // Build a short context string: city / region, country
+                  const context = s.context || [];
+                  const city = context.find((c) => c.id?.startsWith("place.") || c.id?.startsWith("locality."))?.text;
+                  const country = context.find((c) => c.id?.startsWith("country."))?.text;
+                  const subtitle = [city, country].filter(Boolean).join(", ");
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={cs.suggestionItem}
+                      onPress={() => { setLocationText(primaryName); setLocationSuggestions([]); }}
+                    >
+                      <Feather name="map-pin" size={13} color="#2F91FF" style={{ marginRight: 8 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[cs.suggestionText, { color: theme.text }]} numberOfLines={1}>{primaryName}</Text>
+                        {!!subtitle && (
+                          <Text style={[cs.suggestionText, { color: theme.subtleText || "#8c97a8", fontSize: 12 }]} numberOfLines={1}>{subtitle}</Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )}
           </View>

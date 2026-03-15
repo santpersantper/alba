@@ -8,13 +8,6 @@ import ThemedView from "../../theme/ThemedView";
 import ThemedText from "../../theme/ThemedText";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 import { useAlbaLanguage } from "../../theme/LanguageContext";
-import Constants from "expo-constants";
-
-const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
-  "http://localhost:3000";
-
 // Same defaults shown in CommunityScreen's LabelsCard
 const BASE_LABELS = [
   "Sports",
@@ -38,13 +31,12 @@ export default function CommunityEventSettings() {
   const [payoutStatus, setPayoutStatus] = useState(null); // null | "not_started" | "pending" | "complete"
   const [payoutLoading, setPayoutLoading] = useState(false);
 
-  const fetchPayoutStatus = async (gId, token) => {
+  const fetchPayoutStatus = async (gId) => {
     try {
-      const res = await fetch(`${API_URL}/connect/status?groupId=${gId}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const { data } = await supabase.functions.invoke("stripe-connect", {
+        body: { action: "status-group", groupId: gId },
       });
-      const json = await res.json();
-      if (res.ok) setPayoutStatus(json.status);
+      if (data?.status) setPayoutStatus(data.status);
     } catch {
       // silently ignore — non-critical
     }
@@ -54,18 +46,14 @@ export default function CommunityEventSettings() {
     if (!groupId || payoutLoading) return;
     try {
       setPayoutLoading(true);
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token || "";
-      const res = await fetch(`${API_URL}/connect/onboard`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId, groupId }),
+      const { data, error } = await supabase.functions.invoke("stripe-connect", {
+        body: { action: "onboard-group", userId, groupId },
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start onboarding");
-      await Linking.openURL(json.url);
+      if (error) throw new Error(error.message || "Failed to start onboarding");
+      if (!data?.url) throw new Error("No onboarding URL received");
+      await Linking.openURL(data.url);
       // Re-check status after returning from browser
-      setTimeout(() => fetchPayoutStatus(groupId, token), 3000);
+      setTimeout(() => fetchPayoutStatus(groupId), 3000);
     } catch (e) {
       console.warn("Payout onboarding error:", e.message);
     } finally {
@@ -125,9 +113,7 @@ export default function CommunityEventSettings() {
 
           if (mounted && groupData?.id) {
             setGroupId(groupData.id);
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = sessionData?.session?.access_token || "";
-            await fetchPayoutStatus(groupData.id, token);
+            await fetchPayoutStatus(groupData.id);
           }
         }
       } catch (e) {

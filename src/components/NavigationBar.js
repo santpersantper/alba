@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Animated,
   Image,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
@@ -103,7 +104,7 @@ export default function NavigationBar({ state, navigation }) {
           transform: [{ translateY }],
           backgroundColor: theme.gray,
           shadowColor: isDark ? "#000000" : "#0C1A4B",
-          paddingBottom: Math.max(insets.bottom, 12),
+          paddingBottom: Math.max(insets.bottom + (Platform.OS === "android" ? 10 : 0), 12),
         },
       ]}
       pointerEvents={shouldShow ? "auto" : "none"}

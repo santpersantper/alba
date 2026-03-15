@@ -35,7 +35,14 @@ function resolveVideoUrl(storagePath) {
 
 // Muted VideoView paused at frame 0 — shows first frame as a static thumbnail
 function VideoFirstFrame({ videoUrl, style }) {
-  const player = useVideoPlayer(videoUrl, (p) => { p.muted = true; });
+  const player = useVideoPlayer(videoUrl, (p) => {
+    p.muted = true;
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 3,
+      minBufferForPlayback: 1,
+      maxBufferBytes: 5 * 1024 * 1024, // 5 MB cap — only needs first frame
+    };
+  });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
 

@@ -7,13 +7,6 @@ import ThemedView from "../../theme/ThemedView";
 import ThemedText from "../../theme/ThemedText";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 import { useAlbaLanguage } from "../../theme/LanguageContext";
-import Constants from "expo-constants";
-
-const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
-  "http://localhost:3000";
-
 const capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 export default function AdSettings({ navigation }) {
@@ -28,13 +21,12 @@ export default function AdSettings({ navigation }) {
   const [payoutStatus, setPayoutStatus] = useState(null); // null | "not_started" | "pending" | "complete"
   const [payoutLoading, setPayoutLoading] = useState(false);
 
-  const fetchPayoutStatus = async (token) => {
+  const fetchPayoutStatus = async () => {
     try {
-      const res = await fetch(`${API_URL}/connect/status/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const { data } = await supabase.functions.invoke("stripe-connect", {
+        body: { action: "status-profile" },
       });
-      const json = await res.json();
-      if (res.ok) setPayoutStatus(json.status);
+      if (data?.status) setPayoutStatus(data.status);
     } catch {
       // non-critical
     }
@@ -44,21 +36,13 @@ export default function AdSettings({ navigation }) {
     if (payoutLoading) return;
     try {
       setPayoutLoading(true);
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token || "";
-      const res = await fetch(`${API_URL}/connect/onboard/profile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId }),
+      const { data, error } = await supabase.functions.invoke("stripe-connect", {
+        body: { action: "onboard-profile", userId },
       });
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        throw new Error(`Server error (${res.status}) — make sure the payment server is running and up to date.`);
-      }
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start onboarding");
-      await Linking.openURL(json.url);
-      setTimeout(() => fetchPayoutStatus(token), 3000);
+      if (error) throw new Error(error.message || "Failed to start onboarding");
+      if (!data?.url) throw new Error("No onboarding URL received");
+      await Linking.openURL(data.url);
+      setTimeout(() => fetchPayoutStatus(), 3000);
     } catch (e) {
       console.warn("Ad payout onboarding error:", e.message);
       Alert.alert("Error", e.message || "Could not start payout setup. Please try again.");
@@ -87,9 +71,7 @@ export default function AdSettings({ navigation }) {
         if (Array.isArray(data.ad_tags)) setTags(data.ad_tags);
 
         // Load payout status
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token || "";
-        if (mounted) await fetchPayoutStatus(token);
+        if (mounted) await fetchPayoutStatus();
       } catch (e) {
         console.warn("AdSettings load error", e);
       }

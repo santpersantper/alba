@@ -6,31 +6,43 @@
 // ── How it connects to the rest of the app ────────────────────────────────────
 // 1. Main app (AlbaReportViewController) presents a hidden DeviceActivityReport view
 //    tagged with context "alba.report".
-// 2. The OS launches this extension and calls makeBody(context:) with live usage data.
-// 3. AlbaReportView.body extracts per-app minutes and writes JSON to shared UserDefaults.
-// 4. AlbaReportViewController's completion block fires after a 2-second delay, then
+// 2. The OS launches this extension and calls makeConfiguration(representing:) with
+//    live usage data. This is the correct DeviceActivityReportScene API (iOS 16+).
+// 3. makeConfiguration writes JSON to shared UserDefaults and returns AlbaReportConfig.
+// 4. The content closure renders an invisible AlbaReportView.
+// 5. AlbaReportViewController's completion block fires after a 2-second delay, then
 //    AlbaScreenTimeModule.refreshReport() resolves with the freshly written JSON.
 //
-// ── App name mapping note ─────────────────────────────────────────────────────
-// ApplicationToken is opaque — bundle IDs are not accessible for privacy reasons.
-// We use `ApplicationToken.localizedDisplayName` (iOS 16.2+) where available.
-// If that API is unavailable at compile time, replace with ordinal keys ("App1"…)
-// and map them by index on the JS side, matching the FamilyActivityPicker order.
+// ── DeviceActivityReportScene protocol (iOS 16+) ─────────────────────────────
+// Required:
+//   let context: DeviceActivityReport.Context
+//   let content: (Configuration) -> Content   (closure property)
+//   func makeConfiguration(representing: DeviceActivityResults<DeviceActivityData>)
+//         async -> Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
 import DeviceActivity
 import SwiftUI
 
-private let kAppGroup  = "group.com.alba.app.screentime"
-private let kUsageKey  = "alba_usage_data"
+private let kAppGroup      = "group.com.alba.app.screentime"
+private let kUsageKey      = "alba_usage_data"
 private let kReportContext = DeviceActivityReport.Context(rawValue: "alba.report")
+
+// MARK: - Configuration type passed from scene to view
+
+struct AlbaReportConfig {
+  let totalMinutes: Int
+  let appsData: [String: Any]
+}
 
 // MARK: - Extension entry point
 
 @main
 struct AlbaDeviceActivityReportExtension: DeviceActivityReportExtension {
   var body: some DeviceActivityReportScene {
-    AlbaReportScene()
+    AlbaReportScene { config in
+      AlbaReportView(config: config)
+    }
   }
 }
 
@@ -38,70 +50,65 @@ struct AlbaDeviceActivityReportExtension: DeviceActivityReportExtension {
 
 struct AlbaReportScene: DeviceActivityReportScene {
   let context: DeviceActivityReport.Context = kReportContext
+  let content: (AlbaReportConfig) -> AlbaReportView
 
-  func makeBody(context: DeviceActivityResults) -> AlbaReportView {
-    AlbaReportView(results: context)
-  }
-}
-
-// MARK: - Report view (extracts data and writes to UserDefaults as a side-effect)
-
-struct AlbaReportView: View {
-  let results: DeviceActivityResults
-
-  var body: some View {
-    // Invisible — this view exists only to trigger the data extraction task.
-    Color.clear
-      .frame(width: 1, height: 1)
-      .task { await extractAndSave() }
-  }
-
-  private func extractAndSave() async {
+  /// Called by the system with live DeviceActivity data.
+  /// Extracts per-app usage, writes to shared UserDefaults, and returns a config
+  /// that the content closure uses to render the (invisible) view.
+  func makeConfiguration(
+    representing data: DeviceActivityResults<DeviceActivityData>
+  ) async -> AlbaReportConfig {
     var totalSeconds: TimeInterval = 0
     var appsData: [String: Any] = [:]
     var appIndex = 0
 
-    for await data in results {
-      let seconds = data.totalActivityDuration
-      totalSeconds += seconds
-      let minutes = Int(seconds / 60)
-
-      // localizedDisplayName is available on ApplicationToken in iOS 16.2+.
-      // If your build target is exactly iOS 16.0 and this fails to compile,
-      // replace with: let name = "App\(appIndex + 1)"
-      let name = data.application.localizedDisplayName ?? "App\(appIndex + 1)"
-      appsData[name] = ["minutes": minutes]
-      appIndex += 1
+    for await deviceData in data {
+      for await segment in deviceData.activitySegments {
+        // Applications are nested under categories — ActivitySegment has no
+        // direct .applications property. We must go through .categories first.
+        for await category in segment.categories {
+          for await app in category.applications {
+            let seconds = app.totalActivityDuration
+            totalSeconds += seconds
+            let minutes = Int(seconds / 60)
+            let name = app.application.localizedDisplayName ?? "App\(appIndex + 1)"
+            appsData[name] = ["minutes": minutes]
+            appIndex += 1
+          }
+        }
+      }
     }
 
     let totalMinutes = Int(totalSeconds / 60)
-    writeToDefaults(totalMinutes: totalMinutes, appsData: appsData)
+    let config = AlbaReportConfig(totalMinutes: totalMinutes, appsData: appsData)
+    writeToDefaults(config)
+    return config
   }
 
-  private func writeToDefaults(totalMinutes: Int, appsData: [String: Any]) {
+  // MARK: - UserDefaults persistence
+
+  private func writeToDefaults(_ config: AlbaReportConfig) {
     guard let defaults = UserDefaults(suiteName: kAppGroup) else { return }
 
-    // Load existing usage blob so we preserve thisWeek / dailyTotals
     var usage: [String: Any] = loadExisting(defaults)
 
     let dayKey = weekdayKey()
     usage["lastUpdated"] = ISO8601DateFormatter().string(from: Date())
-    usage["today"] = ["totalMinutes": totalMinutes, "apps": appsData]
+    usage["today"] = ["totalMinutes": config.totalMinutes, "apps": config.appsData]
 
     // Update daily totals and recompute week total
     var dailyTotals = usage["dailyTotals"] as? [String: Int] ?? emptyDailyTotals()
-    dailyTotals[dayKey] = totalMinutes
+    dailyTotals[dayKey] = config.totalMinutes
     usage["dailyTotals"] = dailyTotals
 
     let weekTotal = dailyTotals.values.reduce(0, +)
 
-    // Carry forward per-app weekly sums from existing data
+    // Carry forward per-app weekly maxima
     var thisWeekApps = (usage["thisWeek"] as? [String: Any])?["apps"] as? [String: Any] ?? [:]
-    for (name, value) in appsData {
+    for (name, value) in config.appsData {
       let todayMin = (value as? [String: Any])?["minutes"] as? Int ?? 0
-      let prevWeekMin = (thisWeekApps[name] as? [String: Any])?["minutes"] as? Int ?? 0
-      // Accumulate: if today < prev (new day), add today; else replace today slice
-      thisWeekApps[name] = ["minutes": max(prevWeekMin, todayMin)]
+      let prevMin  = (thisWeekApps[name] as? [String: Any])?["minutes"] as? Int ?? 0
+      thisWeekApps[name] = ["minutes": max(prevMin, todayMin)]
     }
     usage["thisWeek"] = ["totalMinutes": weekTotal, "apps": thisWeekApps]
 
@@ -128,5 +135,16 @@ struct AlbaReportView: View {
 
   private func emptyDailyTotals() -> [String: Int] {
     ["Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0, "Fri": 0, "Sat": 0, "Sun": 0]
+  }
+}
+
+// MARK: - Report view (invisible — exists only to satisfy the content closure)
+
+struct AlbaReportView: View {
+  let config: AlbaReportConfig
+
+  var body: some View {
+    Color.clear
+      .frame(width: 1, height: 1)
   }
 }

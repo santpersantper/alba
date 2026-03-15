@@ -10,6 +10,7 @@ const STRINGS = {
     search_members_placeholder: "Search members",
     group_exit_success: "You left this group.",
     group_report_success: "Thanks for your report.",
+    report_sent_body: "We'll review it and take action if it goes against our guidelines.",
     exit_group_button: "Exit group",
     report_group_button: "Report group",
     report_group_title: "Report group",
@@ -493,6 +494,7 @@ const STRINGS = {
     search_members_placeholder: "Cerca membri",
     group_exit_success: "Hai lasciato questo gruppo.",
     group_report_success: "Grazie per la tua segnalazione.",
+    report_sent_body: "Lo esamineremo e agiremo se va contro le nostre linee guida.",
     exit_group_button: "Uscire dal gruppo",
     report_group_button: "Segnalare gruppo",
     report_group_title: "Segnalare gruppo",
@@ -829,6 +831,8 @@ const STRINGS = {
     notif_followed_posts_sub: "Avvisa quando gli account seguiti creano un post",
 
     /* ---------- CommunitySettings – Logout / Delete ---------- */
+    logout_title: "Esci",
+    logout_confirm: "Sei sicuro di voler uscire?",
     settings_logout: "Esci",
     settings_delete_account: "Elimina account",
     settings_delete_title: "Eliminare il tuo account?",

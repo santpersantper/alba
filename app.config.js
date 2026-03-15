@@ -31,6 +31,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.albaapp.alba",
+      teamId: "5VQYA86ATB",
       infoPlist: {
         CFBundleURLTypes: [
           {
@@ -59,6 +60,22 @@ export default {
       edgeToEdgeEnabled: true,
       package: "com.alba.app",
       googleServicesFile: "./google-services.json",
+      // Reversed Android OAuth client ID — required so expo-auth-session can
+      // register a custom-scheme redirect handler that Google recognises.
+      // This is the Android equivalent of CFBundleURLSchemes on iOS.
+      intentFilters: [
+        {
+          action: "VIEW",
+          autoVerify: true,
+          data: [
+            {
+              scheme:
+                "com.googleusercontent.apps.1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq",
+            },
+          ],
+          category: ["BROWSABLE", "DEFAULT"],
+        },
+      ],
     },
     web: {
       favicon: "./assets/favicon.png",
@@ -80,6 +97,17 @@ export default {
       }
     },
     plugins: [
+      // Allow the Android app to use a larger heap (default ~268MB → ~512MB on most devices).
+      // The app's baseline memory (Hermes + Fabric + expo-video + Stripe + notifications +
+      // location + screen-time native module) nearly fills the default heap before any UI renders.
+      (config) => {
+        const { withAndroidManifest } = require("@expo/config-plugins");
+        return withAndroidManifest(config, (c) => {
+          const app = c.modResults.manifest.application[0];
+          app.$["android:largeHeap"] = "true";
+          return c;
+        });
+      },
       "expo-image",
       "expo-system-ui",
       "expo-font",

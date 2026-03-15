@@ -741,7 +741,7 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
   },
-  searchInput: { flex: 1, fontSize: 14, fontFamily: "Poppins" },
+  searchInput: { flex: 1, fontSize: 14, fontFamily: "Poppins", includeFontPadding: false, textAlignVertical: "center", paddingVertical: 0 },
   sep: { height: 1, marginLeft: 72 },
 
   membersHeaderRow: {

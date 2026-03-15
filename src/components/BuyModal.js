@@ -19,7 +19,6 @@ import {
   usePlatformPay,
   useStripe,
 } from "@stripe/stripe-react-native";
-import Constants from "expo-constants";
 
 
 const POSTS_TABLE = "posts";
@@ -51,9 +50,6 @@ const looksLikeUuid = (s) =>
   typeof s === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 
-// Read payment server URL from Expo config; falls back to localhost during development
-const API_URL =
-  Constants.expoConfig?.extra?.expoPublic?.API_URL ?? "http://localhost:3000";
 
 export default function BuyModal({ visible, onClose, postId }) {
   const { theme, isDark } = useAlbaTheme();
@@ -603,25 +599,13 @@ export default function BuyModal({ visible, onClose, postId }) {
         // 1. Create a PaymentIntent on the backend
         let clientSecret;
         try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const token = sessionData?.session?.access_token || "";
-          const res = await fetch(`${API_URL}/create-payment-intent`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              amount: totalCents,
-              currency: "eur",
-              eventId: String(postId),
-              userId: uid,
-            }),
-          });
-          const json = await res.json();
-          if (!res.ok || !json.clientSecret)
-            throw new Error(json.error || "Payment setup failed");
-          clientSecret = json.clientSecret;
+          const { data: fnData, error: fnError } = await supabase.functions.invoke(
+            "create-payment-intent",
+            { body: { amount: totalCents, currency: "eur", eventId: String(postId), userId: uid } }
+          );
+          if (fnError || !fnData?.clientSecret)
+            throw new Error(fnData?.error || fnError?.message || "Payment setup failed");
+          clientSecret = fnData.clientSecret;
         } catch (e) {
           WARN("create-payment-intent error:", e?.message);
           showFeedback(
@@ -1301,8 +1285,11 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 10,
     paddingHorizontal: 12,
+    paddingVertical: 0,
     fontFamily: "Poppins",
     fontSize: 13,
+    includeFontPadding: false,
+    textAlignVertical: "center",
     marginBottom: 8,
   },
 
@@ -1317,16 +1304,22 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 10,
     paddingHorizontal: 10,
+    paddingVertical: 0,
     fontFamily: "Poppins",
     fontSize: 12,
+    includeFontPadding: false,
+    textAlignVertical: "center",
   },
 
   usernameInput: {
     height: 36,
     borderRadius: 10,
     paddingHorizontal: 10,
+    paddingVertical: 0,
     fontFamily: "Poppins",
     fontSize: 12,
+    includeFontPadding: false,
+    textAlignVertical: "center",
     backgroundColor: "#78C0E9",
     color: "#fff",
   },

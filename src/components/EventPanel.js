@@ -36,8 +36,8 @@ export default function EventPanel({ onState }) {
   const optionIdRef = useRef(100);
 
   const [tickets, setTickets] = useState([
-    { id: 1, name: "", free: true,  cost: "", settingsOpen: false, notes: "", options: [], requiredInfo: "" },
-    { id: 2, name: "", free: false, cost: "", settingsOpen: false, notes: "", options: [], requiredInfo: "" },
+    { id: 1, name: t("event_ticket_general"), free: true,  cost: "", settingsOpen: false, notes: "", options: [], requiredInfo: "" },
+    { id: 2, name: t("event_ticket_vip"),     free: false, cost: "", settingsOpen: false, notes: "", options: [], requiredInfo: "" },
   ]);
 
   const [sameRequiredInfo, setSameRequiredInfo] = useState(false);

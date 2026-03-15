@@ -44,11 +44,10 @@ const PLACEHOLDERS = {
 
 // Reads from the environment so we never hardcode a development IP or HTTP URL.
 // Set EXPO_PUBLIC_API_URL to your production server domain (must be HTTPS in prod).
-const _API_BASE =
-  process.env.EXPO_PUBLIC_API_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
-  "http://localhost:4000";
-const AVATAR_FACE_DETECT_URL = `${_API_BASE}/api/face/detect-avatar`;
+const LAMBDA_VERIFY_URL =
+  process.env.EXPO_PUBLIC_LAMBDA_VERIFY_URL ??
+  Constants?.expoConfig?.extra?.expoPublic?.LAMBDA_VERIFY_URL ??
+  "";
 
 /* ------------ tiny utils ------------ */
 const isHeicUrl = (u = "") => /\.heic($|\?)/i.test(String(u).split("?")[0] || "");
@@ -596,21 +595,27 @@ export default function ProfileScreen({ navigation, route }) {
   ]);
 
   const detectFaceInAvatar = async (localUri) => {
+    if (!LAMBDA_VERIFY_URL) return true; // no URL configured — skip check
     try {
-      const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" });
+      const resized = await ImageManipulator.manipulateAsync(
+        localUri,
+        [{ resize: { width: 800 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      const base64 = resized.base64;
 
-      const res = await fetch(AVATAR_FACE_DETECT_URL, {
+      const res = await fetch(LAMBDA_VERIFY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64 }),
+        // Pass the same image as both sides — we only care about faceDetected
+        body: JSON.stringify({ profileBase64: base64, selfieBase64: base64, userId: "avatar-detect" }),
       });
 
-      if (!res.ok) throw new Error("Avatar detect request failed");
-
+      if (!res.ok) return true; // permissive on Lambda errors
       const json = await res.json();
       return !!json.faceDetected;
     } catch {
-      return true;
+      return true; // permissive on network errors
     }
   };
 

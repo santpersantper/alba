@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Modal,
+  Platform,
   View,
   Text,
   StyleSheet,
@@ -13,19 +14,12 @@ import {
   usePlatformPay,
   useStripe,
 } from "@stripe/stripe-react-native";
-import Constants from "expo-constants";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { supabase } from "../lib/supabase";
 
 // ─── TESTING: set to true to skip Stripe and activate features instantly ───
 const PAYMENT_BYPASS = false;
 // ────────────────────────────────────────────────────────────────────────────
-
-// Read payment server URL — env var takes priority, then Expo config, then dev localhost
-const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
-  "http://localhost:3000";
 
 const mapStripeError = (code) => {
   if (code === "card_declined")
@@ -83,27 +77,15 @@ export default function PremiumPurchaseModal({
       // 1. Create a PaymentIntent on the backend
       let clientSecret;
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token || "";
-        const fullUrl = `${API_URL}${paymentEndpoint}`;
-        console.log("[Payment] API_URL:", API_URL);
-        console.log("[Payment] endpoint:", fullUrl);
-        console.log("[Payment] userId:", userId);
-        console.log("[Payment] has token:", !!token);
-        const res = await fetch(fullUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`,
-          },
-          body: JSON.stringify({ userId }),
-        });
-        console.log("[Payment] server status:", res.status);
-        const json = await res.json();
-        console.log("[Payment] server response:", JSON.stringify(json));
-        if (!res.ok || !json.clientSecret)
-          throw new Error(json.error || "Payment setup failed");
-        clientSecret = json.clientSecret;
+        // Extract the type from the endpoint path, e.g. "/create-payment-intent/premium-ad-free" → "premium-ad-free"
+        const type = paymentEndpoint?.split("/").pop() ?? "";
+        const { data: fnData, error: fnError } = await supabase.functions.invoke(
+          "create-payment-intent",
+          { body: { type, userId } }
+        );
+        if (fnError || !fnData?.clientSecret)
+          throw new Error(fnData?.error || fnError?.message || "Payment setup failed");
+        clientSecret = fnData.clientSecret;
       } catch (e) {
         console.error("[Payment] fetch error:", e.message, e);
         showFeedback(
@@ -219,7 +201,7 @@ export default function PremiumPurchaseModal({
             )}
 
             <View style={styles.bottomRow}>
-              {platformPayAvailable ? (
+              {platformPayAvailable && Platform.OS !== "android" ? (
                 <PlatformPayButton
                   onPress={handlePay}
                   type="buy"

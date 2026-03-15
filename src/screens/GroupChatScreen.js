@@ -154,7 +154,10 @@ const subscribeChatInserts = (chatId, onInsert) => {
 
 /* Shows first frame of a local or remote video as a static thumbnail */
 function PendingVideoThumb({ uri, style }) {
-  const player = useVideoPlayer(uri, (p) => { p.muted = true; });
+  const player = useVideoPlayer(uri, (p) => {
+    p.muted = true;
+    p.bufferOptions = { preferredForwardBufferDuration: 3, minBufferForPlayback: 1, maxBufferBytes: 5 * 1024 * 1024 };
+  });
   return <VideoView player={player} style={style} contentFit="cover" nativeControls={false} />;
 }
 
@@ -395,7 +398,7 @@ export default function GroupChatScreen({ navigation, route }) {
         }
 
         // 2) refresh (enriched) and persist
-        const fresh = await fetchGroupMessagesEnriched(chatId, 200);
+        const fresh = await fetchGroupMessagesEnriched(chatId, 50);
         const filteredFresh = (fresh || []).filter((it) => !isJoinBannerItem(it));
 
         if (mounted) {
@@ -464,10 +467,8 @@ export default function GroupChatScreen({ navigation, route }) {
 
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
 
-      // background: refresh enriched + cache (so previews appear)
-      fetchGroupMessagesEnriched(chatId, 200)
-        .then((fresh) => setCachedGroupMessages(chatId, (fresh || []).filter((it) => !isJoinBannerItem(it))))
-        .catch(() => {});
+      // background cache update is intentionally omitted — re-fetching 200 messages
+      // on every new insert exhausted Android heap (OOM). Cache is updated on screen load.
     });
 
     return un;
@@ -918,7 +919,7 @@ export default function GroupChatScreen({ navigation, route }) {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
       <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
@@ -944,6 +945,10 @@ export default function GroupChatScreen({ navigation, route }) {
           style={{ flex: 1 }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          initialNumToRender={15}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          removeClippedSubviews
         />
 
         <Composer
@@ -1345,7 +1350,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 15.5, fontFamily: "PoppinsBold" },
   subtitle: { fontSize: 12, marginTop: 2, fontFamily: "Poppins" },
-  listContent: { paddingHorizontal: 16 },
+  listContent: { paddingHorizontal: 16, paddingTop: 16 },
   composerWrap: {
     flexDirection: "row",
     alignItems: "center",

@@ -195,6 +195,35 @@ Deno.serve(async (req) => {
         console.log("[send-report] poster email sent to", posterEmail);
       }
 
+    } else if (type === "group") {
+      // ── Report the group itself — notify alba_mod via DM + admin email ──────
+      const groupId   = context?.group_id ?? null;
+      const groupName = context?.group_name ?? "unknown group";
+
+      if (modId) {
+        const { sent_date, sent_time } = nowParts();
+        const reporterTag = reported_by_username ? `@${reported_by_username}` : "A user";
+        const noticeText =
+          `${reporterTag} reported the group "${groupName}".` +
+          ((reason || "").trim() ? `\n\nReason: ${reason.trim()}` : "");
+
+        const { error: eDm } = await supabaseAdmin.from("messages").insert({
+          owner_id:        modId,
+          chat:            modId,
+          is_group:        false,
+          sender_username: "alba_mod",
+          sender_is_me:    true,
+          content:         noticeText,
+          media_reference: null,
+          post_id:         null,
+          group_id:        groupId,
+          is_read:         false,
+          sent_date,
+          sent_time,
+        });
+        if (eDm) console.error("[send-report] group DM insert error:", eDm.message);
+      }
+
     } else if (type === "group_chat") {
       // ── Notify group admins ────────────────────────────────────────────────
       const groupId   = context?.group_id ?? context?.chat_id ?? null;
@@ -278,6 +307,16 @@ Deno.serve(async (req) => {
           <table style="border-collapse:collapse;width:100%;">
             <tr><td style="padding:6px 0;color:#666;width:140px;">Reported by</td><td><strong>${reporter}</strong></td></tr>
             <tr><td style="padding:6px 0;color:#666;">Reported profile</td><td><strong>@${context?.reported_username ?? "—"}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Reason</td><td>${reason || "<em>No reason provided</em>"}</td></tr>
+          </table>`;
+      } else if (type === "group") {
+        subject  = `Group reported: ${context?.group_name ?? "unknown"}`;
+        bodyHtml = `
+          <h2 style="margin-bottom:6px;">Group Report</h2>
+          <table style="border-collapse:collapse;width:100%;">
+            <tr><td style="padding:6px 0;color:#666;width:140px;">Reported by</td><td><strong>${reporter}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Group</td><td><strong>${context?.group_name ?? "—"}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Group ID</td><td style="font-size:12px;color:#888;">${context?.group_id ?? "—"}</td></tr>
             <tr><td style="padding:6px 0;color:#666;">Reason</td><td>${reason || "<em>No reason provided</em>"}</td></tr>
           </table>`;
       } else if (type === "group_chat") {

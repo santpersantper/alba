@@ -1,6 +1,7 @@
 // lib/groupChatCache.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+import { trackRequest } from "./requestTracker";
 
 /* ---------------- cache keys ---------------- */
 const CACHE_VER = 2;
@@ -36,7 +37,9 @@ export async function getCachedGroupMessages(chatId) {
     const parsed = JSON.parse(raw);
     if (!parsed?.ts || !Array.isArray(parsed?.items)) return null;
     if (Date.now() - parsed.ts > CACHE_MAX_AGE_MS) return null;
-    return parsed.items;
+    // Trim to last 50 to prevent old 200-item caches from flooding memory on render
+    const items = parsed.items;
+    return items.length > 50 ? items.slice(-50) : items;
   } catch {
     return null;
   }
@@ -93,15 +96,20 @@ export async function fetchProfilesByUsernames(usernames) {
 }
 
 export async function fetchGroupMessagesRows(chatId, limit = 200) {
-  const { data, error } = await supabase
-    .from("messages")
-    .select("id, chat, is_group, owner_id, sender_username, sender_is_me, content, media_reference, post_reference, sent_date, sent_time, is_read, post_id, group_id, sent_at")
-    .eq("chat", chatId)
-    .order("sent_at", { ascending: true, nullsFirst: true })
-    .limit(limit);
+  const done = trackRequest(`groupCache.fetchRows chat=${chatId} limit=${limit}`);
+  try {
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, chat, is_group, owner_id, sender_username, sender_is_me, content, media_reference, post_reference, sent_date, sent_time, is_read, post_id, group_id, sent_at")
+      .eq("chat", chatId)
+      .order("sent_at", { ascending: true, nullsFirst: true })
+      .limit(limit);
 
-  if (error) throw error;
-  return data || [];
+    if (error) throw error;
+    return data || [];
+  } finally {
+    done();
+  }
 }
 
 /* ---------------- mapping: row -> item ---------------- */
@@ -160,10 +168,12 @@ export function mapMessageRowToItem(row) {
 async function fetchPostsPreview(postIds) {
   const ids = Array.from(new Set((postIds || []).filter(Boolean)));
   if (!ids.length) return {};
+  const done = trackRequest(`groupCache.fetchPostsPreview count=${ids.length}`);
   const { data, error } = await supabase
     .from("posts")
     .select("id, user, userpicuri, title, description, postmediauri, thumbnail_url")
     .in("id", ids);
+  done();
 
   if (error) throw error;
 
@@ -190,10 +200,12 @@ async function fetchGroupsPreview(groupIds) {
   const ids = Array.from(new Set((groupIds || []).filter(Boolean)));
   if (!ids.length) return {};
 
+  const doneGroups = trackRequest(`groupCache.fetchGroupsPreview count=${ids.length}`);
   const { data: groups, error: gErr } = await supabase
     .from("groups")
     .select("id, groupname, group_pic_link, members")
     .in("id", ids);
+  doneGroups();
 
   if (gErr) throw gErr;
 
@@ -207,10 +219,12 @@ async function fetchGroupsPreview(groupIds) {
 
   let profs = [];
   if (allUsernames.length) {
+    const doneProfs = trackRequest(`groupCache.fetchGroupsPreview.profiles count=${allUsernames.length}`);
     const { data, error } = await supabase
       .from("profiles")
       .select("username, name")
       .in("username", allUsernames);
+    doneProfs();
     if (!error && data) profs = data;
   }
 

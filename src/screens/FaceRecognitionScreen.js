@@ -7,15 +7,17 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Button,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
 import { supabase } from "../lib/supabase";
+import { invalidateAuthCache } from "../components/Post";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import Constants from "expo-constants";
 
@@ -27,13 +29,6 @@ const LAMBDA_VERIFY_URL =
   "";
 
 const BACKEND_VERIFY_URLS = LAMBDA_VERIFY_URL ? [LAMBDA_VERIFY_URL] : [];
-
-// Express server /verify-face endpoint — uses service-role key to write is_verified.
-const _API_BASE =
-  process.env.EXPO_PUBLIC_API_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.API_URL ??
-  "http://localhost:3000";
-const VERIFY_FACE_URL = `${_API_BASE}/verify-face`;
 
 
 function short(s, n = 220) {
@@ -65,6 +60,8 @@ export default function FaceRecognitionScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [verifying, setVerifying] = useState(false);
   const cameraRef = useRef(null);
+  const [alertModal, setAlertModal] = useState(null); // { title, message }
+  const showModal = (title, message) => setAlertModal({ title, message });
 
   const handleBack = () => navigation.goBack();
 
@@ -73,7 +70,7 @@ export default function FaceRecognitionScreen() {
     const log = (...args) => console.log(`[FaceVerify:${runId}]`, ...args);
 
     if (!cameraRef.current) {
-      Alert.alert("Error", "Camera not ready yet.");
+      showModal("Error", "Camera not ready yet.");
       return;
     }
 
@@ -109,7 +106,7 @@ export default function FaceRecognitionScreen() {
       log("avatar_url:", avatarUrl);
 
       if (!avatarUrl) {
-        Alert.alert(
+        showModal(
           "Profile photo missing",
           "Please upload a profile picture before verifying your face."
         );
@@ -124,21 +121,31 @@ export default function FaceRecognitionScreen() {
       const downloadRes = await FileSystem.downloadAsync(avatarUrl, localPath);
       log("Downloaded avatar to:", downloadRes?.uri);
 
-      const profileBase64 = await FileSystem.readAsStringAsync(downloadRes.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // Resize profile image to max 800px — Rekognition doesn't need full resolution
+      const resizedProfile = await ImageManipulator.manipulateAsync(
+        downloadRes.uri,
+        [{ resize: { width: 800 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      const profileBase64 = resizedProfile.base64;
       log("profileBase64 length:", profileBase64?.length);
 
       // 4) take selfie
       log("Step 4: takePictureAsync()");
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.6, // slightly smaller payload than 0.7
-        base64: true,
+        quality: 0.8,
         skipProcessing: true,
       });
 
-      if (!photo?.base64) throw new Error("Could not capture photo");
-      const selfieBase64 = photo.base64;
+      if (!photo?.uri) throw new Error("Could not capture photo");
+
+      // Resize selfie to max 800px before sending
+      const resizedSelfie = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 800 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      const selfieBase64 = resizedSelfie.base64;
       log("selfieBase64 length:", selfieBase64?.length);
 
       // Quick size sanity (very rough)
@@ -178,6 +185,11 @@ export default function FaceRecognitionScreen() {
           log("Raw response text:", short(text, 500));
 
           if (!res.ok) {
+            let parsed;
+            try { parsed = JSON.parse(text); } catch {}
+            if (parsed?.message?.toLowerCase().includes("invalid parameters")) {
+              throw new Error("PROFILE_NO_FACE");
+            }
             throw new Error(`HTTP ${res.status}: ${short(text, 500)}`);
           }
 
@@ -211,12 +223,12 @@ export default function FaceRecognitionScreen() {
       const json = jsonVar;
 
             if (!json?.faceDetected) {
-        Alert.alert(t("avatar_invalid_title"), t("avatar_invalid_message"));
+        showModal(t("avatar_invalid_title"), t("avatar_invalid_message"));
         return;
       }
 
       if (!json?.match) {
-        Alert.alert(
+        showModal(
           "Verification failed",
           "We couldn't match your face with your profile picture. Please try again."
         );
@@ -224,40 +236,29 @@ export default function FaceRecognitionScreen() {
       }
 
 
-      // 6) Mark verified via server endpoint (service-role key on server-side).
-      // We never write is_verified directly from the client — the RLS policy blocks it,
-      // and this server endpoint independently controls the write.
-      log("Step 6: POST /verify-face to server");
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) throw new Error("Session expired. Please log in again.");
-
-      const verifyRes = await fetchWithTimeout(
-        VERIFY_FACE_URL,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ userId: user.id }),
-        },
-        15000
+      // 6) Mark verified via Edge Function (service-role key server-side).
+      // We never write is_verified directly from the client — RLS blocks it.
+      log("Step 6: supabase.functions.invoke verify-face");
+      const { data: verifyData, error: verifyErr } = await supabase.functions.invoke(
+        "verify-face",
+        { body: { userId: user.id } }
       );
-
-      if (!verifyRes.ok) {
-        const errText = await verifyRes.text().catch(() => "");
-        throw new Error(`Server verification failed: ${verifyRes.status} ${errText}`);
-      }
+      if (verifyErr) throw new Error(`Verification failed: ${verifyErr.message}`);
+      if (!verifyData?.ok) throw new Error("Verification failed. Please try again.");
 
       log("SUCCESS → reset to Community");
+      invalidateAuthCache(); // force Post.js to re-fetch isVerified on next render
       navigation.reset({ index: 0, routes: [{ name: "Community" }] });
     } catch (e) {
       console.log("[FaceVerify] FULL ERROR:", e);
-      Alert.alert(
-        "Error",
-        `Something went wrong while verifying.\n${e?.message || e}`
-      );
+      if (e?.message === "PROFILE_NO_FACE") {
+        showModal(
+          "Profile photo issue",
+          "Your profile picture doesn't appear to contain a detectable face. Please update your profile photo with a clear picture of your face and try again."
+        );
+      } else {
+        showModal("Error", "Something went wrong while verifying. Please try again.");
+      }
     } finally {
       setVerifying(false);
     }
@@ -322,6 +323,26 @@ export default function FaceRecognitionScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={!!alertModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAlertModal(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{alertModal?.title}</Text>
+            <Text style={styles.modalMessage}>{alertModal?.message}</Text>
+            <TouchableOpacity
+              style={styles.modalBtn}
+              onPress={() => setAlertModal(null)}
+            >
+              <Text style={styles.modalBtnText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -348,4 +369,27 @@ const styles = StyleSheet.create({
   primaryText: { fontFamily: "PoppinsBold", fontSize: 15, color: "#FFFFFF" },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   permissionText: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", color: "#444444", marginBottom: 12 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalCard: {
+    width: "80%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    padding: 24,
+    alignItems: "center",
+    elevation: 4,
+  },
+  modalTitle: { fontFamily: "PoppinsBold", fontSize: 16, color: "#111111", marginBottom: 8 },
+  modalMessage: { fontFamily: "Poppins", fontSize: 14, color: "#444444", textAlign: "center", lineHeight: 20, marginBottom: 20 },
+  modalBtn: {
+    backgroundColor: "#4BA8FF",
+    borderRadius: 999,
+    paddingHorizontal: 32,
+    paddingVertical: 10,
+  },
+  modalBtnText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#FFFFFF" },
 });

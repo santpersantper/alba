@@ -112,8 +112,12 @@ module.exports = function withScreenTime(config) {
       for (const ref of mainConfigList?.buildConfigurations || []) {
         const uuid = typeof ref === "object" ? ref.value : ref;
         const cfg = proj.hash.project.objects["XCBuildConfiguration"]?.[uuid];
-        if (cfg?.buildSettings && !cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"]) {
-          cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"] = `"${mainBridgingHeader}"`;
+        if (cfg?.buildSettings) {
+          if (!cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"]) {
+            cfg.buildSettings["SWIFT_OBJC_BRIDGING_HEADER"] = `"${mainBridgingHeader}"`;
+          }
+          // FamilyControls requires iOS 16.0+. Expo SDK 54 defaults to 15.1.
+          cfg.buildSettings["IPHONEOS_DEPLOYMENT_TARGET"] = "16.0";
         }
       }
     }
@@ -126,15 +130,29 @@ module.exports = function withScreenTime(config) {
         const target = proj.addTarget(
           ext.name,
           "app_extension",
-          ext.name, // subfolder — addTarget creates a PBXGroup with this path
+          ext.name, // subfolder (used for build settings like INFOPLIST_FILE)
           ext.bundleId
         );
 
         if (target) {
-          const groupKey = proj.findPBXGroupKey({ name: ext.name });
-          if (groupKey) {
-            addFileToTarget(proj, ext.sourceFile, groupKey, target.uuid);
-          }
+          // addTarget() creates the extension target with buildPhases: [] —
+          // completely empty. Without Sources/Frameworks phases, addFileToTarget()
+          // can't add the Swift file to any compilation phase, Xcode skips
+          // compilation, and the .appex bundle has no binary → iOS rejects install.
+          // Create them explicitly here before addFileToTarget() runs.
+          proj.addBuildPhase([], "PBXSourcesBuildPhase", "Sources", target.uuid);
+          proj.addBuildPhase([], "PBXFrameworksBuildPhase", "Frameworks", target.uuid);
+          proj.addBuildPhase([], "PBXResourcesBuildPhase", "Resources", target.uuid);
+
+          // addTarget() does NOT create a PBXGroup for the extension's sources.
+          // Without an explicit group, the PBXFileReference has sourceTree="<group>"
+          // but no parent group to anchor its path. Xcode then resolves it relative
+          // to $(SRCROOT) directly → "Build input file cannot be found:
+          // .../ios/AlbaDeviceActivityReport.swift" instead of
+          // .../ios/AlbaDeviceActivityReport/AlbaDeviceActivityReport.swift.
+          // Create the group explicitly so the path resolves correctly.
+          const extGroupKey = createExtensionGroup(proj, ext.name);
+          addFileToTarget(proj, ext.sourceFile, extGroupKey, target.uuid);
 
           // Read the provisioning profile UUID so we can use Manual signing.
           // EAS only installs the main app's profile; extension profiles are
@@ -180,14 +198,54 @@ module.exports = function withScreenTime(config) {
           applyBuildSettings(proj, target, extSettings);
 
           newExtTargets.push(target);
+
+          // Add a Run Script build phase that syncs CFBundleVersion from the
+          // main app Info.plist at Xcode build time. EAS (appVersionSource:
+          // remote) writes the build number to ios/Alba/Info.plist AFTER pod
+          // install, so a post_install hook reads the wrong value. By the time
+          // Xcode starts building, EAS has already written the real number.
+          addVersionSyncScriptPhase(proj, target);
         }
       }
     }
 
+    // ── Remove auto-created "Copy Files" phases ───────────────────────────────
+    // addTarget('app_extension') automatically creates a "Copy Files"
+    // PBXCopyFilesBuildPhase (dstSubfolderSpec=13) in the main app target for
+    // EACH extension. embedExtensionsInMainTarget() below creates ONE "Embed
+    // App Extensions" phase covering all extensions. Having both causes Xcode
+    // 16's build system to error: "Unexpected duplicate tasks" (copy + validate
+    // running twice per .appex). Delete addTarget()'s auto-created phases here
+    // so only our single "Embed App Extensions" phase remains.
+    if (newExtTargets.length > 0) {
+      const copyPhasesSection =
+        proj.hash.project.objects["PBXCopyFilesBuildPhase"] || {};
+      const mainNativeTarget =
+        proj.hash.project.objects["PBXNativeTarget"]?.[mainTarget.uuid];
+      if (mainNativeTarget) {
+        mainNativeTarget.buildPhases = (mainNativeTarget.buildPhases || []).filter(
+          (phaseRef) => {
+            const phaseUuid =
+              typeof phaseRef === "object" ? phaseRef.value : phaseRef;
+            if (copyPhasesSection[`${phaseUuid}_comment`] === "Copy Files") {
+              delete copyPhasesSection[phaseUuid];
+              delete copyPhasesSection[`${phaseUuid}_comment`];
+              return false; // remove from buildPhases
+            }
+            return true;
+          }
+        );
+      }
+    }
+
     // ── Embed extensions in main target ───────────────────────────────────────
-    // CocoaPods detects host-extension relationships via PBXCopyFilesBuildPhase
-    // (dstSubfolderSpec=13, the PlugIns folder). Without this, pod install fails
-    // with "Unable to find host target(s)".
+    // CocoaPods detects host-extension relationships by scanning for a
+    // PBXCopyFilesBuildPhase (dstSubfolderSpec=13) in the main app target whose
+    // files reference the extension's productReference. This function creates
+    // the "Embed App Extensions" phase satisfying that scan.
+    // CRITICAL: pass 'app_extension' (string) NOT an options object to
+    // addBuildPhase() — an object silently fails dstSubfolderSpec lookup,
+    // leaving it undefined which Xcode maps to PrivateHeaders/ (wrong).
     if (mainTarget && newExtTargets.length > 0) {
       embedExtensionsInMainTarget(proj, mainTarget.uuid, newExtTargets);
     }
@@ -212,6 +270,18 @@ module.exports = function withScreenTime(config) {
       /^platform :ios,\s*['"][^'"]+['"]/m,
       "platform :ios, '16.0'"
     );
+
+    // Add extension target stubs so CocoaPods knows about them.
+    // Without these, CocoaPods creates a default "Copy Headers" build phase
+    // for the unknown targets, which places the .appex bundles in PrivateHeaders/
+    // instead of PlugIns/ and causes iOS to reject the installation.
+    // `inherit! :none` prevents the extension from inheriting any pod dependencies.
+    for (const ext of EXTENSIONS) {
+      const marker = `target '${ext.name}'`;
+      if (!podfile.includes(marker)) {
+        podfile = podfile.trimEnd() + `\n\ntarget '${ext.name}' do\n  inherit! :none\nend\n`;
+      }
+    }
 
     // Fix for Xcode 14+: resource bundle targets are signed by default which
     // breaks builds. Multiple plugins (reanimated, stripe, …) each append
@@ -326,6 +396,16 @@ module.exports = function withScreenTime(config) {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>
@@ -343,6 +423,16 @@ module.exports = function withScreenTime(config) {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>
@@ -441,6 +531,40 @@ module.exports = function withScreenTime(config) {
         process.stderr.write(
           `[withScreenTime] Installed profile ${ext.name} (${uuid})\n`
         );
+      }
+
+      // ── Patch IPHONEOS_DEPLOYMENT_TARGET in pbxproj ──────────────────────
+      // withXcodeProject sets this value in-memory, but another mod (Expo's
+      // own finalizer or a subsequent plugin) may reset it. withDangerousMod
+      // runs AFTER all base mods have written their files to disk, so patching
+      // the serialized .pbxproj here is a guaranteed failsafe.
+      // FamilyControls / DeviceActivity require iOS 16.0+.
+      const pbxprojPath = path.join(
+        iosRoot, "Alba.xcodeproj", "project.pbxproj"
+      );
+      if (fs.existsSync(pbxprojPath)) {
+        let pbxproj = fs.readFileSync(pbxprojPath, "utf8");
+        let patchCount = 0;
+        const patchedPbxproj = pbxproj.replace(
+          /IPHONEOS_DEPLOYMENT_TARGET = (\d+\.\d+);/g,
+          (match, ver) => {
+            if (parseFloat(ver) < 16.0) {
+              patchCount++;
+              return "IPHONEOS_DEPLOYMENT_TARGET = 16.0;";
+            }
+            return match;
+          }
+        );
+        if (patchCount > 0) {
+          fs.writeFileSync(pbxprojPath, patchedPbxproj);
+          process.stderr.write(
+            `[withScreenTime] Patched ${patchCount} IPHONEOS_DEPLOYMENT_TARGET → 16.0 in project.pbxproj\n`
+          );
+        } else {
+          process.stderr.write(
+            "[withScreenTime] project.pbxproj: all IPHONEOS_DEPLOYMENT_TARGET already >= 16.0\n"
+          );
+        }
       }
 
       return config;
@@ -592,16 +716,22 @@ function applyBuildSettings(proj, target, settings) {
 }
 
 /**
- * Adds a "Embed App Extensions" PBXCopyFilesBuildPhase to the main target
- * and registers each extension as a PBXTargetDependency. This is required so
- * CocoaPods can detect the host-extension relationship and so Xcode embeds
- * the .appex bundles in the final .ipa.
+ * Adds an "Embed App Extensions" PBXCopyFilesBuildPhase to the main target
+ * and registers each extension as a PBXTargetDependency. CocoaPods detects
+ * the host-extension relationship by scanning for a PBXCopyFilesBuildPhase
+ * with dstSubfolderSpec=13 in the main app target whose files reference the
+ * extension's productReference. Without this function, pod install fails with
+ * "Unable to find host target(s)".
  *
- * Uses proj.addBuildPhase() instead of manual object construction.
- * Manual construction of PBXCopyFilesBuildPhase produces serialization formats
- * (e.g. dstPath with embedded quote chars) that some xcode npm versions write
- * as `KEY = ;` — an empty value that causes the pbxproj parser to throw
- * "Expected '(' but ';' found", breaking withIosEntitlementsBaseMod.
+ * CRITICAL: the 5th argument to addBuildPhase() must be the string
+ * 'app_extension' (NOT an options object). pbxCopyFilesBuildPhaseObj() uses
+ * it as a key into DESTINATION_BY_TARGETTYPE; an object silently fails and
+ * leaves dstSubfolderSpec=undefined, which Xcode maps to PrivateHeaders/.
+ * Passing 'app_extension' correctly sets dstSubfolderSpec=13 (PlugIns/).
+ *
+ * addTarget() already creates a "Copy Files" phase (dstSubfolderSpec=13) for
+ * the same purpose, so the net result is two phases both copying to PlugIns/.
+ * The duplicate is harmless — the second copy overwrites the first in place.
  */
 function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   const objects = proj.hash.project.objects;
@@ -609,33 +739,32 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   const mainTarget = nativeTargets[mainTargetUuid];
   if (!mainTarget) return;
 
-  // Let the xcode library create the phase so it handles serialization correctly.
-  // addBuildPhase also automatically pushes the phase into mainTarget.buildPhases.
+  // Ensure sections exist before addTargetDependency() runs (it checks and
+  // silently skips if PBXContainerItemProxy / PBXTargetDependency are missing).
+  objects["PBXBuildFile"] = objects["PBXBuildFile"] || {};
+  objects["PBXTargetDependency"] = objects["PBXTargetDependency"] || {};
+  objects["PBXContainerItemProxy"] = objects["PBXContainerItemProxy"] || {};
+
+  // Pass 'app_extension' (string) so pbxCopyFilesBuildPhaseObj maps it to
+  // dstSubfolderSpec=13 (PlugIns/). Passing an object here causes undefined.
   const phaseResult = proj.addBuildPhase(
     [],
     "PBXCopyFilesBuildPhase",
     "Embed App Extensions",
     mainTargetUuid,
-    { dstSubfolderSpec: 13, dstPath: "" }
+    "app_extension"
   );
   const copyPhaseUuid = phaseResult?.uuid;
   const copyPhaseFiles =
     objects["PBXCopyFilesBuildPhase"]?.[copyPhaseUuid]?.files;
 
-  objects["PBXBuildFile"] = objects["PBXBuildFile"] || {};
-  objects["PBXTargetDependency"] = objects["PBXTargetDependency"] || {};
-  objects["PBXContainerItemProxy"] = objects["PBXContainerItemProxy"] || {};
-
   for (const extTarget of extTargets) {
     const extNative = extTarget.pbxNativeTarget;
     const extUuid = extTarget.uuid;
-    // xcode npm may store names with surrounding pbxproj quote chars — strip them.
     const extName = stripPbxString(extNative.name);
     const productRef = extNative.productReference;
 
     if (productRef && copyPhaseUuid && copyPhaseFiles) {
-      // Build file for the .appex product (no ATTRIBUTES — avoids duplicate
-      // code-sign tasks in Xcode 26's stricter build system validation)
       const bfUuid = proj.generateUuid();
       objects["PBXBuildFile"][bfUuid] = {
         isa: "PBXBuildFile",
@@ -650,7 +779,7 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
       });
     }
 
-    // Target dependency so Xcode builds the extension with the main app
+    // Target dependency so Xcode builds the extension before the main app.
     const proxyUuid = proj.generateUuid();
     const depUuid = proj.generateUuid();
     objects["PBXContainerItemProxy"][proxyUuid] = {
@@ -671,7 +800,7 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
     mainTarget.dependencies = mainTarget.dependencies || [];
     mainTarget.dependencies.push({ value: depUuid, comment: "PBXTargetDependency" });
   }
-  // Note: addBuildPhase already added the phase UUID to mainTarget.buildPhases.
+  // addBuildPhase already pushed the phase UUID into mainTarget.buildPhases.
 }
 
 /** Strip surrounding pbxproj quote chars that xcode npm stores on some string values. */
@@ -680,6 +809,147 @@ function stripPbxString(s) {
   return str.startsWith('"') && str.endsWith('"') && str.length >= 2
     ? str.slice(1, -1)
     : str;
+}
+
+/**
+ * Creates a PBXGroup for an extension target and adds it to the root project
+ * group (the Xcode navigator's top level). Returns the new group's UUID.
+ *
+ * WHY this is needed:
+ *   addTarget() creates a PBXNativeTarget but NO PBXGroup for the extension's
+ *   source files. A PBXFileReference with sourceTree="<group>" resolves its
+ *   path relative to its parent group. Without a parent group, Xcode falls back
+ *   to resolving relative to $(SRCROOT) — so "AlbaDeviceActivityReport.swift"
+ *   maps to ios/AlbaDeviceActivityReport.swift (wrong) instead of
+ *   ios/AlbaDeviceActivityReport/AlbaDeviceActivityReport.swift (correct).
+ *
+ * The group is given both `name` and `path` equal to extName so that:
+ *   - findPBXGroupKey({ name }) and findPBXGroupKey({ path }) both work
+ *   - Files inside the group resolve to $(SRCROOT)/<extName>/<file>
+ */
+function createExtensionGroup(proj, extName) {
+  const objects = proj.hash.project.objects;
+
+  // Reuse if already present (idempotency for non-clean builds).
+  const existing =
+    proj.findPBXGroupKey({ name: extName }) ||
+    proj.findPBXGroupKey({ path: extName });
+  if (existing) return existing;
+
+  const groupUuid = proj.generateUuid();
+  objects["PBXGroup"] = objects["PBXGroup"] || {};
+  objects["PBXGroup"][groupUuid] = {
+    isa: "PBXGroup",
+    children: [],
+    name: `"${extName}"`,
+    path: `"${extName}"`,
+    sourceTree: '"<group>"',
+  };
+  objects["PBXGroup"][`${groupUuid}_comment`] = extName;
+
+  // Add to the root project group so the folder appears in the Xcode navigator.
+  // proj.hash.project.rootObject is the UUID of the PBXProject entry.
+  const rootProjectUuid = proj.hash.project.rootObject;
+  const rootGroupUuid =
+    objects["PBXProject"]?.[rootProjectUuid]?.mainGroup;
+  if (rootGroupUuid) {
+    const rootGroup = objects["PBXGroup"][rootGroupUuid];
+    if (rootGroup && Array.isArray(rootGroup.children)) {
+      rootGroup.children.push({ value: groupUuid, comment: extName });
+    }
+  }
+
+  return groupUuid;
+}
+
+/**
+ * Adds a PBXShellScriptBuildPhase to the extension target that copies
+ * CFBundleVersion and CFBundleShortVersionString from the main app's
+ * Info.plist into the extension's source Info.plist at Xcode build time.
+ *
+ * WHY this is needed:
+ *   EAS Build (appVersionSource: "remote") writes the build number directly
+ *   to ios/Alba/Info.plist AFTER pod install completes. So any post_install
+ *   hook that tries to read the version reads the prebuild template value
+ *   ($(CURRENT_PROJECT_VERSION)) and not the real build number. By the time
+ *   Xcode starts building, EAS has written the real value, so a Run Script
+ *   phase can read it reliably.
+ *
+ *   The script declares $(SRCROOT)/Alba/Info.plist as an INPUT file and
+ *   $(SRCROOT)/$(INFOPLIST_FILE) as an OUTPUT file, letting Xcode's build
+ *   system schedule it before ProcessInfoPlistFile processes the extension plist.
+ *   The phase is also inserted at position 0 in buildPhases as a belt-and-
+ *   suspenders measure for Xcode's implicit task scheduling.
+ */
+function addVersionSyncScriptPhase(proj, extTarget) {
+  const scriptLines = [
+    "#!/bin/sh",
+    "# Sync CFBundleVersion from the main app Info.plist at Xcode build time.",
+    "# EAS (appVersionSource: remote) writes the build number AFTER pod install,",
+    "# so post_install hooks see the wrong value. This script runs during the",
+    "# Xcode build when EAS has already written the correct number.",
+    'MAIN_PLIST="${SRCROOT}/Alba/Info.plist"',
+    'EXT_PLIST="${SRCROOT}/${INFOPLIST_FILE}"',
+    'if [ ! -f "$MAIN_PLIST" ] || [ ! -f "$EXT_PLIST" ]; then exit 0; fi',
+    // Single quotes inside the PlistBuddy -c arg; double-quoted $MAIN_PLIST.
+    // The surrounding double quotes in the JS string will be escaped by
+    // pbxShellScriptBuildPhaseObj before storing in the pbxproj.
+    "BUILD_VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' \"$MAIN_PLIST\" 2>/dev/null | tr -d '[:space:]')",
+    "MKT_VER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' \"$MAIN_PLIST\" 2>/dev/null | tr -d '[:space:]')",
+    "# Only write when BUILD_VER is a pure integer (EAS has set a real build number,",
+    "# not a variable reference like $(CURRENT_PROJECT_VERSION)).",
+    "if echo \"$BUILD_VER\" | grep -qE '^[0-9]+$'; then",
+    "  /usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $BUILD_VER\" \"$EXT_PLIST\"",
+    "  /usr/libexec/PlistBuddy -c \"Set :CFBundleShortVersionString $MKT_VER\" \"$EXT_PLIST\"",
+    "fi",
+  ];
+  const script = scriptLines.join("\n");
+  const phaseName = "Sync CFBundleVersion from parent app";
+
+  // addBuildPhase with PBXShellScriptBuildPhase passes optionsOrFolderType
+  // directly to pbxShellScriptBuildPhaseObj(obj, options, phaseName).
+  // That function wraps shellScript in quotes and escapes internal double quotes,
+  // stores inputPaths/outputPaths as plain JS arrays.
+  const phaseResult = proj.addBuildPhase(
+    [],
+    "PBXShellScriptBuildPhase",
+    phaseName,
+    extTarget.uuid,
+    {
+      inputPaths: ['"$(SRCROOT)/Alba/Info.plist"'],
+      outputPaths: ['"$(SRCROOT)/$(INFOPLIST_FILE)"'],
+      shellPath: "/bin/sh",
+      shellScript: script,
+    }
+  );
+
+  if (!phaseResult?.uuid) return;
+
+  const objects = proj.hash.project.objects;
+
+  // Add inputFileListPaths / outputFileListPaths to silence Xcode warnings.
+  const scriptPhase = objects["PBXShellScriptBuildPhase"]?.[phaseResult.uuid];
+  if (scriptPhase) {
+    scriptPhase.inputFileListPaths = [];
+    scriptPhase.outputFileListPaths = [];
+    scriptPhase.showEnvVarsInLog = 0;
+  }
+
+  // Move the script phase to the front of buildPhases so it runs before
+  // ProcessInfoPlistFile even when the build system's file-dependency graph
+  // doesn't explicitly schedule it (implicit tasks may not honor user script
+  // output files as dependencies).
+  const nativeTarget = objects["PBXNativeTarget"]?.[extTarget.uuid];
+  if (nativeTarget?.buildPhases?.length > 1) {
+    const idx = nativeTarget.buildPhases.findIndex((ref) => {
+      const uuid = typeof ref === "object" ? ref.value : ref;
+      return uuid === phaseResult.uuid;
+    });
+    if (idx > 0) {
+      const [phaseRef] = nativeTarget.buildPhases.splice(idx, 1);
+      nativeTarget.buildPhases.unshift(phaseRef);
+    }
+  }
 }
 
 /**
