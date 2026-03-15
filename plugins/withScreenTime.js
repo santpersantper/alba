@@ -452,7 +452,7 @@ module.exports = function withScreenTime(config) {
     <key>NSExtension</key>
     <dict>
         <key>NSExtensionPointIdentifier</key>
-        <string>com.apple.deviceactivity.report</string>
+        <string>com.apple.deviceactivity.report-extension</string>
         <key>NSExtensionPrincipalClass</key>
         <string>$(PRODUCT_MODULE_NAME).AlbaDeviceActivityReportExtension</string>
     </dict>
