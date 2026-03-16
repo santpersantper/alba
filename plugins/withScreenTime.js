@@ -56,6 +56,9 @@ const EXTENSIONS = [
       "AlbaDeviceActivityReport/AlbaDeviceActivityReport.entitlements",
     infoPlist: "AlbaDeviceActivityReport/Info.plist",
     profilePath: "certs/AlbaDeviceActivityReport2.mobileprovision",
+    // Uses EXAppExtensionAttributes (ExtensionKit) instead of NSExtension.
+    // Must be embedded in Extensions/ not PlugIns/.
+    isEXExtension: true,
   },
 ];
 
@@ -199,7 +202,7 @@ module.exports = function withScreenTime(config) {
           if (inheritedTeam) extSettings.DEVELOPMENT_TEAM = inheritedTeam;
           applyBuildSettings(proj, target, extSettings);
 
-          newExtTargets.push(target);
+          newExtTargets.push({ ...target, ext });
 
           // Add a Run Script build phase that syncs CFBundleVersion from the
           // main app Info.plist at Xcode build time. EAS (appVersionSource:
@@ -761,8 +764,12 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   objects["PBXTargetDependency"] = objects["PBXTargetDependency"] || {};
   objects["PBXContainerItemProxy"] = objects["PBXContainerItemProxy"] || {};
 
-  // Pass 'app_extension' (string) so pbxCopyFilesBuildPhaseObj maps it to
-  // dstSubfolderSpec=13 (PlugIns/). Passing an object here causes undefined.
+  // NSExtensions → PlugIns/ (dstSubfolderSpec=13, via 'app_extension')
+  // EXExtensions → Extensions/ (dstSubfolderSpec=1, dstPath="Extensions")
+  const nsExtTargets = extTargets.filter((t) => !t.ext?.isEXExtension);
+  const exExtTargets = extTargets.filter((t) => t.ext?.isEXExtension);
+
+  // ── PlugIns/ phase for NSExtensions ───────────────────────────────────────
   const phaseResult = proj.addBuildPhase(
     [],
     "PBXCopyFilesBuildPhase",
@@ -774,27 +781,54 @@ function embedExtensionsInMainTarget(proj, mainTargetUuid, extTargets) {
   const copyPhaseFiles =
     objects["PBXCopyFilesBuildPhase"]?.[copyPhaseUuid]?.files;
 
+  // ── Extensions/ phase for EXExtensions ────────────────────────────────────
+  let exPhaseUuid = null;
+  let exPhaseFiles = null;
+  if (exExtTargets.length > 0) {
+    exPhaseUuid = proj.generateUuid();
+    exPhaseFiles = [];
+    objects["PBXCopyFilesBuildPhase"][exPhaseUuid] = {
+      isa: "PBXCopyFilesBuildPhase",
+      buildActionMask: "2147483647",
+      dstPath: '"Extensions"',
+      dstSubfolderSpec: "1",
+      files: exPhaseFiles,
+      name: '"Embed ExtensionKit Extensions"',
+      runOnlyForDeploymentPostprocessing: "0",
+    };
+    objects["PBXCopyFilesBuildPhase"][`${exPhaseUuid}_comment`] =
+      "Embed ExtensionKit Extensions";
+    mainTarget.buildPhases.push({
+      value: exPhaseUuid,
+      comment: "Embed ExtensionKit Extensions",
+    });
+  }
+
   for (const extTarget of extTargets) {
     const extNative = extTarget.pbxNativeTarget;
     const extUuid = extTarget.uuid;
     const extName = stripPbxString(extNative.name);
     const productRef = extNative.productReference;
+    const isEX = extTarget.ext?.isEXExtension;
+    const phaseName = isEX
+      ? "Embed ExtensionKit Extensions"
+      : "Embed App Extensions";
+    const targetPhaseUuid = isEX ? exPhaseUuid : copyPhaseUuid;
+    const targetPhaseFiles = isEX ? exPhaseFiles : copyPhaseFiles;
 
-    if (productRef && copyPhaseUuid && copyPhaseFiles) {
+    if (productRef && targetPhaseUuid && targetPhaseFiles) {
       const bfUuid = proj.generateUuid();
       objects["PBXBuildFile"][bfUuid] = {
         isa: "PBXBuildFile",
         fileRef: productRef,
         fileRef_comment: `${extName}.appex`,
-        // Required for App Store archive validation: tells Xcode to strip
-        // public headers when copying the .appex into PlugIns/.
         settings: { ATTRIBUTES: ["RemoveHeadersOnCopy"] },
       };
       objects["PBXBuildFile"][`${bfUuid}_comment`] =
-        `${extName}.appex in Embed App Extensions`;
-      copyPhaseFiles.push({
+        `${extName}.appex in ${phaseName}`;
+      targetPhaseFiles.push({
         value: bfUuid,
-        comment: `${extName}.appex in Embed App Extensions`,
+        comment: `${extName}.appex in ${phaseName}`,
       });
     }
 
