@@ -1,0 +1,41 @@
+name: Upload to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Direct download URL for the IPA (copy from EAS Build dashboard)"
+        required: true
+
+jobs:
+  upload:
+    runs-on: macos-latest
+
+    steps:
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Download IPA
+        run: |
+          curl -L "${{ github.event.inputs.ipa_url }}" -o app.ipa
+          echo "Downloaded $(du -h app.ipa | cut -f1) IPA"
+
+      - name: Set up ASC API key
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$ASC_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Upload to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          xcrun altool --upload-app \
+            -f app.ipa \
+            -t ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --show-progress
