@@ -22,7 +22,7 @@ import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../lib/uploadImage";
 import { markChatReadInCache } from "../lib/chatListCache";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { Image as ExpoImage } from "expo-image";
 
@@ -164,6 +164,7 @@ function PendingVideoThumb({ uri, style }) {
 /* ---------------- Main screen ---------------- */
 export default function GroupChatScreen({ navigation, route }) {
   const { theme, isDark } = useAlbaTheme();
+  const insets = useSafeAreaInsets();
 
   const {
     groupName: routeGroupName = "Group",
@@ -440,7 +441,8 @@ export default function GroupChatScreen({ navigation, route }) {
       // So: append a simple mapped item, then background refresh cache.
       const mapped = {
         id: row.id,
-        isMe: !!row.sender_is_me,
+        // sender_is_me is stored as true from the sender's POV — correct it for the receiver
+        isMe: row.sender_username === myUsername,
         senderUsername: row.sender_username || null,
         minuteKey: `${(row.sent_date || "").trim()}_${(row.sent_time || "").slice(0, 5)}`,
       };
@@ -472,7 +474,7 @@ export default function GroupChatScreen({ navigation, route }) {
     });
 
     return un;
-  }, [chatId]);
+  }, [chatId, myUsername]);
 
   // Keep isAdminRef in sync so the subscription callback avoids stale closure
   useEffect(() => { isAdminRef.current = isAdmin; }, [isAdmin]);
@@ -922,7 +924,7 @@ export default function GroupChatScreen({ navigation, route }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
-      <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]} edges={["top", "left", "right"]}>
         <Header
           title={groupName}
           subtitle={membersLine}
@@ -964,6 +966,7 @@ export default function GroupChatScreen({ navigation, route }) {
           sendingMedia={sendingMedia}
           theme={theme}
           isDark={isDark}
+          bottomInset={insets.bottom}
         />
 
         <Modal
@@ -1230,7 +1233,7 @@ function Header({
 }
 
 /* ------------------------- Composer ------------------------ */
-function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery, onPickVideo, onPickCamera, pendingImage, onClearPending, sendingMedia, theme, isDark }) {
+function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery, onPickVideo, onPickCamera, pendingImage, onClearPending, sendingMedia, theme, isDark, bottomInset = 0 }) {
   const iconColor = isDark ? "#E5E7EB" : "#444";
   return (
     <View
@@ -1239,6 +1242,7 @@ function Composer({ value, onChangeText, onSend, onAttachLocation, onPickGallery
         {
           borderTopColor: isDark ? "#1F2933" : "#EFF2F5",
           backgroundColor: theme.gray,
+          paddingBottom: bottomInset > 0 ? bottomInset : 8,
         },
       ]}
     >

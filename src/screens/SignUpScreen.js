@@ -107,10 +107,10 @@ export default function SignUpScreen({ navigation }) {
         const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
         if (!token) return;
         const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?types=place&access_token=${token}`
+          `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${longitude}&latitude=${latitude}&types=place&access_token=${token}`
         );
         const json = await res.json();
-        detectedCityRef.current = json.features?.[0]?.text || null;
+        detectedCityRef.current = json.features?.[0]?.properties?.name || json.features?.[0]?.properties?.place_formatted || null;
       } catch {
         // Silent — city will be null if detection fails
       }

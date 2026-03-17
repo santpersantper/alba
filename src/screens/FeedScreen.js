@@ -13,6 +13,7 @@ import {
   TextInput,
   Animated,
   AppState,
+  RefreshControl,
 } from "react-native";
 import {
   useNavigation,
@@ -37,6 +38,7 @@ import {
 } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { useAlbaTheme } from "../theme/ThemeContext";
 
 import {
   readCachedFirstFeedVideoOverride,
@@ -108,9 +110,22 @@ function FeedItem({
   const [showFullCaption, setShowFullCaption] = useState(false);
   const [isLongCaption, setIsLongCaption] = useState(false);
   const [hasMeasuredCaption, setHasMeasuredCaption] = useState(false);
+  const [videoKey, setVideoKey] = useState(0);
+  const prevFocused = React.useRef(isScreenFocused);
 
   React.useEffect(() => {
     if (!player) return;
+
+    const justRegainedFocus = !prevFocused.current && isScreenFocused;
+    prevFocused.current = isScreenFocused;
+
+    // On iOS the native VideoView surface detaches during navigation.
+    // Force a remount (via key) when the screen comes back into focus so
+    // the surface reconnects to the player and the black frame goes away.
+    if (justRegainedFocus && isActive) {
+      setVideoKey((k) => k + 1);
+      return; // the remount triggers a fresh play via the next effect run
+    }
 
     try {
       if (isScreenFocused && isActive && !pausedByHold) {
@@ -189,6 +204,7 @@ function FeedItem({
       {...pressableHandlers}
     >
       <VideoView
+        key={videoKey}
         pointerEvents="none"
         style={StyleSheet.absoluteFill}
         contentFit="cover"
@@ -381,6 +397,7 @@ export default function FeedScreen() {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const { t } = useAlbaLanguage();
+  const { isDark } = useAlbaTheme();
 
   const listRef = useRef(null);
 
@@ -395,6 +412,7 @@ export default function FeedScreen() {
 
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false); // ✅ start silent
+  const [refreshing, setRefreshing] = useState(false);
 
   const [blockedUserIds, setBlockedUserIds] = useState([]);
   const [meId, setMeId] = useState(null);
@@ -791,6 +809,103 @@ export default function FeedScreen() {
     }, [navigation])
   );
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      setCurrentIndex(0);
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
+      // Clear existing data so loadAll fetches fresh
+      dataRef.current = [];
+      setData([]);
+      // Re-trigger load by faking a focus event: call loadAll logic inline
+      const {
+        data: { user },
+      } = await supabase.auth.getUser().catch(() => ({ data: {} }));
+
+      let blocked = [];
+      let myUsername = null;
+      let feedTags = [];
+      let feedEmbedding = null;
+      let feedRadiusKm = null;
+
+      if (user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("blocked_users, username, saved_feed_videos, feed_tags, feed_preference_embedding, feed_radius_km")
+          .eq("id", user.id)
+          .single();
+        if (profile) {
+          blocked = profile.blocked_users || [];
+          myUsername = profile.username || null;
+          feedTags = profile.feed_tags || [];
+          feedRadiusKm = profile.feed_radius_km || null;
+          if (profile.feed_preference_embedding) {
+            try {
+              feedEmbedding = typeof profile.feed_preference_embedding === "string"
+                ? JSON.parse(profile.feed_preference_embedding)
+                : profile.feed_preference_embedding;
+            } catch {}
+          }
+          if (Array.isArray(profile.saved_feed_videos)) {
+            setSavedIds(new Set(profile.saved_feed_videos.map(String)));
+          }
+        }
+      }
+
+      setBlockedUserIds(blocked);
+      setMeUsername(myUsername);
+      if (user) setMeId(user.id);
+
+      let rows = null;
+      const hasPersonalization = feedEmbedding || feedTags.length > 0 || feedRadiusKm;
+
+      if (hasPersonalization && user) {
+        const { data: rpcRows, error: rpcError } = await supabase.rpc("get_personalized_feed", {
+          uid: user.id,
+          query_embedding: feedEmbedding || null,
+          preferred_tags: feedTags.length > 0 ? feedTags : [],
+          user_lat: null,
+          user_lng: null,
+          radius_km: feedRadiusKm || null,
+          match_count: 30,
+        });
+        if (!rpcError && rpcRows?.length) {
+          rows = rpcRows;
+        }
+      }
+
+      if (!rows) {
+        const { data: tableRows } = await supabase
+          .from("feed_videos")
+          .select("id, user_id, username, caption, video_storage_path, created_at")
+          .order("created_at", { ascending: false })
+          .limit(30);
+        rows = tableRows;
+      }
+
+      const visibleRows = (rows || []).filter((row) => !blocked.includes(row.user_id));
+      const mapped = visibleRows
+        .map((row) => {
+          const videoUrl = resolveVideoUrl(row.video_storage_path);
+          if (!videoUrl) return null;
+          return {
+            id: String(row.id),
+            userId: row.user_id,
+            username: row.user_id || row.username || "user",
+            caption: row.caption || "",
+            videoUrl,
+            canDelete: !!user?.id && row.user_id === user.id,
+          };
+        })
+        .filter(Boolean);
+
+      setData(mapped);
+      if (mapped.length) cacheFirstFeedVideoFromList(mapped[0]).catch(() => {});
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
   const handleDeleteVideo = useCallback(
     async (id) => {
       if (!id) return;
@@ -1054,6 +1169,14 @@ export default function FeedScreen() {
             keyExtractor={(item) => item.id}
             pagingEnabled
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor="#2F91FF"
+                colors={["#2F91FF"]}
+              />
+            }
             onLayout={(e) => {
               const h = e.nativeEvent.layout.height;
               if (h && h !== viewHeight) setViewHeight(h);
@@ -1108,24 +1231,28 @@ export default function FeedScreen() {
         onRequestClose={handleCancelReport}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>
+          <View style={[styles.reportCard, { backgroundColor: isDark ? "#101218" : "#fff" }]}>
+            <Text style={[styles.reportTitle, { color: isDark ? "#fff" : "#111" }]}>
               {t("feed_report_title")}
             </Text>
             <TextInput
-              style={styles.reportInput}
+              style={[styles.reportInput, {
+                borderColor: isDark ? "#444" : "#ddd",
+                backgroundColor: isDark ? "#181b22" : "#f5f5f5",
+                color: isDark ? "#fff" : "#111",
+              }]}
               multiline
               value={reportText}
               onChangeText={setReportText}
               placeholder={t("feed_report_placeholder")}
-              placeholderTextColor="#999"
+              placeholderTextColor={isDark ? "#999" : "#aaa"}
             />
             <View style={styles.reportButtonsRow}>
               <TouchableOpacity
-                style={[styles.reportBtn, styles.reportCancelBtn]}
+                style={[styles.reportBtn, styles.reportCancelBtn, { borderColor: isDark ? "#888" : "#ccc" }]}
                 onPress={handleCancelReport}
               >
-                <Text style={styles.reportBtnText}>{t("cancel_button")}</Text>
+                <Text style={[styles.reportBtnText, { color: isDark ? "#fff" : "#333" }]}>{t("cancel_button")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.reportBtn, styles.reportSendBtn]}
@@ -1398,14 +1525,12 @@ const styles = StyleSheet.create({
 
   reportCard: {
     width: "85%",
-    backgroundColor: "#101218",
     borderRadius: 18,
     padding: 16,
   },
   reportTitle: {
     fontSize: 16,
     fontFamily: "PoppinsBold",
-    color: "#fff",
     marginBottom: 10,
   },
   reportInput: {

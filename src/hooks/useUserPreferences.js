@@ -21,6 +21,9 @@ const DEFAULT_PREFS = {
   notifDiffusion:     true,   // boolean — notify on diffusion messages
   notifFollowedPosts: true,   // boolean — notify on new posts from followed accounts
   // ── Screen Time (stored locally via AsyncStorage — usage data never sent to backend) ──
+  screenTimeNotifsEnabled: true,            // boolean — master toggle for local screen-time notifications
+  screenTimeWarningMinutes: 10,             // number — minutes before daily limit to send a warning notification
+  lastWeeklyReportDate: null,               // "YYYY-MM-DD" | null — last Monday a weekly-report notification was sent
   lastWeekTotalMinutes: 0,                  // number — previous week's social media total for week-over-week comparison
   lastWeekDailyTotals: {},                  // {Mon: number, …} — previous week's per-day breakdown (for "7 days ago" comparison)
   screenTimeGoalReductionPercent: 10,       // number — % reduction per week (5–50), default 10%

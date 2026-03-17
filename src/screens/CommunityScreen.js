@@ -786,6 +786,7 @@ export default function CommunityScreen() {
               labels={labels}
               colors={LABEL_COLORS}
               activeLabel={activeLabel}
+              loading={loading}
               onSelect={(name) => {
                 setActiveLabel((prev) => (prev === name ? null : name));
                 scrollToTop();

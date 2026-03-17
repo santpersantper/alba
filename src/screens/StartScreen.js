@@ -62,13 +62,16 @@ export default function StartScreen({ navigation }) {
   const [alertConfig, setAlertConfig] = useState(null);
   const showAlert = (title, message) => setAlertConfig({ title, message });
 
-  // Google OAuth via expo-auth-session → signInWithIdToken (no redirect URL needed)
-  // androidClientId is required here to satisfy expo-auth-session's invariant check on Android
-  // (it throws at mount if absent). promptAsync is never called on Android — the button routes
-  // to handleAndroidGoogleSignIn which uses Supabase OAuth instead.
+  // Google OAuth via expo-auth-session → signInWithIdToken
+  // NOTE: iosClientId is intentionally omitted. When set, expo-auth-session uses the native
+  // iOS Google client and the resulting ID token has the iOS client ID as its `aud` claim.
+  // Supabase validates `aud` against its configured web client ID → "Unacceptable audience"
+  // error. Omitting iosClientId forces the PKCE/browser flow on iOS so the token always
+  // carries the web client ID as audience, which matches Supabase's setting.
+  // androidClientId is still required to satisfy expo-auth-session's invariant on Android
+  // (promptAsync is never called on Android — Android routes to handleAndroidGoogleSignIn).
   const [_request, response, promptAsync] = Google.useAuthRequest({
     webClientId: GOOGLE_WEB_CLIENT_ID,
-    iosClientId: GOOGLE_IOS_CLIENT_ID,
     androidClientId: GOOGLE_ANDROID_CLIENT_ID,
   });
 

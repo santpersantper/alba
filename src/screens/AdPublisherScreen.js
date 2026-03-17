@@ -47,6 +47,7 @@ import {
   ActivityIndicator,
   Dimensions,
   Image,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
@@ -160,6 +161,7 @@ export default function AdPublisherScreen() {
   const [myUsername, setMyUsername] = useState(null);
   const [ads, setAds] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
 
   // Performance tab
@@ -266,6 +268,15 @@ export default function AdPublisherScreen() {
 
   useFocusEffect(useCallback(() => { loadAds(); }, [loadAds]));
   useEffect(() => { loadAds(); }, [loadAds]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadAds();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadAds]);
 
   /* ── load buyers & contacts ── */
   const loadBuyersContacts = useCallback(async (adId) => {
@@ -461,7 +472,13 @@ export default function AdPublisherScreen() {
 
   /* ════════ OVERVIEW ════════════════════════════════════════════ */
   const renderOverview = () => (
-    <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      contentContainerStyle={s.tabContent}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+      }
+    >
       <Text style={[s.sectionLabel, { color: theme.subtleText || "#8c97a8" }]}>{t("ad_all_campaigns")}</Text>
       <View style={s.statRow}>
         <StatCard icon="percent"        label={t("ad_stat_buy_rate")}      value={overallPurchaseRate}          color="#2BB673" theme={theme} />
@@ -525,7 +542,13 @@ export default function AdPublisherScreen() {
     if (ads.length === 0) return renderEmpty("bar-chart-2", t("ad_no_performance_title"), t("ad_no_performance_body"));
 
     return (
-      <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={s.tabContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+        }
+      >
         <Text style={[s.sectionLabel, { color: theme.subtleText || "#8c97a8" }]}>{t("ad_viewing_ad")}</Text>
         <TouchableOpacity
           style={[s.picker, { backgroundColor: theme.card, borderColor: theme.border }]}
@@ -620,7 +643,13 @@ export default function AdPublisherScreen() {
     if (ads.length === 0) return renderEmpty("image", t("ad_no_ads_title"), t("ad_no_ads_body"));
 
     return (
-      <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={s.tabContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+        }
+      >
         {ads.map((ad) => (
           <View key={ad.id} style={[s.adCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
             <View style={s.adCardTop}>
@@ -718,7 +747,13 @@ export default function AdPublisherScreen() {
     };
 
     return (
-      <ScrollView contentContainerStyle={s.tabContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={s.tabContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+        }
+      >
         {/* Ad picker */}
         <Text style={[s.sectionLabel, { color: theme.subtleText || "#8c97a8" }]}>VIEWING AD</Text>
         <TouchableOpacity

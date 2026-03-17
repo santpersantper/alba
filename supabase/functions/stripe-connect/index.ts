@@ -15,7 +15,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const APP_URL = "https://alba.app";
+const APP_URL = "https://albaappofficial.com";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -163,16 +163,24 @@ serve(async (req) => {
         );
       }
 
-      // Verify the caller authored at least one post in this group
-      const { data: postCheck } = await supabaseAdmin
-        .from("posts")
-        .select("id")
-        .eq("group_id", groupId)
-        .eq("author_id", user.id)
-        .limit(1)
+      // Verify the caller is an admin of this group via groups.group_admin
+      const { data: profRow } = await supabaseAdmin
+        .from("profiles")
+        .select("username")
+        .eq("id", user.id)
         .maybeSingle();
 
-      if (!postCheck) {
+      const callerUsername = profRow?.username;
+      const { data: adminCheck } = callerUsername
+        ? await supabaseAdmin
+            .from("groups")
+            .select("id")
+            .eq("id", groupId)
+            .contains("group_admin", [callerUsername])
+            .maybeSingle()
+        : { data: null };
+
+      if (!adminCheck) {
         return new Response(
           JSON.stringify({ error: "Only the group organiser can set up payouts." }),
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }

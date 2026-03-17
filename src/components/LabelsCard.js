@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
+  ActivityIndicator,
 } from "react-native";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
@@ -22,6 +23,7 @@ export default function LabelsCard({
   activeLabel,
   onSelect,
   onChangeLabels,
+  loading = false,
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
@@ -180,18 +182,24 @@ export default function LabelsCard({
               }
             }}
           >
-            <Text style={styles.tagLabel} numberOfLines={1}>
-              {shown}
-            </Text>
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                handleRemove(label);
-              }}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Text style={styles.tagLabel}> ×</Text>
-            </TouchableOpacity>
+            {isActive && loading ? (
+              <ActivityIndicator size="small" color="#fff" style={{ marginHorizontal: 4 }} />
+            ) : (
+              <>
+                <Text style={[styles.tagLabel, isActive && styles.tagLabelActive]} numberOfLines={1}>
+                  {shown}
+                </Text>
+                <TouchableOpacity
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    handleRemove(label);
+                  }}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Text style={styles.tagLabel}> ×</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </TouchableOpacity>
         );
       })}
@@ -214,7 +222,7 @@ export default function LabelsCard({
       ) : (
         <TouchableOpacity
           activeOpacity={0.85}
-          style={[styles.tagChip, { backgroundColor: theme.gray, borderWidth: isDark ? 1 : 0, borderColor: "#2F91FF" }]}
+          style={[styles.tagChip, { backgroundColor: isDark ? theme.gray : "rgba(47,145,255,0.12)", borderWidth: 1, borderColor: "#2F91FF" }]}
           onPress={() => setAdding(true)}
         >
           <Text style={styles.addText}>+</Text>
@@ -262,6 +270,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#FFFFFF",
     fontFamily: "Poppins",
+  },
+  tagLabelActive: {
+    fontFamily: "PoppinsBold",
   },
   seeAllText: {
     fontSize: 14,

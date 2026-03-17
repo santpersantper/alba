@@ -22,7 +22,7 @@ import { VideoView, useVideoPlayer } from "expo-video";
 import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../lib/uploadImage";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { Image as ExpoImage } from "expo-image";
@@ -242,25 +242,49 @@ function mapRowToItem(row) {
 }
 
 /* ---------------- fetch messages (no cache lib dependency) ---------------- */
-async function fetchSingleMessagesDirect(chatId, limit = 200) {
+// DM messages are stored with chat = recipient's UUID (one row per message).
+// We need to fetch both directions: messages I sent (chat = peerUUID) and
+// messages the peer sent to me (chat = myUserId, sender_username = peerUsername).
+async function fetchSingleMessagesDirect(chatId, limit = 200, myUserId = null, peerUsername = null, myUsername = null) {
   const { trackRequest } = require("../lib/requestTracker");
   const done = trackRequest(`SingleChat.fetchMessages chat=${chatId} limit=${limit}`);
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("messages")
       .select(
         "id, chat, is_group, sender_username, sender_is_me, content, media_reference, post_id, group_id, sent_date, sent_time, is_read"
       )
-      .eq("chat", chatId)
       .eq("is_group", false)
       .order("sent_date", { ascending: true })
       .order("sent_time", { ascending: true })
       .limit(limit);
 
+    // If we know myUserId and peerUsername, fetch both directions with OR
+    if (myUserId && peerUsername) {
+      query = query.or(
+        `chat.eq.${chatId},and(chat.eq.${myUserId},sender_username.eq.${peerUsername})`
+      );
+    } else {
+      query = query.eq("chat", chatId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
 
-    const items = (data || []).map(mapRowToItem).filter(Boolean);
-    return items;
+    // Sort by date+time after merging both directions
+    const rows = (data || []).sort((a, b) => {
+      const ka = `${a.sent_date || ""}T${a.sent_time || ""}`;
+      const kb = `${b.sent_date || ""}T${b.sent_time || ""}`;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+
+    return rows.map((row) => {
+      const item = mapRowToItem(row);
+      if (!item) return null;
+      // Correct isMe: sender_is_me is always true (set from sender's POV), use sender_username instead
+      if (myUsername) item.isMe = row.sender_username === myUsername;
+      return item;
+    }).filter(Boolean);
   } finally {
     done();
   }
@@ -286,10 +310,12 @@ export default function SingleChatScreen({ navigation, route }) {
 
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
+  const insets = useSafeAreaInsets();
 
   const [chatId, setChatId] = useState(
     isGroup ? route?.params?.chatId || route?.params?.groupId || route?.params?.chat || null : null
   );
+  const [myUserId, setMyUserId] = useState(null);
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -468,6 +494,7 @@ export default function SingleChatScreen({ navigation, route }) {
         Alert.alert("Login required", "Please sign in to view messages.");
         return;
       }
+      if (mounted) setMyUserId(uid);
 
       // 3) blocked users
       const blockedNow = await loadBlockedUsers(uid);
@@ -481,8 +508,8 @@ export default function SingleChatScreen({ navigation, route }) {
 
       // 4) fetch messages direct
       try {
-                const fresh = await fetchSingleMessagesDirect(chatId, 50);
- 
+        const fresh = await fetchSingleMessagesDirect(chatId, 50, uid, peerUsername, myUsername);
+
         if (!mounted) return;
 
         setItems(fresh);
@@ -504,10 +531,14 @@ export default function SingleChatScreen({ navigation, route }) {
     };
   }, [isGroup, chatId, peerUsername, getSessionUid, loadBlockedUsers]);
 
-  // realtime inserts
+  // realtime inserts — DM messages travel in two directions:
+  //   • Messages I send:    stored as { chat: peerUserId }  → subscribe on chatId (= peerUserId)
+  //   • Messages I receive: stored as { chat: myUserId }    → subscribe on myUserId, filter by peer
+  // Without the second subscription the recipient never sees new messages in real-time.
   useEffect(() => {
     if (!chatId) return () => {};
-    const un = subscribeChatInserts(chatId, async (row) => {
+
+    const handleRow = (row) => {
       const fp = `${row.sent_date || ""}T${row.sent_time || ""}-${row.media_reference || row.post_id || row.content || ""}-ins`;
       if (optimisticIds.current.has(fp)) {
         optimisticIds.current.delete(fp);
@@ -517,21 +548,36 @@ export default function SingleChatScreen({ navigation, route }) {
       const mapped = mapRowToItem(row);
       if (!mapped) return;
 
+      const corrected = { ...mapped, isMe: row.sender_username === myUsername };
+
       setItems((prev) => {
-        const next = [...prev, mapped];
+        // deduplicate by id in case both subscriptions fire for the same row
+        if (prev.some((m) => String(m.id) === String(corrected.id))) return prev;
+        const next = [...prev, corrected];
         setCachedSingleMessagesLocal({ chatId, peerUsername, items: next }).catch(() => {});
         return next;
       });
 
-      prefetchForItems([mapped]);
+      prefetchForItems([corrected]);
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
+    };
 
-      // background re-fetch intentionally omitted — fetching 200 msgs on every insert
-      // exhausted Android heap (OOM). Cache is updated on screen load.
-    });
+    // Subscription A: messages where peer is recipient (= messages I sent)
+    const unA = subscribeChatInserts(chatId, handleRow);
 
-    return un;
-  }, [chatId, peerUsername]);
+    // Subscription B: messages where I am the recipient (= messages sent to me)
+    // Only set up once myUserId is known and only for DMs (groups use a shared chatId).
+    let unB = () => {};
+    if (myUserId && !isGroup) {
+      unB = subscribeChatInserts(myUserId, (row) => {
+        // filter: only handle rows from the current peer
+        if (row.sender_username !== peerUsername) return;
+        handleRow(row);
+      });
+    }
+
+    return () => { unA(); unB(); };
+  }, [chatId, myUserId, peerUsername, myUsername, isGroup]);
 
   // focus: mark read + refresh blocked + refresh peer display name
   useFocusEffect(
@@ -592,7 +638,7 @@ export default function SingleChatScreen({ navigation, route }) {
 
     setLoadingMsgs(true);
     try {
-      const fresh = await fetchSingleMessagesDirect(chatId, 200);
+      const fresh = await fetchSingleMessagesDirect(chatId, 200, myUserId, peerUsername, myUsername);
       setItems(fresh);
       prefetchForItems(fresh);
       await setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh });
@@ -906,7 +952,7 @@ export default function SingleChatScreen({ navigation, route }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
-      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={["top", "left", "right"]}>
         <View style={[styles.header, { borderBottomColor: theme.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
           <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={8}>
             <Feather name="chevron-left" size={26} color={theme.text} />
@@ -959,6 +1005,7 @@ export default function SingleChatScreen({ navigation, route }) {
                     {
                       backgroundColor: theme.background,
                       borderTopColor: isDark ? "#333" : "#EFF2F5",
+                      paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
                     },
                   ]}
                 >

@@ -445,10 +445,16 @@ export default function CommunitySettingsScreen({ navigation }) {
         const token = Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
         const q = encodeURIComponent(cityQuery.trim());
         const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?types=place&limit=5&access_token=${token}`
+          `https://api.mapbox.com/search/geocode/v6/forward?q=${q}&types=place&limit=5&access_token=${token}`
         );
         const json = await res.json();
-        setCityResults(json.features || []);
+        // Normalize v6 → v5-compatible shape (place_name + center)
+        const normalized = (json.features || []).map((f) => ({
+          id: f.id,
+          place_name: f.properties?.place_formatted ?? f.properties?.name ?? "",
+          center: f.geometry?.coordinates ?? [],
+        }));
+        setCityResults(normalized);
       } catch { setCityResults([]); }
       finally { setCityLoading(false); }
     }, 400);

@@ -4,7 +4,7 @@
 // Ad tracking: fires a belt-and-suspenders ad_stats INSERT when type=Ad
 // (DB trigger trg_create_ad_stats handles it too; both are safe with ON CONFLICT DO NOTHING).
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, Image,
   ScrollView, StyleSheet, ActivityIndicator, Alert,
@@ -118,6 +118,15 @@ export default function CreatePost() {
     enableGroupChat: true, allowTicketing: false, tickets: [],
     allowSubgroups: false, allowInvites: false,
   });
+  // Ref mirrors eventState so handleSubmit always reads the latest value
+  // even if a concurrent re-render (e.g. language context loading) caused
+  // the state update from EventPanel's useEffect to be lost.
+  const eventStateRef = useRef(null);
+  const setEventStateSafe = useCallback((next) => {
+    eventStateRef.current = next;
+    setEventState(next);
+  }, []);
+
   const [adState, setAdState] = useState({
     targetInterested: true, iap: false, products: [],
   });
@@ -483,12 +492,16 @@ export default function CreatePost() {
         : postType === "product"     ? "Product"
         : "Update";
 
+      // Use ref as authoritative source — guards against state update being lost
+      // during a concurrent re-render (e.g. language context loading from AsyncStorage).
+      const latestEventState = eventStateRef.current ?? eventState;
+
       const rawActions = [];
       if (postType === "event") {
-        if (eventState.allowTicketing)  rawActions.push("tickets");
-        if (eventState.enableGroupChat) rawActions.push("join_chat");
-        if (eventState.allowSubgroups)  rawActions.push("subgroups");
-        if (eventState.allowInvites)    rawActions.push("invite");
+        if (latestEventState.allowTicketing)  rawActions.push("tickets");
+        if (latestEventState.enableGroupChat) rawActions.push("join_chat");
+        if (latestEventState.allowSubgroups)  rawActions.push("subgroups");
+        if (latestEventState.allowInvites)    rawActions.push("invite");
       } else if (postType === "ad") {
         if (adState.iap) rawActions.push("buy");
         rawActions.push("message");
@@ -502,10 +515,10 @@ export default function CreatePost() {
       let product_types = [], product_prices = [], required_info = [];
       let product_notes = [], product_required_info = [], product_options = [];
 
-      if (postType === "event" && eventState.allowTicketing) {
+      if (postType === "event" && latestEventState.allowTicketing) {
         isticketable = true;
-        is_age_restricted = !!eventState.isAgeRestricted;
-        const allTickets = Array.isArray(eventState.tickets) ? eventState.tickets : [];
+        is_age_restricted = !!latestEventState.isAgeRestricted;
+        const allTickets = Array.isArray(latestEventState.tickets) ? latestEventState.tickets : [];
         // Filter out tickets with empty names
         const tickets = allTickets.filter((tk) => (tk?.name || "").trim());
         product_types  = tickets.map((tk) => tk.name.trim());
@@ -649,12 +662,29 @@ export default function CreatePost() {
         const proximityParam = coords
           ? `&proximity=${coords.longitude},${coords.latitude}`
           : "";
+        // Use Mapbox Search v6 (replaces deprecated v5 mapbox.places endpoint)
         const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json` +
-          `?types=poi,address,neighborhood,locality${proximityParam}&limit=8&access_token=${token}`
+          `https://api.mapbox.com/search/geocode/v6/forward` +
+          `?q=${q}&types=poi,address,neighborhood,locality${proximityParam}&limit=8&access_token=${token}`
         );
         const json = await res.json();
-        setLocationSuggestions(Array.isArray(json.features) ? json.features : []);
+        // Normalize v6 features to the shape the rendering code expects (v5-compatible)
+        const normalized = Array.isArray(json.features)
+          ? json.features.map((f) => {
+              const ctx = f.properties?.context ?? {};
+              return {
+                id: f.id,
+                text: f.properties?.name ?? "",
+                place_name: f.properties?.place_formatted ?? f.properties?.name ?? "",
+                center: f.geometry?.coordinates,
+                context: Object.entries(ctx).map(([key, val]) => ({
+                  id: `${key}.${val?.mapbox_id ?? key}`,
+                  text: val?.name ?? "",
+                })),
+              };
+            })
+          : [];
+        setLocationSuggestions(normalized);
       } catch { setLocationSuggestions([]); }
     }, 350);
   };
@@ -949,7 +979,7 @@ export default function CreatePost() {
           )}
 
           {/* ── Dynamic panels ── */}
-          {isEvent && <EventPanel onState={setEventState} />}
+          {isEvent && <EventPanel onState={setEventStateSafe} />}
           {isAd    && <AdPanel    onState={setAdState}    />}
 
           {/* ── Feed tags ── */}

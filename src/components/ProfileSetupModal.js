@@ -112,10 +112,10 @@ export default function ProfileSetupModal({ visible, user, onComplete }) {
           const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
           if (mapboxToken) {
             const res = await fetch(
-              `https://api.mapbox.com/geocoding/v5/mapbox.places/${loc.coords.longitude},${loc.coords.latitude}.json?types=place&access_token=${mapboxToken}`
+              `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${loc.coords.longitude}&latitude=${loc.coords.latitude}&types=place&access_token=${mapboxToken}`
             );
             const json = await res.json();
-            city = json.features?.[0]?.text || null;
+            city = json.features?.[0]?.properties?.name || json.features?.[0]?.properties?.place_formatted || null;
           }
         }
       } catch {

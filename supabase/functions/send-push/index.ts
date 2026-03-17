@@ -44,48 +44,116 @@ Deno.serve(async (req) => {
     const toSend: Array<{ to: string; title: string; body: string; data?: object }> = [];
 
     // ── Path A: Database Webhook payload (messages INSERT) ────────────────────
-    if (body.record) {
+    if (body.record && body.table === "messages") {
       const record = body.record;
+      const isGroup: boolean = !!record.is_group;
 
-      // Only notify for recipient copies (sender_is_me = false)
-      if (record.sender_is_me !== false) {
+      // Each message has exactly ONE row inserted by the sender (sender_is_me=true).
+      // Only process sender rows — the "recipient copy" does not exist.
+      if (record.sender_is_me !== true) {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }
 
-      const recipientId: string = record.owner_id;
-      const senderName: string = record.sender_username || "Someone";
-      const isGroup: boolean = !!record.is_group;
-      const notifKey = isGroup ? "groups" : "chat";
+      const senderUsername: string = record.sender_username || "Someone";
 
-      // Determine readable content
+      // Look up sender's display name for human-friendly notifications
+      const { data: senderProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("name")
+        .eq("username", senderUsername)
+        .maybeSingle();
+      const senderFirstName: string =
+        (senderProfile?.name as string | null)?.split(" ")[0]?.trim() || senderUsername;
+
       let msgBody = record.content as string || "";
-      if (msgBody.startsWith("__location__")) msgBody = "📍 Shared a location";
-      else if (msgBody.startsWith("__feed_video__")) msgBody = "🎥 Shared a video";
-      else if (!msgBody && record.media_reference) msgBody = "📷 Sent a photo";
-      else if (!msgBody && record.post_id) msgBody = "📌 Shared a post";
+      if (msgBody.startsWith("__location__")) msgBody = `${senderFirstName} shared a location.`;
+      else if (msgBody.startsWith("__feed_video__")) msgBody = `${senderFirstName} sent a Feed video.`;
+      else if (!msgBody && record.media_reference) {
+        // Detect video vs photo by file extension
+        const ref: string = record.media_reference || "";
+        msgBody = /\.(mp4|mov|m4v|webm)$/i.test(ref)
+          ? `${senderFirstName} sent a video.`
+          : `${senderFirstName} sent a picture.`;
+      }
+      else if (record.group_id) msgBody = `${senderFirstName} invited you to join a group.`;
+      else if (!msgBody && record.post_id) msgBody = `${senderFirstName} sent a post.`;
       else msgBody = truncate(msgBody);
 
+      if (!isGroup) {
+        // DM: for DMs, record.chat = recipient's user ID (peer profile id)
+        const recipientId: string = record.chat;
+
+        const { data: profile } = await supabaseAdmin
+          .from("profiles")
+          .select("push_token, notif_prefs")
+          .eq("id", recipientId)
+          .maybeSingle();
+
+        if (profile?.push_token) {
+          const prefs = (profile.notif_prefs || {}) as Record<string, boolean>;
+          if (prefs.chat !== false) {
+            toSend.push({
+              to: profile.push_token,
+              title: senderFirstName,
+              body: msgBody,
+              data: { type: "dm", chat: record.chat },
+            });
+          }
+        }
+      } else {
+        // Group: record.chat = group ID. Notify all members except the sender.
+        const groupId: string = record.chat;
+
+        const { data: group } = await supabaseAdmin
+          .from("groups")
+          .select("members")
+          .eq("id", groupId)
+          .maybeSingle();
+
+        const memberUsernames: string[] = (group?.members || []).filter(
+          (u: string) => u !== senderName
+        );
+
+        if (memberUsernames.length > 0) {
+          const { data: profiles } = await supabaseAdmin
+            .from("profiles")
+            .select("push_token, notif_prefs")
+            .in("username", memberUsernames);
+
+          for (const p of profiles ?? []) {
+            if (!p.push_token) continue;
+            const prefs = (p.notif_prefs || {}) as Record<string, boolean>;
+            if (prefs.groups !== false) {
+              toSend.push({
+                to: p.push_token,
+                title: senderFirstName,
+                body: msgBody,
+                data: { type: "group_message", chat: record.chat },
+              });
+            }
+          }
+        }
+      }
+
+    // ── Path B: Follow notification (direct invocation from client) ───────────
+    } else if (body.type === "follow" && body.followed_user_id && body.follower_username) {
       const { data: profile } = await supabaseAdmin
         .from("profiles")
         .select("push_token, notif_prefs")
-        .eq("id", recipientId)
+        .eq("id", body.followed_user_id)
         .maybeSingle();
 
       if (profile?.push_token) {
         const prefs = (profile.notif_prefs || {}) as Record<string, boolean>;
-        if (prefs[notifKey] !== false) {
+        if (prefs.follows !== false) {
           toSend.push({
             to: profile.push_token,
-            title: `@${senderName}`,
-            body: msgBody,
-            data: { type: isGroup ? "group_message" : "dm", chat: record.chat },
+            title: "New follower",
+            body: `@${body.follower_username} is now following you.`,
+            data: { type: "follow", username: body.follower_username },
           });
         }
       }
-
-    // ── Path B: Database Webhook payload (diffusion_message_receipts INSERT) ──
-    } else if (body.record === null && body.table === "diffusion_message_receipts") {
-      // Handled below via Path C shape if called differently
 
     // ── Path C: Direct invocation for diffusion messages ─────────────────────
     } else if (Array.isArray(body.recipient_ids) && body.title) {
@@ -112,7 +180,6 @@ Deno.serve(async (req) => {
       const recipientId = body.record.recipient_id;
       const messageId = body.record.message_id;
 
-      // Look up the diffusion message
       const { data: dm } = await supabaseAdmin
         .from("diffusion_messages")
         .select("sender_name, text")

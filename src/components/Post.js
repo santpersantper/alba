@@ -49,9 +49,10 @@ import {
 import { trackRequest } from "../lib/requestTracker";
 
 /* ---------- config ---------- */
-const DEFAULT_MEDIA_HEIGHT = 300;
+const _screenH = Dimensions.get("window").height;
+const DEFAULT_MEDIA_HEIGHT = Math.round(Math.min(_screenH * 0.32, 420));
 const MIN_MEDIA_HEIGHT = 200;
-const MAX_MEDIA_HEIGHT = 500;
+const MAX_MEDIA_HEIGHT = Math.round(_screenH * 0.8); // allow up to 80% of screen height so large photos show fully on iPad
 
 /* ---------- actions ---------- */
 const ACTIONS = {
@@ -977,7 +978,7 @@ export default function Post(props) {
                     );
                   }}
                 >
-                  <ThemedText style={styles.subtitle}>{rawLocation}</ThemedText>
+                  <ThemedText style={[styles.subtitle, styles.locationText]}>{rawLocation}</ThemedText>
                 </TouchableOpacity>
               )}
             </View>
@@ -1267,6 +1268,7 @@ const styles = StyleSheet.create({
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10, backgroundColor: "#18314f" },
   handleLine: { fontSize: 14, fontFamily: "PoppinsBold" },
   subtitle: { fontSize: 12, fontFamily: "Poppins" },
+  locationText: { color: "#0D2B6B" },
 
   title: { fontSize: 18, marginBottom: 8, fontFamily: "PoppinsBold", paddingLeft: 10, paddingRight: 10 },
   description: { fontSize: 14, marginBottom: 4, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },

@@ -1,6 +1,6 @@
 // components/community-settings/EventSettings.js
 import React, { useEffect, useState } from "react";
-import { View, TextInput, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from "react-native";
+import { View, TextInput, TouchableOpacity, StyleSheet, Linking, ActivityIndicator, Alert } from "react-native";
 import Slider from "@react-native-community/slider";
 import { Feather } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
@@ -40,6 +40,31 @@ export default function CommunityEventSettings() {
     } catch {
       // silently ignore — non-critical
     }
+  };
+
+  const handleDisconnect = () => {
+    Alert.alert(
+      "Disconnect Stripe",
+      "Are you sure you want to disconnect your Stripe account? You will stop receiving payouts until you reconnect.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Disconnect",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await supabase
+                .from("groups")
+                .update({ stripe_account_id: null, stripe_onboarding_complete: false })
+                .eq("id", groupId);
+              setPayoutStatus("not_started");
+            } catch (e) {
+              console.warn("Stripe disconnect error:", e);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleSetupPayouts = async () => {
@@ -257,19 +282,18 @@ export default function CommunityEventSettings() {
           ]}
         >
           <ThemedText style={[styles.distanceText, { color: theme.text }]}>
-            {Math.round(maxDistance)}
+            {maxDistance >= 1000
+              ? `${(maxDistance / 1000).toFixed(maxDistance % 1000 === 0 ? 0 : 1)} km`
+              : `${Math.round(maxDistance)} m`}
           </ThemedText>
         </ThemedView>
-        <ThemedText style={[styles.metersText, { color: theme.text }]}>
-          {t("settings_meters")}
-        </ThemedText>
       </View>
 
       <Slider
         style={{ marginTop: 4 }}
         minimumValue={500}
-        maximumValue={5000}
-        step={100}
+        maximumValue={50000}
+        step={500}
         value={maxDistance}
         onValueChange={setMaxDistance}
         onSlidingComplete={handleDistanceChange}
@@ -330,7 +354,15 @@ export default function CommunityEventSettings() {
                 {payoutStatus === "complete" ? t("payout_status_connected") : payoutStatus === "pending" ? t("payout_status_pending") : t("payout_status_not_setup")}
               </ThemedText>
             </View>
-            {payoutStatus !== "complete" && (
+            {payoutStatus === "complete" ? (
+              <TouchableOpacity
+                style={styles.payoutBtnDisconnect}
+                onPress={handleDisconnect}
+                activeOpacity={0.8}
+              >
+                <ThemedText style={styles.payoutBtnText}>{t("payout_disconnect") || "Disconnect"}</ThemedText>
+              </TouchableOpacity>
+            ) : (
               <TouchableOpacity
                 style={styles.payoutBtn}
                 onPress={handleSetupPayouts}
@@ -347,6 +379,16 @@ export default function CommunityEventSettings() {
             )}
           </View>
         )}
+        <TouchableOpacity
+          onPress={() => Linking.openURL("https://albaappofficial.com/payouts-instructions")}
+          style={{ marginTop: 12, alignSelf: "flex-start" }}
+          activeOpacity={0.7}
+        >
+          <ThemedText style={styles.instructionsLink}>{t("payout_instructions_label") || "Instructions"}</ThemedText>
+        </TouchableOpacity>
+        <ThemedText style={[styles.instructionsHelper, { color: theme.secondaryText || "#888" }]}>
+          {t("payout_instructions_helper") || "Not sure how to set up payouts? See instructions on our website"}
+        </ThemedText>
       </View>
     </ThemedView>
   );
@@ -395,5 +437,8 @@ const styles = StyleSheet.create({
   payoutRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   payoutBadge: { flexDirection: "row", alignItems: "center", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   payoutBtn: { backgroundColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, minWidth: 44, alignItems: "center" },
+  payoutBtnDisconnect: { backgroundColor: "#EF4444", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, minWidth: 44, alignItems: "center" },
   payoutBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 13 },
+  instructionsLink: { fontFamily: "PoppinsBold", fontSize: 13, color: "#00A9FF", textDecorationLine: "underline" },
+  instructionsHelper: { fontFamily: "Poppins", fontSize: 12, lineHeight: 17, marginTop: 4 },
 });

@@ -13,6 +13,7 @@ import {
   Alert,
   Modal,
   TextInput,
+  RefreshControl,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import Post from "../components/Post";
@@ -150,6 +151,7 @@ export default function ProfileScreen({ navigation, route }) {
 
   const [booting, setBooting] = useState(true);
   const [fetched, setFetched] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [posts, setPosts] = useState([]);
   const [postsLoading, setPostsLoading] = useState(false);
@@ -247,6 +249,16 @@ export default function ProfileScreen({ navigation, route }) {
       };
     }, [params.userId, params.username])
   );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const row = await preloadProfileData({ userId: wantUserId, username: wantUsername, isMe });
+      if (row) setFetched(row);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [wantUserId, wantUsername, isMe]);
 
   // blocked + followed users (background, runs when authId is known)
   useEffect(() => {
@@ -393,6 +405,17 @@ export default function ProfileScreen({ navigation, route }) {
         ? Array.from(new Set([...current, display.id]))
         : current.filter((id) => id !== display.id);
       await supabase.from("profiles").update({ followed_users: updated }).eq("id", authId);
+
+      // Send follow push notification to the followed user (best effort)
+      if (next && myProfile?.username && display?.id) {
+        supabase.functions.invoke("send-push", {
+          body: {
+            type: "follow",
+            followed_user_id: display.id,
+            follower_username: myProfile.username,
+          },
+        }).catch(() => {});
+      }
     } catch {
       setIsFollowing(!next); // revert on error
     }
@@ -792,7 +815,18 @@ export default function ProfileScreen({ navigation, route }) {
           <ActivityIndicator />
         </View>
       ) : (
-        <ScrollView showsVerticalScrollIndicator={false} style={{ backgroundColor: theme.gray }}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          style={{ backgroundColor: theme.gray }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#2F91FF"
+              colors={["#2F91FF"]}
+            />
+          }
+        >
           {/* Cover */}
           <View
             style={[

@@ -20,6 +20,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
@@ -128,6 +129,7 @@ export default function EventSettingsScreen() {
   const [myUsername, setMyUsername] = useState(null);
 
   const [model, setModel] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const eventRow = model?.event || null;
   const postRow = model?.post || null;
 
@@ -276,6 +278,15 @@ export default function EventSettingsScreen() {
       loadEventModel();
     }, [loadEventModel])
   );
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await loadEventModel();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadEventModel]);
 
   /* ---------------- init drafts when post changes ---------------- */
   const resetDraftsToPost = useCallback(() => {
@@ -778,7 +789,13 @@ export default function EventSettingsScreen() {
         </View>
 
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-          <ScrollView contentContainerStyle={{ paddingBottom: 18 }} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            contentContainerStyle={{ paddingBottom: 18 }}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+            }
+          >
             {/* Change title/description */}
             <Text style={[styles.sectionTitle, { color: theme.text }]}>Change title</Text>
             <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>

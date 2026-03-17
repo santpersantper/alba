@@ -12,7 +12,9 @@ import {
   Platform,
   Dimensions,
   PanResponder,
+  RefreshControl,
 } from "react-native";
+import * as Notifications from "expo-notifications";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
@@ -338,14 +340,20 @@ export default function UseTimeScreen() {
     loading,
     error,
     requestAuthorization,
+    requestAppSelection,
     startMonitoring,
     stopMonitoring,
   } = useScreenTime();
+
+  const [refreshing, setRefreshing] = useState(false);
 
   // Goal modals
   const [goalModalType, setGoalModalType] = useState(null); // "weekly"|"daily"|null
   const [editReductionPct, setEditReductionPct] = useState(10);
   const [editDailyMax, setEditDailyMax] = useState(180);
+
+  // Reset tracking modal
+  const [resetModalVisible, setResetModalVisible] = useState(false);
 
   // Deactivation modal
   const [deactivateModalVisible, setDeactivateModalVisible] = useState(false);
@@ -362,6 +370,31 @@ export default function UseTimeScreen() {
       await updatePrefs({ trackingStartDate: today, trackingActive: true });
     }
   }, [requestAuthorization, prefs.trackingStartDate, updatePrefs]);
+
+  // ── Change tracked apps (re-opens FamilyActivityPicker) ──────────────────
+  const handleChangeApps = useCallback(async () => {
+    await requestAppSelection();
+  }, [requestAppSelection]);
+
+  // ── Reset all tracking data ───────────────────────────────────────────────
+  const handleConfirmReset = useCallback(async () => {
+    await stopMonitoring();
+    await updatePrefs({
+      trackingStartDate: null,
+      trackingActive: false,
+      firstWeekComplete: false,
+      firstWeekAverageDailyMinutes: null,
+      goalAutoSet: false,
+      dailyHistory: [],
+      currentStreakCount: 0,
+      lastStreakUpdate: null,
+      streakDays: { Mon: false, Tue: false, Wed: false, Thu: false, Fri: false, Sat: false, Sun: false },
+      lastWeekTotalMinutes: 0,
+      lastWeekDailyTotals: {},
+      lastWeeklyReportDate: null,
+    });
+    setResetModalVisible(false);
+  }, [stopMonitoring, updatePrefs]);
 
   // ── Merge usageData into dailyHistory on every poll ───────────────────────
   useEffect(() => {
@@ -538,6 +571,153 @@ export default function UseTimeScreen() {
     return t("usetime_less_than_hm").replace("{h}", h).replace("{m}", m);
   }
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 800);
+  }, []);
+
+  // ── Screen Time local notifications ──────────────────────────────────────
+  // Tracks which notifications have already been sent on the current day
+  // to prevent repeat firings on every poll cycle.
+  const notifSentRef = useRef({ date: null, warned: false, limitReached: false });
+
+  // Warning + limit-reached notifications (fires on every todayMinutes update)
+  useEffect(() => {
+    if (!authorized || !dailyGoal || !loaded) return;
+    if (prefs.screenTimeNotifsEnabled === false) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (notifSentRef.current.date !== today) {
+      notifSentRef.current = { date: today, warned: false, limitReached: false };
+    }
+
+    const warningThreshold = prefs.screenTimeWarningMinutes ?? 10;
+    const minutesLeft = dailyGoal - todayMinutes;
+
+    // Warning: X minutes before the daily limit
+    if (
+      minutesLeft > 0 &&
+      minutesLeft <= warningThreshold &&
+      !notifSentRef.current.warned
+    ) {
+      notifSentRef.current.warned = true;
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: "⏰ Screen Time Warning",
+          body: `Only ${minutesLeft} minute${minutesLeft !== 1 ? "s" : ""} left before your daily limit.`,
+          data: { type: "screen_time_warning" },
+        },
+        trigger: null,
+      }).catch(() => {});
+    }
+
+    // Limit reached
+    if (minutesLeft <= 0 && !notifSentRef.current.limitReached) {
+      notifSentRef.current.limitReached = true;
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: "🚫 Daily Limit Reached",
+          body: `You've reached your daily screen time goal (${formatMinutes(todayMinutes)} used).`,
+          data: { type: "screen_time_limit" },
+        },
+        trigger: null,
+      }).catch(() => {});
+    }
+  }, [todayMinutes, dailyGoal, authorized, loaded, prefs.screenTimeNotifsEnabled, prefs.screenTimeWarningMinutes]);
+
+  // Morning daily goal notification — fires once per day on app launch
+  useEffect(() => {
+    if (!authorized || !loaded || !firstWeekComplete) return;
+    if (prefs.screenTimeNotifsEnabled === false) return;
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (prefs.lastMorningNotifDate === todayStr) return; // already sent today
+
+    updatePrefs({ lastMorningNotifDate: todayStr });
+
+    const goalH = Math.floor((dailyGoal ?? 180) / 60);
+    const goalM = (dailyGoal ?? 180) % 60;
+    const goalStr = goalM === 0 ? `${goalH}h` : `${goalH}h ${goalM}min`;
+    const streak = streakCount;
+
+    let title: string;
+    let notifBody: string;
+
+    if (scheme === "green") {
+      // On a streak — keep going messages
+      const variants = [
+        { title: "Keep going strong! 🔥", body: `Keep your scrolling time below ${goalStr} today to extend your ${streak}-day streak.` },
+        { title: "Streak on! 💪", body: `${streak} days and counting. Stay under ${goalStr} today to keep it going.` },
+        { title: "You're on a roll!", body: `Don't break the streak — stay under ${goalStr} of social media today.` },
+      ];
+      const pick = variants[streak % variants.length];
+      title = pick.title;
+      notifBody = pick.body;
+    } else {
+      // Off streak — restart messages
+      const variants = [
+        { title: "Time to start again 🌱", body: `Spend less than ${goalStr} on social media today to go back to your goal.` },
+        { title: "Fresh start today!", body: `A new day, a new chance. Keep it under ${goalStr} today.` },
+        { title: "You've got this 💙", body: `Aim for under ${goalStr} today and start rebuilding your streak.` },
+      ];
+      const pick = variants[new Date().getDay() % variants.length];
+      title = pick.title;
+      notifBody = pick.body;
+    }
+
+    Notifications.scheduleNotificationAsync({
+      content: { title, body: notifBody, data: { type: "screen_time_morning" } },
+      trigger: null,
+    }).catch(() => {});
+  }, [authorized, loaded, firstWeekComplete, prefs.screenTimeNotifsEnabled, prefs.lastMorningNotifDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Weekly report notification: fires on Mondays once per week
+  useEffect(() => {
+    if (!authorized || !loaded || !firstWeekComplete) return;
+    if (prefs.screenTimeNotifsEnabled === false) return;
+
+    const today = new Date();
+    if (today.getDay() !== 1) return; // 0=Sun, 1=Mon
+
+    const todayStr = today.toISOString().slice(0, 10);
+    if (prefs.lastWeeklyReportDate === todayStr) return; // already sent this Monday
+
+    updatePrefs({ lastWeeklyReportDate: todayStr });
+
+    const lastWeekMin = prefs.lastWeekTotalMinutes ?? 0;
+    const thisWeekGoalMin = dailyGoal ? dailyGoal * 7 : null;
+    const thisWeekGoalH = thisWeekGoalMin ? Math.floor(thisWeekGoalMin / 60) : null;
+    const thisWeekGoalM = thisWeekGoalMin ? thisWeekGoalMin % 60 : null;
+    const goalStr = thisWeekGoalH !== null
+      ? (thisWeekGoalM === 0 ? `${thisWeekGoalH}h` : `${thisWeekGoalH}h ${thisWeekGoalM}min`)
+      : null;
+
+    let weekBody: string;
+    if (lastWeekMin > 0 && prefs.prevWeekTotalMinutes != null) {
+      const prev = prefs.prevWeekTotalMinutes as number;
+      const diffPct = prev > 0 ? Math.round(((lastWeekMin - prev) / prev) * 100) : null;
+      const direction = diffPct !== null ? (diffPct >= 0 ? `up ${Math.abs(diffPct)}%` : `down ${Math.abs(diffPct)}%`) : null;
+      weekBody = direction && goalStr
+        ? `Your social media use was ${direction} last week. New goal: ${goalStr} total this week. Keep going!`
+        : goalStr
+        ? `New goal: ${goalStr} total this week. Keep going!`
+        : "Check your weekly screen time summary in the Use Time screen.";
+    } else {
+      weekBody = goalStr
+        ? `New week, new goal: stay under ${goalStr} total. You can do it!`
+        : "Check your weekly screen time summary in the Use Time screen.";
+    }
+
+    Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Weekly report 📊",
+        body: weekBody,
+        data: { type: "screen_time_weekly" },
+      },
+      trigger: null,
+    }).catch(() => {});
+  }, [authorized, loaded, firstWeekComplete, prefs.screenTimeNotifsEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Skeleton ──────────────────────────────────────────────────────────────
   const renderSkeleton = () => (
     <View style={{ paddingTop: 24 }}>
@@ -599,6 +779,9 @@ export default function UseTimeScreen() {
           style={s.scroll}
           contentContainerStyle={s.contentContainer}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
+          }
         >
           {loading && !usageData ? (
             renderSkeleton()
@@ -682,6 +865,37 @@ export default function UseTimeScreen() {
                           <Text style={[s.changeText, { color: cs.changeText }]}>{t("usetime_change")}</Text>
                         </TouchableOpacity>
                       </View>
+
+                      {/* ── Notification settings ── */}
+                      <View style={[s.goalRow, { marginTop: 6 }]}>
+                        <Text style={[s.goalText, { color: cs.text }]}>Notifications</Text>
+                        <Switch
+                          value={prefs.screenTimeNotifsEnabled !== false}
+                          onValueChange={(v) => updatePrefs({ screenTimeNotifsEnabled: v })}
+                          trackColor={cs.switchTrack}
+                          thumbColor={cs.switchThumb}
+                          ios_backgroundColor={cs.switchTrack.false}
+                        />
+                      </View>
+                      {prefs.screenTimeNotifsEnabled !== false && (
+                        <View style={[s.goalRow, { marginTop: 2 }]}>
+                          <Text style={[s.goalText, { color: cs.text, flex: 1 }]}>
+                            Warn {prefs.screenTimeWarningMinutes ?? 10} min before limit
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => {
+                              const steps = [5, 10, 15, 20, 30];
+                              const cur = prefs.screenTimeWarningMinutes ?? 10;
+                              const idx = steps.indexOf(cur);
+                              const next = steps[(idx + 1) % steps.length];
+                              updatePrefs({ screenTimeWarningMinutes: next });
+                            }}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Text style={[s.changeText, { color: cs.changeText }]}>{t("usetime_change")}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
                   )}
 
@@ -700,6 +914,28 @@ export default function UseTimeScreen() {
                     cs={cs}
                     noDataText={t("usetime_no_data")}
                   />
+
+                  {/* ── MANAGE TRACKING ── */}
+                  {authorized && (
+                    <View style={[s.manageRow, { borderTopColor: cs.divider }]}>
+                      <TouchableOpacity
+                        style={[s.manageBtn, { borderColor: cs.divider }]}
+                        onPress={handleChangeApps}
+                        activeOpacity={0.75}
+                      >
+                        <Feather name="list" size={15} color={cs.text} style={{ marginRight: 6 }} />
+                        <Text style={[s.manageBtnText, { color: cs.text }]}>Change Apps</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[s.manageBtn, { borderColor: cs.divider }]}
+                        onPress={() => setResetModalVisible(true)}
+                        activeOpacity={0.75}
+                      >
+                        <Feather name="refresh-ccw" size={15} color={cs.text} style={{ marginRight: 6 }} />
+                        <Text style={[s.manageBtnText, { color: cs.text }]}>Reset Tracking</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
                   {/* ── DEACTIVATION TOGGLE ── */}
                   <View style={[s.toggleRow, { borderTopColor: cs.divider }]}>
@@ -891,6 +1127,34 @@ export default function UseTimeScreen() {
                 >
                   {t("usetime_confirm")}
                 </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Reset tracking confirmation modal ── */}
+      <Modal
+        visible={resetModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setResetModalVisible(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.deactivateCard}>
+            <Text style={s.deactivateTitle}>Reset Tracking?</Text>
+            <Text style={s.deactivateSub}>
+              This will erase all your usage history, streak, and goals. You'll restart the 7-day observation period.
+            </Text>
+            <View style={[s.goalModalBtns, { marginTop: 24 }]}>
+              <TouchableOpacity style={s.goalModalCancelBtn} onPress={() => setResetModalVisible(false)}>
+                <Text style={s.goalModalCancelText}>{t("cancel_button")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.goalModalSaveBtn, { backgroundColor: "#FF5252" }]}
+                onPress={handleConfirmReset}
+              >
+                <Text style={s.goalModalSaveText}>Reset</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1195,5 +1459,27 @@ const s = StyleSheet.create({
     minHeight: 72,
     marginBottom: 4,
     marginLeft: 34,
+  },
+  // Manage tracking buttons
+  manageRow: {
+    flexDirection: "row",
+    gap: 10,
+    paddingTop: 16,
+    marginTop: 6,
+    borderTopWidth: 1,
+    marginBottom: 6,
+  },
+  manageBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+  },
+  manageBtnText: {
+    fontFamily: "Poppins",
+    fontSize: 13,
   },
 });

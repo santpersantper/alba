@@ -74,6 +74,12 @@ export default function FaceRecognitionScreen() {
       return;
     }
 
+    if (BACKEND_VERIFY_URLS.length === 0) {
+      log("LAMBDA_VERIFY_URL is not configured — skipping network call");
+      showModal("Error", "Verification service is not configured. Please contact support.");
+      return;
+    }
+
     try {
       setVerifying(true);
       log("START");

@@ -5,12 +5,19 @@
   },
   "build": {
     "development": {
-      "credentialsSource": "local",
+      "credentialsSource": "remote",
       "developmentClient": true,
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --clean",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBob2Vwa2FjYnJ0b2xxbWx3a3Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA2MDUxMjcsImV4cCI6MjA3NjE4MTEyN30.ZtrCsy3ReW0ctykXqt9YWy14oevyzWZSdYALYPDX8fo",
+        "EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY": "pk_test_51T53ZEKXNSqApbZgySc78Cnf6nzLiZl2FaAdTUpbxjw7SksDM1IqwGiB3aAp3b8CUFNyqMlXXRLJfpmU7t86bAAY00k0m9xRvS",
+        "EXPO_PUBLIC_LAMBDA_VERIFY_URL": "https://iezhkmaozvbu2ljbhwhlamloue0coeha.lambda-url.eu-north-1.on.aws/",
+        "EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN": ""
       }
     },
     "preview": {
@@ -21,14 +28,28 @@
       },
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBob2Vwa2FjYnJ0b2xxbWx3a3Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA2MDUxMjcsImV4cCI6MjA3NjE4MTEyN30.ZtrCsy3ReW0ctykXqt9YWy14oevyzWZSdYALYPDX8fo",
+        "EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY": "pk_test_51T53ZEKXNSqApbZgySc78Cnf6nzLiZl2FaAdTUpbxjw7SksDM1IqwGiB3aAp3b8CUFNyqMlXXRLJfpmU7t86bAAY00k0m9xRvS",
+        "EXPO_PUBLIC_LAMBDA_VERIFY_URL": "https://iezhkmaozvbu2ljbhwhlamloue0coeha.lambda-url.eu-north-1.on.aws/",
+        "EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN": ""
       }
     },
     "production": {
-      "credentialsSource": "local",
+      "credentialsSource": "remote",
       "autoIncrement": true,
       "prebuildCommand": "npx expo prebuild --clean",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBob2Vwa2FjYnJ0b2xxbWx3a3Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA2MDUxMjcsImV4cCI6MjA3NjE4MTEyN30.ZtrCsy3ReW0ctykXqt9YWy14oevyzWZSdYALYPDX8fo",
+        "EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY": "pk_test_51T53ZEKXNSqApbZgySc78Cnf6nzLiZl2FaAdTUpbxjw7SksDM1IqwGiB3aAp3b8CUFNyqMlXXRLJfpmU7t86bAAY00k0m9xRvS",
+        "EXPO_PUBLIC_LAMBDA_VERIFY_URL": "https://iezhkmaozvbu2ljbhwhlamloue0coeha.lambda-url.eu-north-1.on.aws/",
+        "EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN": ""
       }
     }
   },
