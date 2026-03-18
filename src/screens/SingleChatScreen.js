@@ -27,6 +27,7 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { Image as ExpoImage } from "expo-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { setLastVisited } from "../lib/chatLastVisited";
 
 import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
@@ -90,18 +91,8 @@ async function setCachedSingleMessagesLocal({ chatId, peerUsername, items }) {
 }
 
 /* ---------------- supabase ops ---------------- */
-const markChatRead = async (chatId) => {
-  if (!chatId) return;
-  const { error } = await supabase
-    .from("messages")
-    .update({ is_read: true })
-    .eq("chat", chatId)
-    .eq("sender_is_me", false)
-    .eq("is_read", false);
-  if (error) throw error;
-};
 
-const sendTextRow = async ({ chatId, text, senderUsername, owner_id }) => {
+const sendTextRow = async ({ chatId, text, senderUsername, sender_id }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
@@ -110,13 +101,11 @@ const sendTextRow = async ({ chatId, text, senderUsername, owner_id }) => {
     .from("messages")
     .insert([
       {
-        owner_id,
-        chat: chatId,
+        sender_id,
+        chat_id: chatId,
         is_group: false,
         sender_username: senderUsername || "me",
-        sender_is_me: true,
         content: text,
-        is_read: true,
         sent_date,
         sent_time,
       },
@@ -128,21 +117,19 @@ const sendTextRow = async ({ chatId, text, senderUsername, owner_id }) => {
   return data;
 };
 
-const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, owner_id }) => {
+const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, sender_id }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
   const { data, error } = await supabase
     .from("messages")
     .insert([{
-      owner_id,
-      chat: chatId,
+      sender_id,
+      chat_id: chatId,
       is_group: false,
       sender_username: senderUsername || "me",
-      sender_is_me: true,
       content: caption,
       media_reference: mediaUrl,
-      is_read: true,
       sent_date,
       sent_time,
     }])
@@ -152,20 +139,18 @@ const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, ow
   return data;
 };
 
-const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id }) => {
+const sendLocationRow = async ({ chatId, locationData, senderUsername, sender_id }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
   const { data, error } = await supabase
     .from("messages")
     .insert([{
-      owner_id,
-      chat: chatId,
+      sender_id,
+      chat_id: chatId,
       is_group: false,
       sender_username: senderUsername || "me",
-      sender_is_me: true,
       content: `__location__:${JSON.stringify(locationData)}`,
-      is_read: true,
       sent_date,
       sent_time,
     }])
@@ -177,26 +162,31 @@ const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id 
 
 const subscribeChatInserts = (chatId, onInsert) => {
   if (!chatId) return () => {};
+  console.log("[SingleChat][RT] subscribeChatInserts — channel:", `messages-${chatId}`);
   const channel = supabase
     .channel(`messages-${chatId}`)
     .on(
       "postgres_changes",
-      { event: "INSERT", schema: "public", table: "messages", filter: `chat=eq.${chatId}` },
-      (payload) => onInsert?.(payload.new)
+      { event: "INSERT", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
+      (payload) => {
+        console.log("[SingleChat][RT] messages INSERT received, chat_id:", payload.new?.chat_id, "sender:", payload.new?.sender_username);
+        onInsert?.(payload.new);
+      }
     )
     .subscribe((status, err) => {
+      console.log("[SingleChat][RT] messages subscribe status:", status, err ? err.message : "");
       if (err) console.warn("[SingleChat realtime] error:", err.message);
     });
   return () => supabase.removeChannel(channel);
 };
 
 /* ---------------- mapping ---------------- */
-function mapRowToItem(row) {
+function mapRowToItem(row, myUserId = null) {
   if (!row?.id) return null;
 
   const base = {
     id: row.id,
-    isMe: !!row.sender_is_me,
+    isMe: myUserId ? row.sender_id === myUserId : !!row.sender_is_me,
     senderUsername: row.sender_username || null,
     minuteKey: makeMinuteKey(row.sent_date, row.sent_time),
     time: (row.sent_time || "").slice(0, 5),
@@ -242,49 +232,23 @@ function mapRowToItem(row) {
 }
 
 /* ---------------- fetch messages (no cache lib dependency) ---------------- */
-// DM messages are stored with chat = recipient's UUID (one row per message).
-// We need to fetch both directions: messages I sent (chat = peerUUID) and
-// messages the peer sent to me (chat = myUserId, sender_username = peerUsername).
-async function fetchSingleMessagesDirect(chatId, limit = 200, myUserId = null, peerUsername = null, myUsername = null) {
+async function fetchSingleMessagesDirect(chatId, limit = 200, myUserId = null) {
   const { trackRequest } = require("../lib/requestTracker");
   const done = trackRequest(`SingleChat.fetchMessages chat=${chatId} limit=${limit}`);
   try {
-    let query = supabase
+    const { data, error } = await supabase
       .from("messages")
       .select(
-        "id, chat, is_group, sender_username, sender_is_me, content, media_reference, post_id, group_id, sent_date, sent_time, is_read"
+        "id, chat_id, is_group, sender_id, sender_username, content, media_reference, post_id, group_id, sent_date, sent_time"
       )
-      .eq("is_group", false)
+      .eq("chat_id", chatId)
       .order("sent_date", { ascending: true })
       .order("sent_time", { ascending: true })
       .limit(limit);
 
-    // If we know myUserId and peerUsername, fetch both directions with OR
-    if (myUserId && peerUsername) {
-      query = query.or(
-        `chat.eq.${chatId},and(chat.eq.${myUserId},sender_username.eq.${peerUsername})`
-      );
-    } else {
-      query = query.eq("chat", chatId);
-    }
-
-    const { data, error } = await query;
     if (error) throw error;
 
-    // Sort by date+time after merging both directions
-    const rows = (data || []).sort((a, b) => {
-      const ka = `${a.sent_date || ""}T${a.sent_time || ""}`;
-      const kb = `${b.sent_date || ""}T${b.sent_time || ""}`;
-      return ka < kb ? -1 : ka > kb ? 1 : 0;
-    });
-
-    return rows.map((row) => {
-      const item = mapRowToItem(row);
-      if (!item) return null;
-      // Correct isMe: sender_is_me is always true (set from sender's POV), use sender_username instead
-      if (myUsername) item.isMe = row.sender_username === myUsername;
-      return item;
-    }).filter(Boolean);
+    return (data || []).map((row) => mapRowToItem(row, myUserId)).filter(Boolean);
   } finally {
     done();
   }
@@ -371,25 +335,23 @@ export default function SingleChatScreen({ navigation, route }) {
   }, []);
 
   const handleDeleted = (deletedId) => {
-    const wasLast =
-      items.length > 0 && String(items[items.length - 1].id) === String(deletedId);
     setItems((prev) => prev.filter((m) => String(m.id) !== String(deletedId)));
 
-    // If the deleted message was the snippet shown in ChatList, repair chat_threads
-    if (wasLast && chatId) {
+    // Always update ALL chat_threads rows for this chat so every participant's
+    // realtime subscription fires and they reconcile the deleted message.
+    if (chatId) {
       (async () => {
         try {
-          const uid = await getSessionUid();
-          if (!uid) return;
           const { data: last } = await supabase
             .from("messages")
-            .select("content, media_reference, post_id, sent_date, sent_time, sender_is_me, sender_username")
-            .eq("chat", chatId)
+            .select("content, media_reference, post_id, sent_date, sent_time, sender_username")
+            .eq("chat_id", chatId)
             .eq("is_group", false)
             .order("sent_date", { ascending: false })
             .order("sent_time", { ascending: false })
             .limit(1)
             .maybeSingle();
+          const myUid = await getSessionUid();
           await supabase
             .from("chat_threads")
             .update(
@@ -398,7 +360,6 @@ export default function SingleChatScreen({ navigation, route }) {
                     last_content: last.content || null,
                     last_media_reference: last.media_reference || null,
                     last_post_id: last.post_id || null,
-                    last_sender_is_me: !!last.sender_is_me,
                     last_sender_username: last.sender_username || null,
                     last_sent_at: `${last.sent_date}T${last.sent_time}`,
                   }
@@ -406,13 +367,17 @@ export default function SingleChatScreen({ navigation, route }) {
                     last_content: null,
                     last_media_reference: null,
                     last_post_id: null,
-                    last_sender_is_me: null,
                     last_sender_username: null,
                     last_sent_at: null,
                   }
             )
-            .eq("chat_id", chatId)
-            .eq("owner_id", uid);
+            .eq("chat_id", chatId);
+          // Fix last_sender_is_me per-row (can't do it in a single update since it differs per user)
+          if (last && myUid) {
+            await supabase.from("chat_threads")
+              .update({ last_sender_is_me: last.sender_username === myUsername })
+              .eq("chat_id", chatId).eq("owner_id", myUid);
+          }
         } catch (e) {
           console.warn("[SingleChat] thread repair failed", e?.message);
         }
@@ -420,7 +385,8 @@ export default function SingleChatScreen({ navigation, route }) {
     }
   };
 
-  // ✅ Resolve DM chatId = profiles.id (uuid)
+  // Resolve DM chatId via get_or_create_dm_chat RPC
+  // Returns the existing UUID for this DM pair, or creates one if this is the first message ever.
   useEffect(() => {
     if (isGroup) return;
     if (!peerUsername) return;
@@ -430,23 +396,21 @@ export default function SingleChatScreen({ navigation, route }) {
 
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("username", peerUsername)
-          .maybeSingle();
+        const { data: chatIdResult, error } = await supabase.rpc("get_or_create_dm_chat", {
+          p_peer_username: peerUsername,
+        });
 
         if (!alive) return;
 
-        if (error || !data?.id) {
-          console.log("[SingleChat][RESOLVE] fail", { err: error?.message || null, hasId: !!data?.id });
+        if (error || !chatIdResult) {
+          console.log("[SingleChat][RESOLVE] fail", { err: error?.message || null });
           Alert.alert("Chat unavailable", "User not found.");
           navigation.goBack();
           return;
         }
 
-        console.log("[SingleChat][RESOLVE] ok", { peerUsername, chatId: data.id });
-        setChatId(data.id);
+        console.log("[SingleChat][RESOLVE] ok", { peerUsername, chatId: chatIdResult });
+        setChatId(chatIdResult);
       } catch (e) {
         if (!alive) return;
         console.log("[SingleChat][RESOLVE] exception", safeErr(e));
@@ -508,7 +472,7 @@ export default function SingleChatScreen({ navigation, route }) {
 
       // 4) fetch messages direct
       try {
-        const fresh = await fetchSingleMessagesDirect(chatId, 50, uid, peerUsername, myUsername);
+        const fresh = await fetchSingleMessagesDirect(chatId, 50, uid);
 
         if (!mounted) return;
 
@@ -531,10 +495,7 @@ export default function SingleChatScreen({ navigation, route }) {
     };
   }, [isGroup, chatId, peerUsername, getSessionUid, loadBlockedUsers]);
 
-  // realtime inserts — DM messages travel in two directions:
-  //   • Messages I send:    stored as { chat: peerUserId }  → subscribe on chatId (= peerUserId)
-  //   • Messages I receive: stored as { chat: myUserId }    → subscribe on myUserId, filter by peer
-  // Without the second subscription the recipient never sees new messages in real-time.
+  // Realtime inserts — with new schema all messages share one chat_id, single subscription.
   useEffect(() => {
     if (!chatId) return () => {};
 
@@ -545,41 +506,72 @@ export default function SingleChatScreen({ navigation, route }) {
         return;
       }
 
-      const mapped = mapRowToItem(row);
+      const mapped = mapRowToItem(row, myUserId);
       if (!mapped) return;
 
-      const corrected = { ...mapped, isMe: row.sender_username === myUsername };
-
       setItems((prev) => {
-        // deduplicate by id in case both subscriptions fire for the same row
-        if (prev.some((m) => String(m.id) === String(corrected.id))) return prev;
-        const next = [...prev, corrected];
+        if (prev.some((m) => String(m.id) === String(mapped.id))) return prev;
+        const next = [...prev, mapped];
         setCachedSingleMessagesLocal({ chatId, peerUsername, items: next }).catch(() => {});
         return next;
       });
 
-      prefetchForItems([corrected]);
+      prefetchForItems([mapped]);
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
     };
 
-    // Subscription A: messages where peer is recipient (= messages I sent)
-    const unA = subscribeChatInserts(chatId, handleRow);
+    const un = subscribeChatInserts(chatId, handleRow);
+    return un;
+  }, [chatId, myUserId, peerUsername]);
 
-    // Subscription B: messages where I am the recipient (= messages sent to me)
-    // Only set up once myUserId is known and only for DMs (groups use a shared chatId).
-    let unB = () => {};
-    if (myUserId && !isGroup) {
-      unB = subscribeChatInserts(myUserId, (row) => {
-        // filter: only handle rows from the current peer
-        if (row.sender_username !== peerUsername) return;
-        handleRow(row);
+  // chat_threads supplement — same mechanism as ChatListScreen; catches new messages
+  // on both iOS and Android even when the messages-table subscription misses them.
+  useEffect(() => {
+    if (!chatId || !myUserId) return () => {};
+    console.log("[SingleChat][RT] chat_threads supplement setup — chatId:", chatId, "myUserId:", myUserId);
+
+    const channel = supabase
+      .channel(`chat-threads-dm-${chatId}-${myUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "chat_threads" },
+        async (payload) => {
+          const row = payload.new;
+          console.log("[SingleChat][RT] chat_threads event received — event:", payload.eventType, "owner_id:", row?.owner_id, "chat_id:", row?.chat_id, "myUserId:", myUserId, "chatId:", chatId);
+          if (!row || row.owner_id !== myUserId || row.chat_id !== chatId) {
+            console.log("[SingleChat][RT] chat_threads filtered out");
+            return;
+          }
+          console.log("[SingleChat][RT] chat_threads match — fetching fresh messages");
+          const fresh = await fetchSingleMessagesDirect(chatId, 50, myUserId);
+          console.log("[SingleChat][RT] chat_threads fetch returned", fresh?.length, "items");
+          setItems((prev) => {
+            const freshIds = new Set(fresh.map((m) => String(m.id)));
+            const existingIds = new Set(prev.map((m) => String(m.id)));
+            const newItems = fresh.filter((m) => !existingIds.has(String(m.id)));
+            const removedCount = prev.filter((m) => !freshIds.has(String(m.id))).length;
+            if (newItems.length === 0 && removedCount === 0) {
+              console.log("[SingleChat][RT] chat_threads — no changes");
+              return prev;
+            }
+            console.log("[SingleChat][RT] chat_threads — adding", newItems.length, "new, removing", removedCount);
+            const reconciled = [...prev.filter((m) => freshIds.has(String(m.id))), ...newItems].sort((a, b) =>
+              (a.minuteKey || "") < (b.minuteKey || "") ? -1 : 1
+            );
+            setCachedSingleMessagesLocal({ chatId, peerUsername, items: reconciled }).catch(() => {});
+            return reconciled;
+          });
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 100);
+        }
+      )
+      .subscribe((status, err) => {
+        console.log("[SingleChat][RT] chat_threads subscribe status:", status, err ? err.message : "");
       });
-    }
 
-    return () => { unA(); unB(); };
-  }, [chatId, myUserId, peerUsername, myUsername, isGroup]);
+    return () => supabase.removeChannel(channel);
+  }, [chatId, myUserId, peerUsername, myUsername]);
 
-  // focus: mark read + refresh blocked + refresh peer display name
+  // focus: mark read + refresh blocked + refresh peer display name + refetch messages
   useFocusEffect(
     useCallback(() => {
       console.log("[SingleChat][FOCUS] focus", { chatId, peerUsername });
@@ -588,11 +580,7 @@ export default function SingleChatScreen({ navigation, route }) {
         const uid = await getSessionUid();
         if (!uid) return;
 
-        try {
-          if (chatId) await markChatRead(chatId);
-        } catch (e) {
-          console.log("[SingleChat][FOCUS] markRead error", safeErr(e));
-        }
+        if (chatId) setLastVisited(chatId);
 
         try {
           await loadBlockedUsers(uid);
@@ -614,10 +602,21 @@ export default function SingleChatScreen({ navigation, route }) {
             }
           } catch {}
         }
+
+        // Refetch messages so deleted/new messages are always current on focus
+        if (chatId && uid) {
+          try {
+            const fresh = await fetchSingleMessagesDirect(chatId, 50, uid);
+            setItems(fresh);
+            setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh }).catch(() => {});
+          } catch (e) {
+            console.log("[SingleChat][FOCUS] refetch error", safeErr(e));
+          }
+        }
       })();
 
       return undefined;
-    }, [chatId, peerUsername, getSessionUid, loadBlockedUsers, isGroup, peerName])
+    }, [chatId, peerUsername, getSessionUid, loadBlockedUsers, isGroup, peerName, myUsername])
   );
 
   const persistBlockedUsers = async (next) => {
@@ -638,7 +637,7 @@ export default function SingleChatScreen({ navigation, route }) {
 
     setLoadingMsgs(true);
     try {
-      const fresh = await fetchSingleMessagesDirect(chatId, 200, myUserId, peerUsername, myUsername);
+      const fresh = await fetchSingleMessagesDirect(chatId, 200, myUserId);
       setItems(fresh);
       prefetchForItems(fresh);
       await setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh });
@@ -683,10 +682,10 @@ export default function SingleChatScreen({ navigation, route }) {
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
 
       try {
-        const owner_id = await getSessionUid();
-        if (!owner_id) throw new Error("Not authenticated");
+        const sender_id = await getSessionUid();
+        if (!sender_id) throw new Error("Not authenticated");
         const mediaUrl = await uploadChatMedia({ uri, chatId });
-        const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, owner_id });
+        const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, sender_id });
 
         const fp = `${row.sent_date}T${row.sent_time}-${row.media_reference}-ins`;
         if (optimisticIds.current.size > 500) optimisticIds.current.clear();
@@ -744,12 +743,11 @@ export default function SingleChatScreen({ navigation, route }) {
     optimisticIds.current.add(fp);
 
     try {
-      const owner_id = await getSessionUid();
-      if (!owner_id) throw new Error("Not authenticated");
-      await sendTextRow({ chatId, text, senderUsername: myUsername, owner_id });
-    } catch (e) {
-      setItems((p) => p.filter((m) => m.id !== optimistic.id));
-      Alert.alert("Message not sent", e?.message || "Please try again.");
+      const sender_id = await getSessionUid();
+      if (!sender_id) throw new Error("Not authenticated");
+      await sendTextRow({ chatId, text, senderUsername: myUsername, sender_id });
+    } catch {
+      setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
     }
   }, [chatId, input, pendingImage, myUsername, isBlocked, getSessionUid, peerUsername]);
 
@@ -776,9 +774,9 @@ export default function SingleChatScreen({ navigation, route }) {
     });
     setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
     try {
-      const owner_id = await getSessionUid();
-      if (!owner_id) throw new Error("Not authenticated");
-      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, owner_id });
+      const sender_id = await getSessionUid();
+      if (!sender_id) throw new Error("Not authenticated");
+      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, sender_id });
       const realItem = {
         id: row.id,
         type: "location",
@@ -794,7 +792,7 @@ export default function SingleChatScreen({ navigation, route }) {
         return next;
       });
     } catch {
-      setItems((p) => p.filter((m) => m.id !== optimisticId));
+      setItems((p) => p.map((m) => m.id === optimisticId ? { ...m, failed: true } : m));
     }
   }, [chatId, myUsername, peerUsername, getSessionUid]);
 
@@ -883,6 +881,22 @@ export default function SingleChatScreen({ navigation, route }) {
     setPendingImage({ uri: asset.uri, type: isVid ? "video" : "image" });
   }, [isBlocked]);
 
+  const retrySend = useCallback(async (failedItem) => {
+    setItems((p) => p.map((m) => m.id === failedItem.id ? { ...m, failed: false } : m));
+    try {
+      const sender_id = await getSessionUid();
+      if (!sender_id) throw new Error("Not authenticated");
+      if (failedItem.type === "text") {
+        await sendTextRow({ chatId, text: failedItem.text, senderUsername: myUsername, sender_id });
+      } else if (failedItem.type === "location") {
+        await sendLocationRow({ chatId, locationData: failedItem.locationData, senderUsername: myUsername, sender_id });
+      }
+      setItems((p) => p.filter((m) => m.id !== failedItem.id));
+    } catch {
+      setItems((p) => p.map((m) => m.id === failedItem.id ? { ...m, failed: true } : m));
+    }
+  }, [chatId, myUsername, getSessionUid]);
+
   const renderItem = ({ item, index }) => {
     const prev = index > 0 ? items[index - 1] : null;
     const next = index < items.length - 1 ? items[index + 1] : null;
@@ -894,7 +908,7 @@ export default function SingleChatScreen({ navigation, route }) {
     let body = null;
     switch (item.type) {
       case "text":
-        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} onRetry={item.failed ? () => retrySend(item) : undefined} />;
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
@@ -909,7 +923,7 @@ export default function SingleChatScreen({ navigation, route }) {
         body = <InviteMessage {...item} time={displayTime} groupPreview={item.groupPreview || null} onDeleted={handleDeleted} />;
         break;
       case "location":
-        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} onRetry={item.failed ? () => retrySend(item) : undefined} />;
         break;
       default:
         return null;

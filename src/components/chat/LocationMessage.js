@@ -15,7 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 
-export default function LocationMessage({ id, isMe, time, locationData, onDeleted }) {
+export default function LocationMessage({ id, isMe, time, locationData, onDeleted, failed = false, onRetry }) {
   const { theme, isDark } = useAlbaTheme();
 
   const [menuVisible, setMenuVisible] = useState(false);
@@ -53,7 +53,7 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
     if (!id) { setConfirmVisible(false); return; }
     try {
       setDeleting(true);
-      const { error } = await supabase.from("messages").delete().eq("id", id);
+      const { error } = await supabase.rpc("delete_chat_message", { p_message_id: id });
       if (error) throw error;
       setConfirmVisible(false);
       onDeleted?.(id);
@@ -72,7 +72,8 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
       <View style={[styles.row, alignStyle]}>
         <TouchableOpacity
           activeOpacity={0.9}
-          onLongPress={() => setMenuVisible(true)}
+          onPress={failed ? onRetry : undefined}
+          onLongPress={failed ? undefined : () => setMenuVisible(true)}
           delayLongPress={400}
         >
           <View
@@ -110,6 +111,9 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
 
         {!!time && (
           <Text style={[styles.timeText, { color: "#9CA3AF" }]}>{time}</Text>
+        )}
+        {failed && (
+          <Text style={styles.failedCaption}>Message not sent. Tap to retry.</Text>
         )}
       </View>
 
@@ -216,6 +220,7 @@ const styles = StyleSheet.create({
   },
   mapsBtnText: { fontFamily: "Poppins", fontSize: 12, color: "#FFFFFF" },
   timeText: { marginTop: 2, fontSize: 11, alignSelf: "flex-end", fontFamily: "Poppins" },
+  failedCaption: { fontSize: 11, color: "#E05252", fontFamily: "Poppins", marginTop: 2, alignSelf: "flex-end" },
 
   overlay: {
     flex: 1,

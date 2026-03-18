@@ -640,8 +640,8 @@ export default function UseTimeScreen() {
     const goalStr = goalM === 0 ? `${goalH}h` : `${goalH}h ${goalM}min`;
     const streak = streakCount;
 
-    let title: string;
-    let notifBody: string;
+    let title;
+    let notifBody;
 
     if (scheme === "green") {
       // On a streak — keep going messages
@@ -692,9 +692,9 @@ export default function UseTimeScreen() {
       ? (thisWeekGoalM === 0 ? `${thisWeekGoalH}h` : `${thisWeekGoalH}h ${thisWeekGoalM}min`)
       : null;
 
-    let weekBody: string;
+    let weekBody;
     if (lastWeekMin > 0 && prefs.prevWeekTotalMinutes != null) {
-      const prev = prefs.prevWeekTotalMinutes as number;
+      const prev = Number(prefs.prevWeekTotalMinutes);
       const diffPct = prev > 0 ? Math.round(((lastWeekMin - prev) / prev) * 100) : null;
       const direction = diffPct !== null ? (diffPct >= 0 ? `up ${Math.abs(diffPct)}%` : `down ${Math.abs(diffPct)}%`) : null;
       weekBody = direction && goalStr

@@ -17,7 +17,7 @@ import { useAlbaLanguage } from "../../theme/LanguageContext";
 import { translateText } from "../../utils/translate";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 
-export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick }) {
+export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick, failed = false, onRetry }) {
   const { theme, isDark } = useAlbaTheme();
   const { language, t } = useAlbaLanguage();
 
@@ -55,7 +55,9 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
     }
     try {
       setDeleting(true);
-      const { error } = await supabase.from("messages").delete().eq("id", id);
+      console.log("[Delete] attempting delete, message id:", id);
+      const { error } = await supabase.rpc("delete_chat_message", { p_message_id: id });
+      console.log("[Delete] rpc result — error:", error ? error.message : null);
       if (error) throw error;
       setConfirmVisible(false);
       onDeleted?.(id);
@@ -105,6 +107,23 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
 
   // ✅ requested: other people's bubbles use theme.gray on dark mode
   const otherBubbleBg = isDark ? "#363C47" : styles.bubbleOther.backgroundColor;
+
+  if (failed) {
+    return (
+      <View style={[styles.row, { justifyContent: "flex-end" }]}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={onRetry}
+          style={{ maxWidth: "78%", alignItems: "flex-end" }}
+        >
+          <View style={[styles.bubble, styles.bubbleOther, { backgroundColor: isDark ? "#363C47" : styles.bubbleOther.backgroundColor }]}>
+            <Text style={[styles.msgText, { color: isDark ? "#fff" : "#1A1F27" }]}>{text}</Text>
+          </View>
+          <Text style={styles.failedCaption}>Message not sent. Tap to retry.</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <>
@@ -326,6 +345,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#A2AAB4",
     fontFamily: "Poppins",
+  },
+  failedCaption: {
+    fontSize: 11,
+    color: "#E05252",
+    fontFamily: "Poppins",
+    marginTop: 3,
   },
 
   menuBackdrop: {

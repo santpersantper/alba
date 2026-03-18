@@ -26,7 +26,7 @@ async function fetchThreads(ownerId, limit = 80) {
     const { data, error } = await supabase
       .from("chat_threads")
       .select(
-        "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference,unread_count"
+        "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference"
       )
       .eq("owner_id", ownerId)
       .order("last_sent_at", { ascending: false, nullsFirst: true })
@@ -281,22 +281,3 @@ export function removeChatFromCache(chatId, uid) {
   mem.ts = 0; // force re-fetch on next focus
 }
 
-/**
- * Immediately zero the unread count for a chat in the in-memory cache so the
- * dot clears the moment the user returns to ChatListScreen, without waiting for
- * a DB round-trip. Also forces a stale-cache flag so a real refresh follows.
- */
-export function markChatReadInCache(chatId) {
-  if (!chatId || !mem.data?.threads) return;
-  mem.data = {
-    ...mem.data,
-    threads: mem.data.threads.map((t) =>
-      t.chat_id === chatId
-        ? { ...t, unread_count: 0, last_is_read: true }
-        : t
-    ),
-  };
-  // Do NOT reset mem.ts here — that would trigger refreshInBackground which
-  // races against the RPC and overwrites the patched value with stale DB data.
-  // The chat_threads Realtime subscription will refresh once the RPC commits.
-}

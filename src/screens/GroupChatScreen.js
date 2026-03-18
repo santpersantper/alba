@@ -21,7 +21,7 @@ import { VideoView, useVideoPlayer } from "expo-video";
 import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../lib/uploadImage";
-import { markChatReadInCache } from "../lib/chatListCache";
+import { setLastVisited } from "../lib/chatLastVisited";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { Image as ExpoImage } from "expo-image";
@@ -60,7 +60,7 @@ const makeMinuteKeyFromDate = (date) => {
 // ✅ hide “You joined …” banners in this screen (even if cache maps them)
 const isJoinBannerItem = (it) => it?.type === "join_banner";
 
-const sendTextRow = async ({ chatId, text, owner_id, senderUsername }) => {
+const sendTextRow = async ({ chatId, text, sender_id, senderUsername }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
@@ -68,13 +68,11 @@ const sendTextRow = async ({ chatId, text, owner_id, senderUsername }) => {
     .from("messages")
     .insert([
       {
-        owner_id,
-        chat: chatId,
+        sender_id,
+        chat_id: chatId,
         is_group: true,
         sender_username: senderUsername || "me",
-        sender_is_me: true,
         content: text,
-        is_read: true,
         sent_date,
         sent_time,
       },
@@ -85,21 +83,19 @@ const sendTextRow = async ({ chatId, text, owner_id, senderUsername }) => {
   return data;
 };
 
-const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, owner_id }) => {
+const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, sender_id }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
   const { data, error } = await supabase
     .from("messages")
     .insert([{
-      owner_id,
-      chat: chatId,
+      sender_id,
+      chat_id: chatId,
       is_group: true,
       sender_username: senderUsername || "me",
-      sender_is_me: true,
       content: caption,
       media_reference: mediaUrl,
-      is_read: true,
       sent_date,
       sent_time,
     }])
@@ -110,20 +106,18 @@ const sendMediaRow = async ({ chatId, mediaUrl, caption = "", senderUsername, ow
 };
 
 
-const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id }) => {
+const sendLocationRow = async ({ chatId, locationData, senderUsername, sender_id }) => {
   const now = new Date();
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
   const { data, error } = await supabase
     .from("messages")
     .insert([{
-      owner_id,
-      chat: chatId,
+      sender_id,
+      chat_id: chatId,
       is_group: true,
       sender_username: senderUsername || "me",
-      sender_is_me: true,
       content: `__location__:${JSON.stringify(locationData)}`,
-      is_read: true,
       sent_date,
       sent_time,
     }])
@@ -134,6 +128,7 @@ const sendLocationRow = async ({ chatId, locationData, senderUsername, owner_id 
 };
 
 const subscribeChatInserts = (chatId, onInsert) => {
+  console.log("[GroupChat][RT] subscribeChatInserts — channel:", `messages-${chatId}`);
   const channel = supabase
     .channel(`messages-${chatId}`)
     .on(
@@ -142,11 +137,15 @@ const subscribeChatInserts = (chatId, onInsert) => {
         event: "INSERT",
         schema: "public",
         table: "messages",
-        filter: `chat=eq.${chatId}`,
+        filter: `chat_id=eq.${chatId}`,
       },
-      (payload) => onInsert?.(payload.new)
+      (payload) => {
+        console.log("[GroupChat][RT] messages INSERT received, chat_id:", payload.new?.chat_id, "sender:", payload.new?.sender_username);
+        onInsert?.(payload.new);
+      }
     )
     .subscribe((status, err) => {
+      console.log("[GroupChat][RT] messages subscribe status:", status, err ? err.message : "");
       if (err) console.warn("[GroupChat realtime] error:", err.message);
     });
   return () => supabase.removeChannel(channel);
@@ -190,6 +189,8 @@ export default function GroupChatScreen({ navigation, route }) {
   const [deletedModal, setDeletedModal] = useState(false);
   const [promotedModal, setPromotedModal] = useState(false);
 
+  const [myUserId, setMyUserId] = useState(null);
+
   const [text, setText] = useState("");
   const [sendingMedia, setSendingMedia] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
@@ -225,21 +226,17 @@ export default function GroupChatScreen({ navigation, route }) {
   }, [navigation, groupName, chatId]);
 
   const handleDeleted = (deletedId) => {
-    const wasLast =
-      items.length > 0 && String(items[items.length - 1].id) === String(deletedId);
     setItems((prev) => prev.filter((m) => String(m.id) !== String(deletedId)));
 
-    // If the deleted message was the snippet shown in ChatList, repair chat_threads
-    if (wasLast && chatId) {
+    // Always update ALL chat_threads rows for this chat so every participant's
+    // realtime subscription fires and they reconcile the deleted message.
+    if (chatId) {
       (async () => {
         try {
-          const { data: auth } = await supabase.auth.getUser();
-          const uid = auth?.user?.id;
-          if (!uid) return;
           const { data: last } = await supabase
             .from("messages")
-            .select("content, media_reference, post_id, sent_date, sent_time, sender_is_me, sender_username")
-            .eq("chat", chatId)
+            .select("content, media_reference, post_id, sent_date, sent_time, sender_username")
+            .eq("chat_id", chatId)
             .eq("is_group", true)
             .order("sent_date", { ascending: false })
             .order("sent_time", { ascending: false })
@@ -253,7 +250,6 @@ export default function GroupChatScreen({ navigation, route }) {
                     last_content: last.content || null,
                     last_media_reference: last.media_reference || null,
                     last_post_id: last.post_id || null,
-                    last_sender_is_me: !!last.sender_is_me,
                     last_sender_username: last.sender_username || null,
                     last_sent_at: `${last.sent_date}T${last.sent_time}`,
                   }
@@ -261,13 +257,17 @@ export default function GroupChatScreen({ navigation, route }) {
                     last_content: null,
                     last_media_reference: null,
                     last_post_id: null,
-                    last_sender_is_me: null,
                     last_sender_username: null,
                     last_sent_at: null,
                   }
             )
-            .eq("chat_id", chatId)
-            .eq("owner_id", uid);
+            .eq("chat_id", chatId);
+          // Fix last_sender_is_me for the deleter's own row
+          if (last && myUserId) {
+            await supabase.from("chat_threads")
+              .update({ last_sender_is_me: last.sender_username === myUsername })
+              .eq("chat_id", chatId).eq("owner_id", myUserId);
+          }
         } catch (e) {
           console.warn("[GroupChat] thread repair failed", e?.message);
         }
@@ -369,6 +369,7 @@ export default function GroupChatScreen({ navigation, route }) {
     (async () => {
       try {
         const uid = await getUserId();
+        if (mounted) setMyUserId(uid);
 
         // Check if current user is a group admin + load review_links
         const { data: groupRow } = await supabase
@@ -399,7 +400,7 @@ export default function GroupChatScreen({ navigation, route }) {
         }
 
         // 2) refresh (enriched) and persist
-        const fresh = await fetchGroupMessagesEnriched(chatId, 50);
+        const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
         const filteredFresh = (fresh || []).filter((it) => !isJoinBannerItem(it));
 
         if (mounted) {
@@ -476,6 +477,52 @@ export default function GroupChatScreen({ navigation, route }) {
     return un;
   }, [chatId, myUsername]);
 
+  // chat_threads supplement — same mechanism as ChatListScreen; catches new messages
+  // on both iOS and Android even when the messages-table subscription misses them.
+  useEffect(() => {
+    if (!chatId || !myUserId) return () => {};
+    console.log("[GroupChat][RT] chat_threads supplement setup — chatId:", chatId, "myUserId:", myUserId);
+
+    const channel = supabase
+      .channel(`chat-threads-group-${chatId}-${myUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "chat_threads" },
+        async (payload) => {
+          const row = payload.new;
+          console.log("[GroupChat][RT] chat_threads event received — event:", payload.eventType, "owner_id:", row?.owner_id, "chat_id:", row?.chat_id, "myUserId:", myUserId, "chatId:", chatId);
+          if (!row || row.owner_id !== myUserId || row.chat_id !== chatId) {
+            console.log("[GroupChat][RT] chat_threads filtered out");
+            return;
+          }
+          console.log("[GroupChat][RT] chat_threads match — fetching fresh messages");
+          const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
+          const filtered = (fresh || []).filter((it) => !isJoinBannerItem(it));
+          console.log("[GroupChat][RT] chat_threads fetch returned", filtered?.length, "items");
+          setItems((prev) => {
+            const freshIds = new Set(filtered.map((m) => String(m.id)));
+            const existingIds = new Set(prev.map((m) => String(m.id)));
+            const newItems = filtered.filter((m) => !existingIds.has(String(m.id)));
+            const removedCount = prev.filter((m) => !freshIds.has(String(m.id))).length;
+            if (newItems.length === 0 && removedCount === 0) {
+              console.log("[GroupChat][RT] chat_threads — no changes");
+              return prev;
+            }
+            console.log("[GroupChat][RT] chat_threads — adding", newItems.length, "new, removing", removedCount);
+            const reconciled = [...prev.filter((m) => freshIds.has(String(m.id))), ...newItems];
+            setCachedGroupMessages(chatId, reconciled).catch(() => {});
+            return reconciled;
+          });
+          setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 100);
+        }
+      )
+      .subscribe((status, err) => {
+        console.log("[GroupChat][RT] chat_threads subscribe status:", status, err ? err.message : "");
+      });
+
+    return () => supabase.removeChannel(channel);
+  }, [chatId, myUserId]);
+
   // Keep isAdminRef in sync so the subscription callback avoids stale closure
   useEffect(() => { isAdminRef.current = isAdmin; }, [isAdmin]);
 
@@ -515,14 +562,19 @@ export default function GroupChatScreen({ navigation, route }) {
     return () => supabase.removeChannel(channel);
   }, [chatId, myUsername]);
 
-  // Mark read on focus
+  // Mark read on focus + refetch messages so deleted/new messages are always current
   useFocusEffect(
     useCallback(() => {
       if (!chatId) return undefined;
-      // Patch cache immediately (sync) so dot clears the moment user goes back
-      markChatReadInCache(chatId);
-      // RPC marks messages read + recalculates unread_count server-side in one call
-      (async () => { try { await supabase.rpc("mark_chat_read", { p_chat_id: chatId }); } catch {} })();
+      setLastVisited(chatId);
+      (async () => {
+        try {
+          const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
+          const filtered = (fresh || []).filter((it) => !isJoinBannerItem(it));
+          setItems(filtered);
+          setCachedGroupMessages(chatId, filtered).catch(() => {});
+        } catch {}
+      })();
       return undefined;
     }, [chatId])
   );
@@ -561,9 +613,9 @@ export default function GroupChatScreen({ navigation, route }) {
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
 
       try {
-        const owner_id = await getUserId();
+        const sender_id = await getUserId();
         const mediaUrl = await uploadChatMedia({ uri, chatId });
-        const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, owner_id });
+        const row = await sendMediaRow({ chatId, mediaUrl, caption, senderUsername: myUsername, sender_id });
 
         const fp = `${row.sent_date}T${row.sent_time}-${row.media_reference}-ins`;
         if (optimisticIds.current.size > 500) optimisticIds.current.clear();
@@ -663,11 +715,10 @@ export default function GroupChatScreen({ navigation, route }) {
     optimisticIds.current.add(key);
 
     try {
-      const owner_id = await getUserId();
-      await sendTextRow({ chatId, text: msg, owner_id, senderUsername: myUsername });
-    } catch (e) {
-      setItems((p) => p.filter((m) => m.id !== optimistic.id));
-      Alert.alert("Message not sent", e?.message || "Please try again.");
+      const sender_id = await getUserId();
+      await sendTextRow({ chatId, text: msg, sender_id, senderUsername: myUsername });
+    } catch {
+      setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
     }
   }, [chatId, text, pendingImage, myUsername]);
 
@@ -691,9 +742,9 @@ export default function GroupChatScreen({ navigation, route }) {
     setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
     try {
       const { data: auth } = await supabase.auth.getUser();
-      const owner_id = auth?.user?.id;
-      if (!owner_id) throw new Error("Not authenticated");
-      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, owner_id });
+      const sender_id = auth?.user?.id;
+      if (!sender_id) throw new Error("Not authenticated");
+      const row = await sendLocationRow({ chatId, locationData, senderUsername: myUsername, sender_id });
       const realItem = {
         id: row.id,
         type: "location",
@@ -705,7 +756,7 @@ export default function GroupChatScreen({ navigation, route }) {
       };
       setItems((prev) => prev.map((m) => (m.id === optimisticId ? realItem : m)));
     } catch {
-      setItems((p) => p.filter((m) => m.id !== optimisticId));
+      setItems((p) => p.map((m) => m.id === optimisticId ? { ...m, failed: true } : m));
     }
   }, [chatId, myUsername]);
 
@@ -791,6 +842,21 @@ export default function GroupChatScreen({ navigation, route }) {
     setPendingImage({ uri: asset.uri, type: isVid ? "video" : "image" });
   }, []);
 
+  const retrySend = useCallback(async (failedItem) => {
+    setItems((p) => p.map((m) => m.id === failedItem.id ? { ...m, failed: false } : m));
+    try {
+      const sender_id = await getUserId();
+      if (failedItem.type === "text") {
+        await sendTextRow({ chatId, text: failedItem.text, sender_id, senderUsername: myUsername });
+      } else if (failedItem.type === "location") {
+        await sendLocationRow({ chatId, locationData: failedItem.locationData, sender_id, senderUsername: myUsername });
+      }
+      setItems((p) => p.filter((m) => m.id !== failedItem.id));
+    } catch {
+      setItems((p) => p.map((m) => m.id === failedItem.id ? { ...m, failed: true } : m));
+    }
+  }, [chatId, myUsername]);
+
   const renderItem = ({ item, index }) => {
     const prev = index > 0 ? items[index - 1] : null;
     const next = index < items.length - 1 ? items[index + 1] : null;
@@ -807,7 +873,7 @@ export default function GroupChatScreen({ navigation, route }) {
     let body = null;
     switch (item.type) {
       case "text":
-        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} isAdmin={isAdmin} groupId={chatId} onKick={handleKick} />;
+        body = <TextMessage {...item} time={displayTime} onDeleted={handleDeleted} senderName={senderDisplayName} isAdmin={isAdmin} groupId={chatId} onKick={handleKick} onRetry={item.failed ? () => retrySend(item) : undefined} />;
         break;
       case "media":
         body = <MediaMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
@@ -822,7 +888,7 @@ export default function GroupChatScreen({ navigation, route }) {
         body = <InviteMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
         break;
       case "location":
-        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} />;
+        body = <LocationMessage {...item} time={displayTime} onDeleted={handleDeleted} onRetry={item.failed ? () => retrySend(item) : undefined} />;
         break;
       // join_banner intentionally hidden
       default:

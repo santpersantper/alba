@@ -116,18 +116,11 @@ export default function DMUsersModal({
       setSending(true);
 
       const { data: auth, error: aErr } = await supabase.auth.getUser();
-      const owner_id = auth?.user?.id;
-      if (aErr || !owner_id) return;
+      const sender_id = auth?.user?.id;
+      if (aErr || !sender_id) return;
 
       const usernames = (users || []).map((u) => u?.username).filter(Boolean);
       if (!usernames.length) return;
-
-      const { data: recips, error } = await supabase
-        .from("profiles")
-        .select("id, username")
-        .in("username", usernames);
-
-      if (error) throw error;
 
       const now = new Date();
       const sent_date = now.toISOString().slice(0, 10);
@@ -135,14 +128,21 @@ export default function DMUsersModal({
 
       const rows = [];
 
-      for (const p of recips || []) {
+      for (const username of usernames) {
+        // Get or create the DM chat_id for this recipient
+        const { data: chatId, error: chatErr } = await supabase.rpc("get_or_create_dm_chat", {
+          p_peer_username: username,
+        });
+        if (chatErr || !chatId) {
+          console.warn("[DMUsersModal] could not resolve chat_id for", username, chatErr?.message);
+          continue;
+        }
+
         const base = {
-          chat: p.id,
+          chat_id: chatId,
           is_group: false,
-          owner_id,
+          sender_id,
           sender_username: meUsername || "me",
-          sender_is_me: true,
-          is_read: true,
           sent_date,
           sent_time,
         };

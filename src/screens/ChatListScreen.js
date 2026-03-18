@@ -32,6 +32,7 @@ import {
   invalidateChatListCache,
   removeChatFromCache,
 } from "../lib/chatListCache";
+import { getLastVisitedMap } from "../lib/chatLastVisited";
 
 
 const prettifyUsername = (u) =>
@@ -90,6 +91,8 @@ export default function ChatListScreen({ navigation }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(null);
 
+  const [lastVisitedMap, setLastVisitedMap] = useState({});
+
   const [ready, setReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMenu, setChatMenu] = useState(null); // { item } | null
@@ -118,7 +121,11 @@ export default function ChatListScreen({ navigation }) {
   }, [currentLocation]);
 
   const hydrateFromCacheFast = useCallback(async (uid) => {
-    const cached = await getCachedChatListData(uid);
+    const [cached, visited] = await Promise.all([
+      getCachedChatListData(uid),
+      getLastVisitedMap(),
+    ]);
+    setLastVisitedMap(visited || {});
     if (!cached) return false;
 
     setThreads(cached.threads || []);
@@ -133,7 +140,11 @@ export default function ChatListScreen({ navigation }) {
 
   const refreshInBackground = useCallback(async (uid) => {
     try {
-      const fresh = await preloadChatListData(uid, { limit: 120 });
+      const [fresh, visited] = await Promise.all([
+        preloadChatListData(uid, { limit: 120 }),
+        getLastVisitedMap(),
+      ]);
+      setLastVisitedMap(visited || {});
       if (!fresh) return;
 
       setThreads(fresh.threads || []);
@@ -231,7 +242,9 @@ export default function ChatListScreen({ navigation }) {
       const avatarUri = isGroup ? groupMeta.avatarUrl || null : dmMeta.avatarUrl || null;
       const members = isGroup ? groupMeta.members || [] : [];
 
-      const unreadCount = Number(th.unread_count || 0);
+      const lastVisitedMs = lastVisitedMap[String(chatId)] || 0;
+      const lastSentMs = th.last_sent_at ? new Date(th.last_sent_at).getTime() : 0;
+      const unreadCount = (!th.last_sender_is_me && lastSentMs > lastVisitedMs) ? 1 : 0;
       const isBlocked = !isGroup && username && blockedUsers.includes(username);
 
       const actorBase = th?.last_sender_is_me
@@ -349,7 +362,7 @@ export default function ChatListScreen({ navigation }) {
     });
 
     return items;
-  }, [threads, dmMap, groupMap, blockedUsers, t]);
+  }, [threads, dmMap, groupMap, blockedUsers, lastVisitedMap, t]);
 
   // ---------------- search ----------------
 

@@ -202,7 +202,7 @@ export default function ShareMenu({
     };
   }, []);
 
-  // recent chats (messages only) => already chronological
+  // recent chats from chat_threads (ordered by last_sent_at)
   useEffect(() => {
     let alive = true;
     if (!visible || !meId) return;
@@ -211,45 +211,30 @@ export default function ShareMenu({
       try {
         setLoadingGrid(true);
 
-        const { data: msgs, error: mErr } = await supabase
-          .from("messages")
-          .select("chat, sent_date, sent_time")
+        const { data: threads, error: tErr } = await supabase
+          .from("chat_threads")
+          .select("chat_id, is_group, peer_id, last_sent_at")
           .eq("owner_id", meId)
-          .not("chat", "is", null)
-          .order("sent_date", { ascending: false })
-          .order("sent_time", { ascending: false })
-          .limit(800);
+          .order("last_sent_at", { ascending: false, nullsLast: true })
+          .limit(6);
 
-        if (mErr) throw mErr;
-
-        const seen = new Set();
-        const recentChatIds = [];
-        for (const m of msgs || []) {
-          const chatId = m.chat;
-          if (!chatId || seen.has(chatId)) continue;
-          seen.add(chatId);
-          recentChatIds.push(chatId);
-          if (recentChatIds.length >= 6) break;
-        }
+        if (tErr) throw tErr;
+        if (!threads?.length) { if (alive) setAccounts([]); return; }
 
         const rankMap = {};
-        recentChatIds.forEach((id, idx) => (rankMap[id] = idx));
+        threads.forEach((t, idx) => (rankMap[String(t.chat_id)] = idx));
         recentRankRef.current = rankMap;
 
-        if (!recentChatIds.length) {
-          if (alive) setAccounts([]);
-          return;
-        }
+        const groupChatIds = threads.filter((t) => t.is_group).map((t) => t.chat_id);
+        const dmPeerIds    = threads.filter((t) => !t.is_group && t.peer_id).map((t) => t.peer_id);
 
         const [{ data: groups }, { data: profs }] = await Promise.all([
-          supabase
-            .from("groups")
-            .select("id, groupname, group_pic_link")
-            .in("id", recentChatIds),
-          supabase
-            .from("profiles")
-            .select("id, username, name, avatar_url")
-            .in("id", recentChatIds),
+          groupChatIds.length
+            ? supabase.from("groups").select("id, groupname, group_pic_link").in("id", groupChatIds)
+            : Promise.resolve({ data: [] }),
+          dmPeerIds.length
+            ? supabase.from("profiles").select("id, username, name, avatar_url").in("id", dmPeerIds)
+            : Promise.resolve({ data: [] }),
         ]);
 
         const groupsById = {};
@@ -257,25 +242,26 @@ export default function ShareMenu({
         const profilesById = {};
         (profs || []).forEach((p) => (profilesById[p.id] = p));
 
-        const mapped = recentChatIds
-          .map((chatId) => {
-            const g = groupsById[chatId];
-            if (g) {
+        const mapped = threads
+          .map((t) => {
+            if (t.is_group) {
+              const g = groupsById[t.chat_id];
+              if (!g) return null;
               return {
-                id: chatId,
-                chatId,
+                id: String(t.chat_id),
+                chatId: t.chat_id,
                 isGroup: true,
                 handle: g.groupname || tx("group_label", "Group"),
                 uri: g.group_pic_link || "https://placehold.co/96x96",
               };
-            }
-            const p = profilesById[chatId];
-            if (p) {
+            } else {
+              const p = t.peer_id ? profilesById[t.peer_id] : null;
+              if (!p) return null;
               const username = p.username || "";
               const displayName = p.name || prettifyUsername(username);
               return {
-                id: chatId,
-                chatId,
+                id: String(t.chat_id),
+                chatId: t.chat_id,
                 isGroup: false,
                 username,
                 name: displayName,
@@ -283,11 +269,10 @@ export default function ShareMenu({
                 uri: p.avatar_url || "https://placehold.co/96x96",
               };
             }
-            return null;
           })
           .filter(Boolean);
 
-        if (alive) setAccounts(mapped.slice(0, 6));
+        if (alive) setAccounts(mapped);
       } catch (e) {
         console.error("ShareMenu load recent chats error", e);
         if (alive) setAccounts([]);
@@ -400,7 +385,7 @@ export default function ShareMenu({
       if (userErr || !userData?.user?.id)
         throw userErr || new Error("Not authenticated");
 
-      const owner_id = userData.user.id;
+      const sender_id = userData.user.id;
 
       const now = new Date();
       const sent_date = now.toISOString().slice(0, 10);
@@ -409,12 +394,10 @@ export default function ShareMenu({
       const rows = [];
       for (const target of targets) {
         const base = {
-          chat: target.chatId,
+          chat_id: target.chatId,
           is_group: !!target.isGroup,
-          owner_id,
+          sender_id,
           sender_username: meUsername || "me",
-          sender_is_me: true,
-          is_read: true,
           sent_date,
           sent_time,
         };

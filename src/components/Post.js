@@ -704,16 +704,13 @@ export default function Post(props) {
         const sent_time = now.toTimeString().slice(0, 8);
 
         await supabase.from("messages").insert({
-          owner_id: uid,
-          chat: groupRow.id,
+          sender_id: uid,
+          chat_id: groupRow.id,
           is_group: true,
-          sender_is_me: true,
           sender_username: myUname,
           content: `You joined ${groupRow.groupname || desiredName}.`,
           media_reference: null,
-          post_reference: null,
           post_id: null,
-          is_read: true,
           sent_date,
           sent_time,
         });
@@ -978,7 +975,7 @@ export default function Post(props) {
                     );
                   }}
                 >
-                  <ThemedText style={[styles.subtitle, styles.locationText]}>{rawLocation}</ThemedText>
+                  <ThemedText style={[styles.subtitle, { color: isDark ? "#AAAAAA" : "#0D2B6B" }]}>{rawLocation}</ThemedText>
                 </TouchableOpacity>
               )}
             </View>
@@ -1268,7 +1265,6 @@ const styles = StyleSheet.create({
   avatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10, backgroundColor: "#18314f" },
   handleLine: { fontSize: 14, fontFamily: "PoppinsBold" },
   subtitle: { fontSize: 12, fontFamily: "Poppins" },
-  locationText: { color: "#0D2B6B" },
 
   title: { fontSize: 18, marginBottom: 8, fontFamily: "PoppinsBold", paddingLeft: 10, paddingRight: 10 },
   description: { fontSize: 14, marginBottom: 4, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },

@@ -190,7 +190,7 @@ export default function MediaMessage({
     if (!id) { setConfirmVisible(false); return; }
     try {
       setDeleting(true);
-      const { error } = await supabase.from("messages").delete().eq("id", id);
+      const { error } = await supabase.rpc("delete_chat_message", { p_message_id: id });
       if (error) throw error;
       setConfirmVisible(false);
       onDeleted?.(id);

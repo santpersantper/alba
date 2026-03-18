@@ -100,9 +100,10 @@ export async function fetchGroupMessagesRows(chatId, limit = 200) {
   try {
     const { data, error } = await supabase
       .from("messages")
-      .select("id, chat, is_group, owner_id, sender_username, sender_is_me, content, media_reference, post_reference, sent_date, sent_time, is_read, post_id, group_id, sent_at")
-      .eq("chat", chatId)
-      .order("sent_at", { ascending: true, nullsFirst: true })
+      .select("id, chat_id, is_group, sender_id, sender_username, content, media_reference, sent_date, sent_time, post_id, group_id")
+      .eq("chat_id", chatId)
+      .order("sent_date", { ascending: true })
+      .order("sent_time", { ascending: true })
       .limit(limit);
 
     if (error) throw error;
@@ -113,7 +114,7 @@ export async function fetchGroupMessagesRows(chatId, limit = 200) {
 }
 
 /* ---------------- mapping: row -> item ---------------- */
-export function mapMessageRowToItem(row) {
+export function mapMessageRowToItem(row, myUserId = null) {
   if (!row) return null;
 
   // join banner
@@ -132,7 +133,7 @@ export function mapMessageRowToItem(row) {
 
   const base = {
     id: row.id,
-    isMe: !!row.sender_is_me,
+    isMe: myUserId ? row.sender_id === myUserId : !!row.sender_is_me,
     senderUsername: row.sender_username || null,
     minuteKey: makeMinuteKey(row.sent_date, row.sent_time),
     time: (row.sent_time || "").slice(0, 5),
@@ -253,9 +254,9 @@ async function fetchGroupsPreview(groupIds) {
  * Fetch + map + enrich (postPreview/groupPreview embedded into items)
  * Use small limits for prewarm (e.g. 5) and bigger for real screen (e.g. 200).
  */
-export async function fetchGroupMessagesEnriched(chatId, limit = 200) {
+export async function fetchGroupMessagesEnriched(chatId, limit = 200, myUserId = null) {
   const rows = await fetchGroupMessagesRows(chatId, limit);
-  const items = (rows || []).map(mapMessageRowToItem).filter(Boolean);
+  const items = (rows || []).map((r) => mapMessageRowToItem(r, myUserId)).filter(Boolean);
 
   const postIds = [];
   const groupIds = [];
