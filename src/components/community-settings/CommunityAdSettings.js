@@ -23,10 +23,14 @@ export default function AdSettings({ navigation }) {
 
   const fetchPayoutStatus = async () => {
     try {
-      const { data } = await supabase.functions.invoke("stripe-connect", {
-        body: { action: "status-profile" },
-      });
-      if (data?.status) setPayoutStatus(data.status);
+      const { data } = await supabase
+        .from("profiles")
+        .select("stripe_account_id, stripe_onboarding_complete")
+        .eq("id", userId)
+        .maybeSingle();
+      if (!data?.stripe_account_id) setPayoutStatus("not_started");
+      else if (data.stripe_onboarding_complete) setPayoutStatus("complete");
+      else setPayoutStatus("pending");
     } catch {
       // non-critical
     }

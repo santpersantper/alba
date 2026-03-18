@@ -33,12 +33,16 @@ export default function CommunityEventSettings() {
 
   const fetchPayoutStatus = async (gId) => {
     try {
-      const { data } = await supabase.functions.invoke("stripe-connect", {
-        body: { action: "status-group", groupId: gId },
-      });
-      if (data?.status) setPayoutStatus(data.status);
+      const { data } = await supabase
+        .from("groups")
+        .select("stripe_account_id, stripe_onboarding_complete")
+        .eq("id", gId)
+        .maybeSingle();
+      if (!data?.stripe_account_id) setPayoutStatus("not_started");
+      else if (data.stripe_onboarding_complete) setPayoutStatus("complete");
+      else setPayoutStatus("pending");
     } catch {
-      // silently ignore — non-critical
+      // non-critical
     }
   };
 
