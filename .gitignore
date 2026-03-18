@@ -44,3 +44,4 @@ credentials.json
 google-services.json
 .idea/
 .expo/
+*.ipa
