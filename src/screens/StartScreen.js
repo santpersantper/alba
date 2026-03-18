@@ -21,7 +21,6 @@ import { supabase } from '../lib/supabase';
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
 import * as Linking from 'expo-linking';
 
 // Required for expo-web-browser to close the auth session on redirect
@@ -29,16 +28,6 @@ WebBrowser.maybeCompleteAuthSession();
 
 const { height } = Dimensions.get('window');
 
-// Google OAuth Client IDs
-const GOOGLE_WEB_CLIENT_ID =
-  '1060018833152-f4u66s1ffklf2pphtfmmi23irf2m6mmg.apps.googleusercontent.com';
-// iOS OAuth client — bundle ID: host.exp.Exponent (Expo Go testing)
-// For production builds, create a separate iOS client with bundle ID com.alba.app
-const GOOGLE_IOS_CLIENT_ID = '1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi.apps.googleusercontent.com';
-// Android OAuth client — required by expo-auth-session to satisfy its invariant check on
-// Android (it throws at mount if androidClientId is absent). The actual sign-in on Android
-// goes through handleAndroidGoogleSignIn (Supabase OAuth) — promptAsync is never called.
-const GOOGLE_ANDROID_CLIENT_ID = '1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq.apps.googleusercontent.com';
 
 export default function StartScreen({ navigation }) {
   const { theme, isDark } = useAlbaTheme();
@@ -62,19 +51,6 @@ export default function StartScreen({ navigation }) {
   const [alertConfig, setAlertConfig] = useState(null);
   const showAlert = (title, message) => setAlertConfig({ title, message });
 
-  // Google OAuth via expo-auth-session → signInWithIdToken
-  // NOTE: iosClientId is intentionally omitted. When set, expo-auth-session uses the native
-  // iOS Google client and the resulting ID token has the iOS client ID as its `aud` claim.
-  // Supabase validates `aud` against its configured web client ID → "Unacceptable audience"
-  // error. Omitting iosClientId forces the PKCE/browser flow on iOS so the token always
-  // carries the web client ID as audience, which matches Supabase's setting.
-  // androidClientId is still required to satisfy expo-auth-session's invariant on Android
-  // (promptAsync is never called on Android — Android routes to handleAndroidGoogleSignIn).
-  const [_request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
-  });
-
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -83,42 +59,6 @@ export default function StartScreen({ navigation }) {
       }
     })();
   }, [navigation]);
-
-  // Handle Google OAuth response
-  useEffect(() => {
-    if (!response) return;
-
-    if (response.type === 'success') {
-      const idToken = response.authentication?.idToken;
-      const accessToken = response.authentication?.accessToken;
-      if (!idToken) {
-        showAlert('Google sign in failed', 'No ID token received. Please try again.');
-        setGoogleLoading(false);
-        return;
-      }
-      (async () => {
-        try {
-          const { error } = await supabase.auth.signInWithIdToken({
-            provider: 'google',
-            token: idToken,
-            access_token: accessToken,
-          });
-          if (error) throw error;
-          // AppNavigator's onAuthStateChange handles navigation.
-          // For new Google users, ProfileSetupModal will appear automatically.
-        } catch (e) {
-          showAlert('Google sign in failed', e.message || 'Please try again.');
-        } finally {
-          setGoogleLoading(false);
-        }
-      })();
-    } else if (response.type === 'error') {
-      showAlert('Google sign in failed', response.error?.message || 'Please try again.');
-      setGoogleLoading(false);
-    } else if (response.type === 'dismiss' || response.type === 'cancel') {
-      setGoogleLoading(false);
-    }
-  }, [response]);
 
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? '#222' : '#FFFFFF' }} />;
 
@@ -155,12 +95,11 @@ export default function StartScreen({ navigation }) {
     }
   };
 
-  // Android: Google blocks Android-type OAuth clients in browser flows (Error 400).
-  // Use Supabase's OAuth flow instead. Note: openAuthSessionAsync on Android sometimes
-  // returns just 'alba://' (bare scheme, no params) because the Chrome Custom Tab closes
-  // when the Android intent system intercepts the deep link. We use Linking.addEventListener
-  // as the primary URL capture and fall back to openAuthSessionAsync's return value.
-  const handleAndroidGoogleSignIn = async () => {
+  // Google sign-in via Supabase OAuth browser flow — works on both iOS and Android.
+  // On Android, the Chrome Custom Tab sometimes closes before the redirect is captured,
+  // so we use Linking.addEventListener as the primary URL capture with openAuthSessionAsync
+  // as fallback.
+  const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
     let settled = false;
 
@@ -232,12 +171,7 @@ export default function StartScreen({ navigation }) {
   };
 
   const onGoogleSignIn = () => {
-    if (Platform.OS === 'android') {
-      handleAndroidGoogleSignIn();
-    } else {
-      setGoogleLoading(true);
-      promptAsync();
-    }
+    handleGoogleSignIn();
   };
 
   const onForgotPassword = async () => {
