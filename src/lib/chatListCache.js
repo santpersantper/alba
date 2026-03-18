@@ -26,7 +26,7 @@ async function fetchThreads(ownerId, limit = 80) {
     const { data, error } = await supabase
       .from("chat_threads")
       .select(
-        "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference"
+        "owner_id,chat_id,is_group,last_sent_at,last_sender_is_me,last_sender_username,last_content,last_media_reference,last_post_id,last_post_reference,peer_profile_id"
       )
       .eq("owner_id", ownerId)
       .order("last_sent_at", { ascending: false, nullsFirst: true })
@@ -188,8 +188,8 @@ export async function preloadChatListData(uid, { limit = 80 } = {}) {
     threads = threads.filter((t) => !deletedIds.has(String(t.chat_id)));
   }
 
-  // in your model: chat_id == peer profile id (DM) OR group id (group)
-  const dmIds = threads.filter((x) => !x.is_group).map((x) => x.chat_id).filter(Boolean);
+  // For DMs, use peer_profile_id (the peer's user ID) — chat_id is now a unique chat UUID
+  const dmIds = threads.filter((x) => !x.is_group).map((x) => x.peer_profile_id).filter(Boolean);
   const groupIds = threads.filter((x) => !!x.is_group).map((x) => x.chat_id).filter(Boolean);
 
   const senderUsernames = threads

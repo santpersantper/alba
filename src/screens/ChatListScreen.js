@@ -231,7 +231,7 @@ export default function ChatListScreen({ navigation }) {
       const chatId = th.chat_id;
       const isGroup = !!th.is_group;
 
-      const dmMeta = !isGroup ? dmMap[chatId] || {} : {};
+      const dmMeta = !isGroup ? dmMap[th.peer_profile_id] || {} : {};
       const groupMeta = isGroup ? groupMap[chatId] || {} : {};
 
       const username = !isGroup ? dmMeta.username || "" : null;

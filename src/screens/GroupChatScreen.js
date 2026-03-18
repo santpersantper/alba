@@ -399,8 +399,8 @@ export default function GroupChatScreen({ navigation, route }) {
           setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
         }
 
-        // 2) refresh (enriched) and persist
-        const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
+        // 2) refresh (enriched) and persist — use local uid, not state (state update is async)
+        const fresh = await fetchGroupMessagesEnriched(chatId, 50, uid);
         const filteredFresh = (fresh || []).filter((it) => !isJoinBannerItem(it));
 
         if (mounted) {
@@ -569,14 +569,15 @@ export default function GroupChatScreen({ navigation, route }) {
       setLastVisited(chatId);
       (async () => {
         try {
-          const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
+          const uid = myUserId || await getUserId();
+          const fresh = await fetchGroupMessagesEnriched(chatId, 50, uid);
           const filtered = (fresh || []).filter((it) => !isJoinBannerItem(it));
           setItems(filtered);
           setCachedGroupMessages(chatId, filtered).catch(() => {});
         } catch {}
       })();
       return undefined;
-    }, [chatId])
+    }, [chatId, myUserId])
   );
 
   // Send
