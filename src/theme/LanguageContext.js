@@ -369,6 +369,7 @@ const STRINGS = {
     payout_reset_ad: "Reset ad preference settings",
     payout_instructions_label: "Instructions",
     payout_instructions_helper: "Not sure how to set up payouts? See instructions on our website",
+    payout_disconnect: "Disconnect Stripe",
 
     /* ---------- Ad Dashboard (AdPublisherScreen) ---------- */
     ad_dashboard_title: "Ad Dashboard",
@@ -860,6 +861,7 @@ const STRINGS = {
     payout_reset_ad: "Ripristina impostazioni annunci",
     payout_instructions_label: "Istruzioni",
     payout_instructions_helper: "Non sai come configurare i pagamenti? Consulta le istruzioni sul nostro sito",
+    payout_disconnect: "Disconnetti Stripe",
 
     /* ---------- Ad Dashboard (AdPublisherScreen) ---------- */
     ad_dashboard_title: "Dashboard Annunci",

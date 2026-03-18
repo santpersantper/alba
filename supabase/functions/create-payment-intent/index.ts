@@ -47,7 +47,7 @@ serve(async (req) => {
     if (eventId) metadata.eventId = String(eventId);
     if (type) metadata.type = type;
 
-    // Resolve connected Stripe account for ticket payments (eventId present, no type).
+    // Resolve connected Stripe account for ticket/product payments (eventId present, no type).
     // Premium/diffusion payments go to the platform account (no transfer_data).
     let connectedAccountId: string | null = null;
 
@@ -58,48 +58,34 @@ serve(async (req) => {
         { auth: { autoRefreshToken: false, persistSession: false } }
       );
 
-      // Look up the post to find group_id and author_id (organiser UUID)
+      // Read stripe directly from the post row
       const { data: post } = await supabaseAdmin
         .from("posts")
-        .select("group_id, author_id")
+        .select("stripe_account_id, stripe_onboarding_complete, author_id")
         .eq("id", eventId)
         .maybeSingle();
 
-      if (post?.group_id) {
-        // Event belongs to a group — use group's connected account
-        const { data: group } = await supabaseAdmin
-          .from("groups")
-          .select("stripe_account_id, stripe_onboarding_complete")
-          .eq("id", post.group_id)
-          .maybeSingle();
+      let stripeAccountId: string | null = post?.stripe_account_id ?? null;
+      let stripeComplete: boolean = !!post?.stripe_onboarding_complete;
 
-        if (group?.stripe_onboarding_complete && group?.stripe_account_id) {
-          // Verify the account is actually charges_enabled in Stripe
-          try {
-            const acct = await stripe.accounts.retrieve(group.stripe_account_id);
-            if (acct.charges_enabled) connectedAccountId = group.stripe_account_id;
-            else console.warn("Group Stripe account not charges_enabled:", group.stripe_account_id);
-          } catch (e) {
-            console.warn("Failed to retrieve group Stripe account:", e);
-          }
-        }
-      } else if (post?.author_id) {
-        // Personal event — use the organiser's connected account
+      // Fallback: if post doesn't have stripe set, try the author's profile
+      if ((!stripeAccountId || !stripeComplete) && post?.author_id) {
         const { data: profile } = await supabaseAdmin
           .from("profiles")
           .select("stripe_account_id, stripe_onboarding_complete")
           .eq("id", post.author_id as string)
           .maybeSingle();
+        stripeAccountId = profile?.stripe_account_id ?? null;
+        stripeComplete = !!profile?.stripe_onboarding_complete;
+      }
 
-        if (profile?.stripe_onboarding_complete && profile?.stripe_account_id) {
-          // Verify the account is actually charges_enabled in Stripe
-          try {
-            const acct = await stripe.accounts.retrieve(profile.stripe_account_id);
-            if (acct.charges_enabled) connectedAccountId = profile.stripe_account_id;
-            else console.warn("Profile Stripe account not charges_enabled:", profile.stripe_account_id);
-          } catch (e) {
-            console.warn("Failed to retrieve profile Stripe account:", e);
-          }
+      if (stripeComplete && stripeAccountId) {
+        try {
+          const acct = await stripe.accounts.retrieve(stripeAccountId);
+          if (acct.charges_enabled) connectedAccountId = stripeAccountId;
+          else console.warn("Stripe account not charges_enabled:", stripeAccountId);
+        } catch (e) {
+          console.warn("Failed to retrieve Stripe account:", e);
         }
       }
     }

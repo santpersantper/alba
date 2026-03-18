@@ -47,7 +47,7 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const { action, userId, groupId } = body;
+    const { action, userId } = body;
 
     // ─── onboard-profile ──────────────────────────────────────────────────────
     if (action === "onboard-profile") {
@@ -130,129 +130,6 @@ serve(async (req) => {
         JSON.stringify({
           status: complete ? "complete" : "pending",
           accountId: profileRow.stripe_account_id,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ─── onboard-group ────────────────────────────────────────────────────────
-    if (action === "onboard-group") {
-      if (!groupId) {
-        return new Response(
-          JSON.stringify({ error: "groupId is required." }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (!userId || userId !== user.id) {
-        return new Response(
-          JSON.stringify({ error: "userId does not match authenticated session." }),
-          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { data: groupRow, error: groupErr } = await supabaseAdmin
-        .from("groups")
-        .select("id, stripe_account_id, stripe_onboarding_complete")
-        .eq("id", groupId)
-        .maybeSingle();
-
-      if (groupErr || !groupRow) {
-        return new Response(
-          JSON.stringify({ error: "Group not found." }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Verify the caller is an admin of this group via groups.group_admin
-      const { data: profRow } = await supabaseAdmin
-        .from("profiles")
-        .select("username")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      const callerUsername = profRow?.username;
-      const { data: adminCheck } = callerUsername
-        ? await supabaseAdmin
-            .from("groups")
-            .select("id")
-            .eq("id", groupId)
-            .contains("group_admin", [callerUsername])
-            .maybeSingle()
-        : { data: null };
-
-      if (!adminCheck) {
-        return new Response(
-          JSON.stringify({ error: "Only the group organiser can set up payouts." }),
-          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      let accountId = groupRow.stripe_account_id;
-      if (!accountId) {
-        const account = await stripe.accounts.create({
-          type: "express",
-          country: "IT",
-          capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
-          metadata: { groupId: String(groupId) },
-        });
-        accountId = account.id;
-        await supabaseAdmin
-          .from("groups")
-          .update({ stripe_account_id: accountId })
-          .eq("id", groupId);
-      }
-
-      const accountLink = await stripe.accountLinks.create({
-        account: accountId,
-        refresh_url: `${APP_URL}/connect/refresh?groupId=${groupId}`,
-        return_url: `${APP_URL}/connect/return?groupId=${groupId}`,
-        type: "account_onboarding",
-      });
-
-      return new Response(
-        JSON.stringify({ url: accountLink.url }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ─── status-group ─────────────────────────────────────────────────────────
-    if (action === "status-group") {
-      if (!groupId) {
-        return new Response(
-          JSON.stringify({ error: "groupId is required." }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { data: groupRow } = await supabaseAdmin
-        .from("groups")
-        .select("stripe_account_id, stripe_onboarding_complete")
-        .eq("id", groupId)
-        .maybeSingle();
-
-      if (!groupRow?.stripe_account_id) {
-        return new Response(
-          JSON.stringify({ status: "not_started" }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const account = await stripe.accounts.retrieve(groupRow.stripe_account_id);
-      const complete =
-        account.details_submitted &&
-        !(account.requirements?.currently_due?.length);
-
-      if (complete && !groupRow.stripe_onboarding_complete) {
-        await supabaseAdmin
-          .from("groups")
-          .update({ stripe_onboarding_complete: true })
-          .eq("id", groupId);
-      }
-
-      return new Response(
-        JSON.stringify({
-          status: complete ? "complete" : "pending",
-          accountId: groupRow.stripe_account_id,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

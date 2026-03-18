@@ -623,10 +623,6 @@ export default function CreatePost() {
         const { error: evErr } = await supabase.from("events").insert({
           title, post_id: postId, ticket_holders: [], attendees_info: [],
           created_at: new Date().toISOString(),
-          ...(userStripeAccountId ? {
-            stripe_account_id: userStripeAccountId,
-            stripe_onboarding_complete: userStripeComplete,
-          } : {}),
         });
         if (evErr) throw evErr;
       }
