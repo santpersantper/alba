@@ -21,12 +21,12 @@ export default function AdSettings({ navigation }) {
   const [payoutStatus, setPayoutStatus] = useState(null); // null | "not_started" | "pending" | "complete"
   const [payoutLoading, setPayoutLoading] = useState(false);
 
-  const fetchPayoutStatus = async () => {
+  const fetchPayoutStatus = async (uid) => {
     try {
       const { data } = await supabase
         .from("profiles")
         .select("stripe_account_id, stripe_onboarding_complete")
-        .eq("id", userId)
+        .eq("id", uid)
         .maybeSingle();
       if (!data?.stripe_account_id) setPayoutStatus("not_started");
       else if (data.stripe_onboarding_complete) setPayoutStatus("complete");
@@ -71,7 +71,7 @@ export default function AdSettings({ navigation }) {
       if (error) throw new Error(error.message || "Failed to start onboarding");
       if (!data?.url) throw new Error("No onboarding URL received");
       await Linking.openURL(data.url);
-      setTimeout(() => fetchPayoutStatus(), 3000);
+      setTimeout(() => fetchPayoutStatus(userId), 3000);
     } catch (e) {
       console.warn("Ad payout onboarding error:", e.message);
       Alert.alert("Error", e.message || "Could not start payout setup. Please try again.");
@@ -99,8 +99,8 @@ export default function AdSettings({ navigation }) {
         if (!mounted || error || !data) return;
         if (Array.isArray(data.ad_tags)) setTags(data.ad_tags);
 
-        // Load payout status
-        if (mounted) await fetchPayoutStatus();
+        // Load payout status — pass u.id directly (userId state not yet updated)
+        if (mounted) await fetchPayoutStatus(u.id);
       } catch (e) {
         console.warn("AdSettings load error", e);
       }

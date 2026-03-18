@@ -362,9 +362,11 @@ export default function CreatePost() {
       const uid = auth?.user?.id;
       if (!uid) throw new Error(t("create_post_error_not_authenticated"));
 
-      const { data: prof, error: profErr } = await supabase.from("profiles").select("username").eq("id", uid).maybeSingle();
+      const { data: prof, error: profErr } = await supabase.from("profiles").select("username, stripe_account_id, stripe_onboarding_complete").eq("id", uid).maybeSingle();
       if (profErr) throw profErr;
       const username = prof?.username || uid;
+      const userStripeAccountId = prof?.stripe_account_id || null;
+      const userStripeComplete = !!prof?.stripe_onboarding_complete;
 
       // Feature 1: rate limit — 1 post per 10 minutes
       const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000);
@@ -591,6 +593,10 @@ export default function CreatePost() {
         product_notes, product_required_info, product_options,
         labels: adLabelsToSave,
         lat, lon, geom: `SRID=4326;POINT(${lon} ${lat})`, postmediauri: [],
+        ...(postType === "ad" && userStripeAccountId ? {
+          stripe_account_id: userStripeAccountId,
+          stripe_onboarding_complete: userStripeComplete,
+        } : {}),
       }).select("id").single();
       if (insErr) throw insErr;
       const postId = inserted.id;
@@ -617,6 +623,10 @@ export default function CreatePost() {
         const { error: evErr } = await supabase.from("events").insert({
           title, post_id: postId, ticket_holders: [], attendees_info: [],
           created_at: new Date().toISOString(),
+          ...(userStripeAccountId ? {
+            stripe_account_id: userStripeAccountId,
+            stripe_onboarding_complete: userStripeComplete,
+          } : {}),
         });
         if (evErr) throw evErr;
       }
