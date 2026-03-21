@@ -138,6 +138,9 @@ struct AlbaReportScene: DeviceActivityReportScene {
       let str  = String(data: data, encoding: .utf8)
     else { return }
     defaults.set(str, forKey: kUsageKey)
+    // Write a separate key so AlbaReportViewController can distinguish
+    // a report-extension write from a monitor-extension write.
+    defaults.set(ISO8601DateFormatter().string(from: Date()), forKey: "alba_report_token")
   }
 
   private func loadExisting(_ defaults: UserDefaults) -> [String: Any] {

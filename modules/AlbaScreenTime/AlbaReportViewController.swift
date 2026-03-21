@@ -45,8 +45,9 @@ final class AlbaReportViewController: UIViewController {
   private let selection: FamilyActivitySelection
   private let completion: () -> Void
 
-  private static let kAppGroup   = "group.com.alba.app.screentime"
-  private static let kUsageKey   = "alba_usage_data"
+  private static let kAppGroup      = "group.com.alba.app.screentime"
+  private static let kUsageKey      = "alba_usage_data"
+  private static let kReportToken   = "alba_report_token"
   private static let pollInterval: TimeInterval = 0.3
   private static let pollTimeout:  TimeInterval = 10.0
 
@@ -76,24 +77,22 @@ final class AlbaReportViewController: UIViewController {
 
     // Poll UserDefaults until makeConfiguration() writes a fresh lastUpdated,
     // then dismiss. Keeping the view alive ensures the extension isn't interrupted.
-    let baseline = Self.readLastUpdated()
+    let baseline = Self.readReportToken()
     pollForUpdate(baseline: baseline, elapsed: 0)
   }
 
-  private static func readLastUpdated() -> String? {
-    guard
-      let defaults = UserDefaults(suiteName: kAppGroup),
-      let json     = defaults.string(forKey: kUsageKey),
-      let data     = json.data(using: .utf8),
-      let obj      = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return nil }
-    return obj["lastUpdated"] as? String
+  // Poll the report-specific token written only by AlbaDeviceActivityReport.
+  // Using lastUpdated would cause a false-positive: the monitor extension's
+  // intervalDidStart also writes lastUpdated, triggering an early dismiss
+  // before makeConfiguration has a chance to run.
+  private static func readReportToken() -> String? {
+    UserDefaults(suiteName: kAppGroup)?.string(forKey: kReportToken)
   }
 
   private func pollForUpdate(baseline: String?, elapsed: TimeInterval) {
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.pollInterval) { [weak self] in
       guard let self = self else { return }
-      let current  = Self.readLastUpdated()
+      let current  = Self.readReportToken()
       let timedOut = elapsed + Self.pollInterval >= Self.pollTimeout
       if current != baseline || timedOut {
         self.dismiss(animated: false) { self.completion() }
