@@ -14,7 +14,10 @@ import FamilyControls
 
 @available(iOS 16.0, *)
 final class FamilyPickerModel: ObservableObject {
-  @Published var selection = FamilyActivitySelection()
+  @Published var selection: FamilyActivitySelection
+  init(initial: FamilyActivitySelection = FamilyActivitySelection()) {
+    self.selection = initial
+  }
 }
 
 // MARK: - SwiftUI picker view
@@ -47,10 +50,11 @@ struct AlbaFamilyPickerView: View {
 
 @available(iOS 16.0, *)
 final class AlbaFamilyPickerViewController: UIViewController {
-  private let model = FamilyPickerModel()
+  private let model: FamilyPickerModel
   private let completion: (FamilyActivitySelection?) -> Void
 
-  init(completion: @escaping (FamilyActivitySelection?) -> Void) {
+  init(initial: FamilyActivitySelection, completion: @escaping (FamilyActivitySelection?) -> Void) {
+    self.model = FamilyPickerModel(initial: initial)
     self.completion = completion
     super.init(nibName: nil, bundle: nil)
     modalPresentationStyle = .fullScreen

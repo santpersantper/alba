@@ -59,7 +59,12 @@ class AlbaScreenTimeModule: NSObject {
             return
           }
           self.saveSelection(selection)
-          resolve(["authorized": true])
+          resolve([
+            "authorized": true,
+            "appTokens": selection.applicationTokens.count,
+            "categoryTokens": selection.categoryTokens.count,
+            "webDomainTokens": selection.webDomainTokens.count,
+          ])
         }
       }
     }
@@ -92,7 +97,12 @@ class AlbaScreenTimeModule: NSObject {
           return
         }
         self.saveSelection(selection)
-        resolve(["success": true])
+        resolve([
+          "success": true,
+          "appTokens": selection.applicationTokens.count,
+          "categoryTokens": selection.categoryTokens.count,
+          "webDomainTokens": selection.webDomainTokens.count,
+        ])
       }
     }
   }
@@ -238,10 +248,18 @@ class AlbaScreenTimeModule: NSObject {
       return
     }
     if #available(iOS 16.0, *) {
-      let picker = AlbaFamilyPickerViewController(completion: completion)
+      // Pre-load existing selection so the picker shows previously chosen apps
+      let existing: FamilyActivitySelection
+      if let defaults = UserDefaults(suiteName: kAppGroup),
+         let data     = defaults.data(forKey: kSelectionKey),
+         let decoded  = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data) {
+        existing = decoded
+      } else {
+        existing = FamilyActivitySelection()
+      }
+      let picker = AlbaFamilyPickerViewController(initial: existing, completion: completion)
       topVC.present(picker, animated: true)
     } else {
-      // Should never happen — deployment target is iOS 16.0
       completion(nil)
     }
   }

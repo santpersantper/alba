@@ -37,7 +37,7 @@ const MOCK_DATA = {
 
 // ── Availability checks ──────────────────────────────────────────────────────
 const AlbaScreenTimeModule = NativeModules.AlbaScreenTimeModule ?? null;
-// Available on both iOS (AlbaScreenTimeModule.swift) and Android (AlbaScreenTimeModule.kt)
+// iOS only — AlbaScreenTimeModule.swift; no Android equivalent (FamilyControls is Apple-exclusive)
 const IS_NATIVE_AVAILABLE = AlbaScreenTimeModule !== null;
 
 export function useScreenTime() {
@@ -56,27 +56,49 @@ export function useScreenTime() {
       setUsageData({ ...MOCK_DATA, lastUpdated: new Date().toISOString() });
       return;
     }
+    console.log("[ScreenTime] refreshUsageData: calling native module");
     try {
       const method = AlbaScreenTimeModule.refreshReport ?? AlbaScreenTimeModule.getUsageData;
+      console.log("[ScreenTime] method:", AlbaScreenTimeModule.refreshReport ? "refreshReport" : "getUsageData");
       const raw = await method.call(AlbaScreenTimeModule);
+      console.log("[ScreenTime] raw:", typeof raw === "string" ? raw.slice(0, 300) : JSON.stringify(raw)?.slice(0, 300));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+      console.log("[ScreenTime] today.apps:", JSON.stringify(data?.today?.apps));
+      console.log("[ScreenTime] _debug:", JSON.stringify(data?._debug));
       setUsageData(data);
     } catch (e) {
+      console.error("[ScreenTime] refreshUsageData ERROR:", e?.message, e);
       setError(e?.message ?? "Failed to read usage data");
     }
   }, []);
 
   // ── Start 60-second polling interval ──────────────────────────────────────
+  // Reads cached data from shared UserDefaults (cheap). Does NOT re-trigger
+  // the DeviceActivityReport extension — the OS controls that invocation cadence
+  // and throttles it. refreshReport() is called once on mount; subsequent polls
+  // just read whatever the extension last wrote.
   const startPolling = useCallback(() => {
     if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = setInterval(() => {
-      refreshUsageData();
+    pollingRef.current = setInterval(async () => {
+      if (!IS_NATIVE_AVAILABLE) {
+        setUsageData((prev) => ({ ...MOCK_DATA, lastUpdated: new Date().toISOString(), ...prev }));
+        return;
+      }
+      try {
+        const raw = await AlbaScreenTimeModule.getUsageData();
+        const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+        console.log("[ScreenTime] poll getUsageData lastUpdated:", data?.lastUpdated);
+        setUsageData(data);
+      } catch (e) {
+        console.error("[ScreenTime] poll ERROR:", e?.message);
+      }
     }, 60_000);
-  }, [refreshUsageData]);
+  }, []);
 
   // ── Start DeviceActivity monitoring (midnight → 23:59) ───────────────────
   const startMonitoring = useCallback(async () => {
     if (!IS_NATIVE_AVAILABLE) return;
+    console.log("[ScreenTime] startMonitoring called");
     try {
       await AlbaScreenTimeModule.startMonitoring({
         startHour: 0,
@@ -84,6 +106,7 @@ export function useScreenTime() {
         endHour: 23,
         endMinute: 59,
       });
+      console.log("[ScreenTime] startMonitoring done");
     } catch (e) {
       setError(e?.message ?? "Failed to start monitoring");
     }
@@ -103,9 +126,11 @@ export function useScreenTime() {
   const requestAppSelection = useCallback(async () => {
     if (!IS_NATIVE_AVAILABLE) return true; // no-op on mock path
     try {
-      await AlbaScreenTimeModule.requestAppSelection();
+      const result = await AlbaScreenTimeModule.requestAppSelection();
+      console.log("[ScreenTime] requestAppSelection result:", JSON.stringify(result));
       return true;
     } catch (e) {
+      console.log("[ScreenTime] requestAppSelection ERROR:", e?.code, e?.message);
       setError(e?.message ?? "App selection failed");
       return false;
     }
@@ -121,7 +146,8 @@ export function useScreenTime() {
     }
     try {
       setLoading(true);
-      await AlbaScreenTimeModule.requestAuthorization();
+      const authResult = await AlbaScreenTimeModule.requestAuthorization();
+      console.log("[ScreenTime] requestAuthorization result:", JSON.stringify(authResult));
       // On iOS the authorization dialog is synchronous — granted by the time we resume.
       // On Android the native call opens Settings and resolves immediately; the AppState
       // listener in the mount effect handles re-checking when the user returns.
@@ -161,10 +187,12 @@ export function useScreenTime() {
 
       try {
         const result = await AlbaScreenTimeModule.getAuthorizationStatus();
+        console.log("[ScreenTime] getAuthorizationStatus result:", JSON.stringify(result));
         const isAuth = result?.authorized === true;
         if (!mounted) return;
         setAuthorized(isAuth);
         if (isAuth) {
+          await startMonitoring();
           await refreshUsageData();
           startPolling();
         }
@@ -194,7 +222,7 @@ export function useScreenTime() {
       if (pollingRef.current) clearInterval(pollingRef.current);
       if (appStateSub) appStateSub.remove();
     };
-  }, [refreshUsageData, startPolling]);
+  }, [refreshUsageData, startPolling, startMonitoring]);
 
   return {
     authorized,

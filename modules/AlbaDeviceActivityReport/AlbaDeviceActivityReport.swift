@@ -33,6 +33,10 @@ private let kReportContext = DeviceActivityReport.Context(rawValue: "alba.report
 struct AlbaReportConfig {
   let totalMinutes: Int
   let appsData: [String: Any]
+  let appCount: Int
+  let deviceCount: Int
+  let segmentCount: Int
+  let categoryCount: Int
 }
 
 // MARK: - Extension entry point
@@ -61,12 +65,16 @@ struct AlbaReportScene: DeviceActivityReportScene {
     var totalSeconds: TimeInterval = 0
     var appsData: [String: Any] = [:]
     var appIndex = 0
+    var deviceCount = 0
+    var segmentCount = 0
+    var categoryCount = 0
 
     for await deviceData in data {
+      deviceCount += 1
       for await segment in deviceData.activitySegments {
-        // Applications are nested under categories — ActivitySegment has no
-        // direct .applications property. We must go through .categories first.
+        segmentCount += 1
         for await category in segment.categories {
+          categoryCount += 1
           for await app in category.applications {
             let seconds = app.totalActivityDuration
             totalSeconds += seconds
@@ -80,7 +88,14 @@ struct AlbaReportScene: DeviceActivityReportScene {
     }
 
     let totalMinutes = Int(totalSeconds / 60)
-    let config = AlbaReportConfig(totalMinutes: totalMinutes, appsData: appsData)
+    let config = AlbaReportConfig(
+      totalMinutes: totalMinutes,
+      appsData: appsData,
+      appCount: appIndex,
+      deviceCount: deviceCount,
+      segmentCount: segmentCount,
+      categoryCount: categoryCount
+    )
     writeToDefaults(config)
     return config
   }
@@ -95,6 +110,12 @@ struct AlbaReportScene: DeviceActivityReportScene {
     let dayKey = weekdayKey()
     usage["lastUpdated"] = ISO8601DateFormatter().string(from: Date())
     usage["today"] = ["totalMinutes": config.totalMinutes, "apps": config.appsData]
+    usage["_debug"] = [
+      "ext_deviceCount": config.deviceCount,
+      "ext_segmentCount": config.segmentCount,
+      "ext_categoryCount": config.categoryCount,
+      "ext_appCount": config.appCount,
+    ]
 
     // Update daily totals and recompute week total
     var dailyTotals = usage["dailyTotals"] as? [String: Int] ?? emptyDailyTotals()

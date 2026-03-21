@@ -25,7 +25,7 @@ struct AlbaHiddenReportView: View {
     DeviceActivityReport(
       .init(rawValue: "alba.report"),
       filter: DeviceActivityFilter(
-        segment: .daily(
+        segment: .hourly(
           during: Calendar.current.dateInterval(of: .day, for: Date()) ?? DateInterval()
         ),
         applications: selection.applicationTokens,
@@ -45,9 +45,10 @@ final class AlbaReportViewController: UIViewController {
   private let selection: FamilyActivitySelection
   private let completion: () -> Void
 
-  // How long to wait for the report extension to finish writing to UserDefaults.
-  // 2 seconds is generous; in practice the extension finishes in well under 1s.
-  private static let extensionWriteDelay: TimeInterval = 2.0
+  private static let kAppGroup   = "group.com.alba.app.screentime"
+  private static let kUsageKey   = "alba_usage_data"
+  private static let pollInterval: TimeInterval = 0.3
+  private static let pollTimeout:  TimeInterval = 10.0
 
   init(selection: FamilyActivitySelection, completion: @escaping () -> Void) {
     self.selection = selection
@@ -64,7 +65,7 @@ final class AlbaReportViewController: UIViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
 
-    // Embed the invisible report view
+    // Embed the invisible report view — triggers the extension's makeConfiguration()
     let reportView = AlbaHiddenReportView(selection: selection)
     let hosting = UIHostingController(rootView: reportView)
     hosting.view.backgroundColor = .clear
@@ -73,10 +74,31 @@ final class AlbaReportViewController: UIViewController {
     hosting.view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
     hosting.didMove(toParent: self)
 
-    // Dismiss after the extension has had time to write
-    DispatchQueue.main.asyncAfter(deadline: .now() + Self.extensionWriteDelay) { [weak self] in
-      self?.dismiss(animated: false) {
-        self?.completion()
+    // Poll UserDefaults until makeConfiguration() writes a fresh lastUpdated,
+    // then dismiss. Keeping the view alive ensures the extension isn't interrupted.
+    let baseline = Self.readLastUpdated()
+    pollForUpdate(baseline: baseline, elapsed: 0)
+  }
+
+  private static func readLastUpdated() -> String? {
+    guard
+      let defaults = UserDefaults(suiteName: kAppGroup),
+      let json     = defaults.string(forKey: kUsageKey),
+      let data     = json.data(using: .utf8),
+      let obj      = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    return obj["lastUpdated"] as? String
+  }
+
+  private func pollForUpdate(baseline: String?, elapsed: TimeInterval) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.pollInterval) { [weak self] in
+      guard let self = self else { return }
+      let current  = Self.readLastUpdated()
+      let timedOut = elapsed + Self.pollInterval >= Self.pollTimeout
+      if current != baseline || timedOut {
+        self.dismiss(animated: false) { self.completion() }
+      } else {
+        self.pollForUpdate(baseline: baseline, elapsed: elapsed + Self.pollInterval)
       }
     }
   }
