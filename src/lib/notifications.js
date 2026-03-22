@@ -98,6 +98,7 @@ export async function saveNotifPrefs(prefs) {
       groups:         prefs.notifGroupMessages ?? true,
       diffusion:      prefs.notifDiffusion     ?? true,
       followed_posts: prefs.notifFollowedPosts ?? true,
+      follows:        prefs.notifFollows        ?? true,
     };
     await supabase
       .from("profiles")

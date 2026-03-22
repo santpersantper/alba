@@ -203,30 +203,44 @@ export default function ShareMenu({
   }, []);
 
   // recent chats from chat_threads (ordered by last_sent_at)
+  // Also includes recently joined groups that have no messages yet
   useEffect(() => {
     let alive = true;
-    if (!visible || !meId) return;
+    if (!visible || !meId || !meUsername) return;
 
     (async () => {
       try {
         setLoadingGrid(true);
 
-        const { data: threads, error: tErr } = await supabase
-          .from("chat_threads")
-          .select("chat_id, is_group, peer_id, last_sent_at")
-          .eq("owner_id", meId)
-          .order("last_sent_at", { ascending: false, nullsLast: true })
-          .limit(6);
+        const [{ data: threads, error: tErr }, { data: memberGroups, error: gErr }] =
+          await Promise.all([
+            supabase
+              .from("chat_threads")
+              .select("chat_id, is_group, peer_profile_id, last_sent_at")
+              .eq("owner_id", meId)
+              .order("last_sent_at", { ascending: false, nullsLast: true })
+              .limit(6),
+            supabase
+              .from("groups")
+              .select("id, groupname, group_pic_link, updated_at")
+              .filter("members", "cs", `{${meUsername}}`)
+              .order("updated_at", { ascending: false })
+              .limit(12),
+          ]);
 
         if (tErr) throw tErr;
-        if (!threads?.length) { if (alive) setAccounts([]); return; }
+        if (gErr) console.warn("ShareMenu member groups error", gErr);
 
-        const rankMap = {};
-        threads.forEach((t, idx) => (rankMap[String(t.chat_id)] = idx));
-        recentRankRef.current = rankMap;
+        console.log("[ShareMenu] meUsername:", meUsername, "threads:", threads?.length, "memberGroups:", memberGroups?.length, memberGroups?.map(g => g.groupname));
 
-        const groupChatIds = threads.filter((t) => t.is_group).map((t) => t.chat_id);
-        const dmPeerIds    = threads.filter((t) => !t.is_group && t.peer_id).map((t) => t.peer_id);
+        // IDs of groups already represented in threads
+        const threadGroupIds = new Set(
+          (threads || []).filter((t) => t.is_group).map((t) => String(t.chat_id))
+        );
+
+        // Build thread-based items
+        const groupChatIds = (threads || []).filter((t) => t.is_group).map((t) => t.chat_id);
+        const dmPeerIds    = (threads || []).filter((t) => !t.is_group && t.peer_profile_id).map((t) => t.peer_profile_id);
 
         const [{ data: groups }, { data: profs }] = await Promise.all([
           groupChatIds.length
@@ -242,12 +256,14 @@ export default function ShareMenu({
         const profilesById = {};
         (profs || []).forEach((p) => (profilesById[p.id] = p));
 
-        const mapped = threads
+        // Items with a sortable timestamp
+        const withTs = (threads || [])
           .map((t) => {
+            let item;
             if (t.is_group) {
               const g = groupsById[t.chat_id];
               if (!g) return null;
-              return {
+              item = {
                 id: String(t.chat_id),
                 chatId: t.chat_id,
                 isGroup: true,
@@ -255,11 +271,11 @@ export default function ShareMenu({
                 uri: g.group_pic_link || "https://placehold.co/96x96",
               };
             } else {
-              const p = t.peer_id ? profilesById[t.peer_id] : null;
+              const p = t.peer_profile_id ? profilesById[t.peer_profile_id] : null;
               if (!p) return null;
               const username = p.username || "";
               const displayName = p.name || prettifyUsername(username);
-              return {
+              item = {
                 id: String(t.chat_id),
                 chatId: t.chat_id,
                 isGroup: false,
@@ -269,10 +285,34 @@ export default function ShareMenu({
                 uri: p.avatar_url || "https://placehold.co/96x96",
               };
             }
+            return { item, ts: t.last_sent_at ? new Date(t.last_sent_at).getTime() : 0 };
           })
           .filter(Boolean);
 
-        if (alive) setAccounts(mapped);
+        // Member groups with no thread yet
+        const extraGroups = (memberGroups || [])
+          .filter((g) => !threadGroupIds.has(String(g.id)))
+          .map((g) => ({
+            item: {
+              id: String(g.id),
+              chatId: g.id,
+              isGroup: true,
+              handle: g.groupname || tx("group_label", "Group"),
+              uri: g.group_pic_link || "https://placehold.co/96x96",
+            },
+            ts: g.updated_at ? new Date(g.updated_at).getTime() : 0,
+          }));
+
+        console.log("[ShareMenu] extraGroups (no-thread member groups):", extraGroups.length, extraGroups.map(e => e.item.handle));
+
+        // Merge, sort descending by recency, take top 6
+        const all = [...withTs, ...extraGroups].sort((a, b) => b.ts - a.ts).slice(0, 6);
+
+        const rankMap = {};
+        all.forEach(({ item }, idx) => (rankMap[item.id] = idx));
+        recentRankRef.current = rankMap;
+
+        if (alive) setAccounts(all.map(({ item }) => item));
       } catch (e) {
         console.error("ShareMenu load recent chats error", e);
         if (alive) setAccounts([]);
@@ -284,7 +324,7 @@ export default function ShareMenu({
     return () => {
       alive = false;
     };
-  }, [visible, meId, tx]);
+  }, [visible, meId, meUsername, tx]);
 
   const handleSearchChange = useCallback(
     async (text) => {

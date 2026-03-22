@@ -31,10 +31,10 @@ import DMUsersModal from "../components/DMUsersModal";
 /* ------------------- schema ------------------- */
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
-  "id, title, post_id, group_id, unconfirmed, organizers, attendees_info, timestamp";
+  "id, title, post_id, group_id, unconfirmed, organizers, attendees_info, timestamp, created_at";
 
 const POSTS_TABLE = "posts";
-const POSTS_COLS = "id, user";
+const POSTS_COLS = "id, user, date";
 /* ---------------------------------------------- */
 
 function safeObj(x) {
@@ -200,9 +200,10 @@ export default function PastEventsScreen() {
     if (!myUsername) return;
 
     try {
+      const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
       const nowIso = new Date().toISOString();
 
-      // A) events where organizers contains me
+      // A) events where organizers contains me AND timestamp is set (new events after the fix)
       const { data: evA } = await supabase
         .from(EVENTS_TABLE)
         .select(EVENTS_COLS)
@@ -211,23 +212,26 @@ export default function PastEventsScreen() {
         .order("timestamp", { ascending: false })
         .limit(200);
 
-      // B) fallback by my posts
+      // B) by my posts — reliable for all events (timestamp may be null on older records)
       const { data: myPosts } = await supabase
         .from(POSTS_TABLE)
         .select(POSTS_COLS)
         .eq("user", myUsername)
         .limit(500);
 
-      const myPostIds = (myPosts || []).map((p) => p.id).filter(Boolean);
+      // Filter client-side to past posts only (post.date < today)
+      const pastPostIds = (myPosts || [])
+        .filter((p) => p.date && p.date <= today)
+        .map((p) => p.id)
+        .filter(Boolean);
 
       let evB = [];
-      if (myPostIds.length) {
+      if (pastPostIds.length) {
         const { data: evRows } = await supabase
           .from(EVENTS_TABLE)
           .select(EVENTS_COLS)
-          .in("post_id", myPostIds)
-          .lt("timestamp", nowIso)
-          .order("timestamp", { ascending: false })
+          .in("post_id", pastPostIds)
+          .order("created_at", { ascending: false })
           .limit(200);
         evB = evRows || [];
       }
@@ -241,9 +245,10 @@ export default function PastEventsScreen() {
         return true;
       });
 
+      // Sort: events with a timestamp first (newest), then by created_at
       unique.sort((a, b) => {
-        const at = new Date(a.timestamp || 0).getTime() || 0;
-        const bt = new Date(b.timestamp || 0).getTime() || 0;
+        const at = new Date(a.timestamp || a.created_at || 0).getTime() || 0;
+        const bt = new Date(b.timestamp || b.created_at || 0).getTime() || 0;
         return bt - at;
       });
 

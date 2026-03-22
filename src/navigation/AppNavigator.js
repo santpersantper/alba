@@ -6,7 +6,7 @@ import {
   DarkTheme,
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { View, ActivityIndicator, AppState } from "react-native";
+import { View, ActivityIndicator, AppState, Modal, Text, TouchableOpacity, StyleSheet, Linking } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
@@ -88,7 +88,74 @@ function MainNavigator() {
   );
 }
 
-function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onProfileComplete }) {
+function BanModal({ banState, onRecheck, onGotIt }) {
+  const { isDark } = useAlbaTheme();
+
+  if (!banState) return null;
+
+  const bg  = isDark ? "#1A1F27" : "#FFFFFF";
+  const fg  = isDark ? "#FFFFFF" : "#111111";
+  const sub = isDark ? "#A0A7B3" : "#555555";
+
+  let title, body;
+  if (banState.type === "terminated") {
+    title = "Account Terminated";
+    body  = "Your account has been permanently terminated for a violation of our Terms of Service.";
+  } else {
+    const remaining = Math.max(0, new Date(banState.bannedUntil) - Date.now());
+    const hours     = Math.ceil(remaining / (1000 * 60 * 60));
+    const days      = Math.ceil(remaining / (1000 * 60 * 60 * 24));
+    const duration  = hours <= 48 ? `${hours} hour${hours !== 1 ? "s" : ""}` : `${days} day${days !== 1 ? "s" : ""}`;
+    title = "Account Suspended";
+    body  = `Your account has been suspended for ${duration} for a violation of our Terms of Service.`;
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" statusBarTranslucent>
+      <View style={banStyles.overlay}>
+        <View style={[banStyles.card, { backgroundColor: bg }]}>
+          <Text style={[banStyles.icon]}>🚫</Text>
+          <Text style={[banStyles.title, { color: fg }]}>{title}</Text>
+          <Text style={[banStyles.body, { color: sub }]}>{body}</Text>
+          {banState.reason ? (
+            <Text style={[banStyles.reason, { color: sub }]}>Reason: {banState.reason}</Text>
+          ) : null}
+          <TouchableOpacity
+            style={banStyles.tosBtn}
+            onPress={() => Linking.openURL("https://albaappofficial.com/terms").catch(() => {})}
+          >
+            <Text style={banStyles.tosBtnText}>Read our Terms of Service</Text>
+          </TouchableOpacity>
+          {banState.type === "terminated" && onGotIt && (
+            <TouchableOpacity style={[banStyles.recheckBtn, { marginTop: 8 }]} onPress={onGotIt}>
+              <Text style={[banStyles.recheckText, { color: sub }]}>Got it — sign me out</Text>
+            </TouchableOpacity>
+          )}
+          {banState.type === "temp" && (
+            <TouchableOpacity style={banStyles.recheckBtn} onPress={onRecheck}>
+              <Text style={[banStyles.recheckText, { color: sub }]}>Check again</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const banStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.75)", justifyContent: "center", alignItems: "center", padding: 28 },
+  card: { borderRadius: 20, padding: 28, alignItems: "center", width: "100%", maxWidth: 360 },
+  icon: { fontSize: 48, marginBottom: 16 },
+  title: { fontFamily: "PoppinsBold", fontSize: 22, marginBottom: 10, textAlign: "center" },
+  body: { fontFamily: "Poppins", fontSize: 14, lineHeight: 22, textAlign: "center", marginBottom: 12 },
+  reason: { fontFamily: "Poppins", fontSize: 12, fontStyle: "italic", textAlign: "center", marginBottom: 16, opacity: 0.75 },
+  tosBtn: { backgroundColor: "#3D8BFF", borderRadius: 12, paddingVertical: 13, paddingHorizontal: 28, marginTop: 4 },
+  tosBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 },
+  recheckBtn: { marginTop: 16, paddingVertical: 6 },
+  recheckText: { fontFamily: "Poppins", fontSize: 13, textDecorationLine: "underline" },
+});
+
+function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onProfileComplete, navRef, banState, onBanRecheck, onTerminationAck }) {
   const { isDark } = useAlbaTheme();
 
   const navTheme = isDark
@@ -116,7 +183,7 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
 
   return (
     <>
-      <NavigationContainer theme={navTheme} key={navKey}>
+      <NavigationContainer ref={navRef} theme={navTheme} key={navKey}>
         {signedIn ? <MainNavigator /> : <AuthNavigator />}
       </NavigationContainer>
 
@@ -126,6 +193,9 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
         user={pendingGoogleUser}
         onComplete={onProfileComplete}
       />
+
+      {/* Ban / suspension modal — blocks all interaction while active */}
+      <BanModal banState={banState} onRecheck={onBanRecheck} onGotIt={onTerminationAck} />
     </>
   );
 }
@@ -140,6 +210,29 @@ export default function AppNavigator() {
   const [signedIn, setSignedIn] = useState(false);
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
+  const [banState, setBanState] = useState(null); // null | { type: "temp"|"terminated", bannedUntil?, reason? }
+  const navRef = useRef(null);
+  const signedInRef = useRef(false);
+
+  const checkBanStatus = async (userId) => {
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("banned_until, account_terminated, ban_reason")
+        .eq("id", userId)
+        .single();
+      if (!data) return;
+      if (data.account_terminated) {
+        setBanState({ type: "terminated", reason: data.ban_reason || null });
+        return;
+      }
+      if (data.banned_until && new Date(data.banned_until) > new Date()) {
+        setBanState({ type: "temp", bannedUntil: data.banned_until, reason: data.ban_reason || null });
+        return;
+      }
+      setBanState(null);
+    } catch {}
+  };
 
   const stripeKey =
     process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ??
@@ -152,54 +245,95 @@ export default function AppNavigator() {
     (async () => {
       const { data, error } = await supabase.auth.getSession();
       if (error) console.warn("getSession error", error);
+      console.log('[AppNav] cold-start getSession — hasSession:', !!data?.session);
 
       setSignedIn(!!data?.session);
+      signedInRef.current = !!data?.session;
       setReady(true);
 
+      // Check ban for session that's already active at cold start
+      if (data?.session?.user?.id) {
+        checkBanStatus(data.session.user.id);
+      }
+
       const { data: listener } = supabase.auth.onAuthStateChange(
-        async (_event, session) => {
+        async (event, session) => {
+          console.log('[AppNav] onAuthStateChange event:', event, 'userId:', session?.user?.id ?? null);
+
+          // TOKEN_REFRESHED / USER_UPDATED don't change sign-in state and must
+          // not re-trigger the Google profile-setup check (would race with
+          // child screens that are already mounted and fetching data).
+          if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+            console.log('[AppNav] filtered out event:', event);
+            return;
+          }
+
           // Navigate immediately — don't block on the async profile check below.
           // ProfileSetupModal is rendered above the nav tree so it can appear
           // after navigation has already occurred.
+          console.log('[AppNav] setSignedIn →', !!session);
           setSignedIn(!!session);
+          signedInRef.current = !!session;
 
-          if (session?.user) {
-            // Only show profile setup for Google OAuth users who have no profile yet
+          if (session?.user?.id) {
+            checkBanStatus(session.user.id);
+          } else {
+            setBanState(null);
+          }
+
+          // Only run Google profile-setup check on actual sign-in events
+          if (event === 'SIGNED_IN' && session?.user) {
             const isGoogleUser =
               session.user.app_metadata?.provider === "google" ||
               (session.user.app_metadata?.providers ?? []).includes("google");
 
-            if (isGoogleUser) {
-              try {
-                const { data: profile } = await supabase
-                  .from("profiles")
-                  .select("id")
-                  .eq("id", session.user.id)
-                  .maybeSingle();
+            console.log('[AppNav] SIGNED_IN — isGoogleUser:', isGoogleUser, 'provider:', session.user.app_metadata?.provider, 'providers:', session.user.app_metadata?.providers);
 
-                if (!profile) {
-                  setPendingGoogleUser({
-                    id: session.user.id,
-                    name:
-                      session.user.user_metadata?.full_name ||
-                      session.user.user_metadata?.name ||
-                      "",
-                    email: session.user.email || "",
-                  });
-                  setNeedsProfileSetup(true);
-                } else {
+            if (isGoogleUser) {
+              // Defer the DB call out of the onAuthStateChange callback.
+              // Supabase JS v2 fires this callback synchronously during setSession,
+              // so the auth middleware is still in a transitional state — any DB
+              // query made here will hang or run without valid auth headers (RLS
+              // returns null), incorrectly triggering the profile-setup modal for
+              // existing users.  A small timeout lets the session fully settle first.
+              const capturedUser = session.user;
+              setTimeout(async () => {
+                try {
+                  const { data: profile } = await supabase
+                    .from("profiles")
+                    .select("id")
+                    .eq("id", capturedUser.id)
+                    .maybeSingle();
+
+                  console.log('[AppNav] Google profile check — hasProfile:', !!profile);
+
+                  if (!profile) {
+                    setPendingGoogleUser({
+                      id: capturedUser.id,
+                      name:
+                        capturedUser.user_metadata?.full_name ||
+                        capturedUser.user_metadata?.name ||
+                        "",
+                      email: capturedUser.email || "",
+                    });
+                    setNeedsProfileSetup(true);
+                    console.log('[AppNav] needsProfileSetup → true (new Google user)');
+                  } else {
+                    setNeedsProfileSetup(false);
+                    setPendingGoogleUser(null);
+                    console.log('[AppNav] needsProfileSetup → false (existing Google user)');
+                  }
+                } catch (e) {
+                  // On error, let user in without profile setup
+                  console.warn('[AppNav] Google profile check error:', e?.message);
                   setNeedsProfileSetup(false);
-                  setPendingGoogleUser(null);
                 }
-              } catch {
-                // On error, let user in without profile setup
-                setNeedsProfileSetup(false);
-              }
+              }, 500);
             } else {
               setNeedsProfileSetup(false);
               setPendingGoogleUser(null);
             }
-          } else {
+          } else if (!session) {
             setNeedsProfileSetup(false);
             setPendingGoogleUser(null);
           }
@@ -212,14 +346,49 @@ export default function AppNavigator() {
     return () => sub?.unsubscribe?.();
   }, []);
 
+  // Real-time ban detection — fires immediately while the app is open
+  useEffect(() => {
+    if (!signedIn) return;
+    let channel;
+    (async () => {
+      const { data } = await supabase.auth.getUser().catch(() => ({ data: null }));
+      const userId = data?.user?.id;
+      if (!userId) return;
+      channel = supabase
+        .channel(`profile-ban-${userId}`)
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${userId}`,
+        }, (payload) => {
+          const row = payload.new;
+          if (row.account_terminated) {
+            setBanState({ type: 'terminated', reason: row.ban_reason || null });
+          } else if (row.banned_until && new Date(row.banned_until) > new Date()) {
+            setBanState({ type: 'temp', bannedUntil: row.banned_until, reason: row.ban_reason || null });
+          } else {
+            setBanState(null);
+          }
+        })
+        .subscribe();
+    })();
+    return () => { if (channel) supabase.removeChannel(channel); };
+  }, [signedIn]);
+
   // Clear expo-image in-memory LRU cache when app returns to foreground.
   // Decoded bitmaps (up to ~4MB each) accumulate in the LRU and can fill the heap.
   // Re-decoding on re-display costs a little CPU but prevents OOM.
   const appStateRef = useRef(AppState.currentState);
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (next) => {
+    const sub = AppState.addEventListener("change", async (next) => {
       if (appStateRef.current.match(/inactive|background/) && next === "active") {
         ExpoImage.clearMemoryCache?.().catch(() => {});
+        // Re-check ban status on foreground so active bans take effect immediately
+        if (signedInRef.current) {
+          const { data } = await supabase.auth.getUser().catch(() => ({ data: null }));
+          if (data?.user?.id) checkBanStatus(data.user.id);
+        }
       }
       appStateRef.current = next;
     });
@@ -238,6 +407,15 @@ export default function AppNavigator() {
     const unsub = addNotificationTapListener((response) => {
       const data = response.notification.request.content.data;
       console.log("[Push] notification tapped:", data);
+      const nav = navRef.current;
+      if (!nav?.isReady()) return;
+      if (data?.type === "dm" && data.sender_username) {
+        nav.navigate("SingleChat", { username: data.sender_username });
+      } else if (data?.type === "group_message" && data.chat) {
+        nav.navigate("GroupChat", { groupId: data.chat });
+      } else if (data?.type === "follow" && data.username) {
+        nav.navigate("Profile", { username: data.username });
+      }
     });
     return unsub;
   }, [signedIn]);
@@ -245,6 +423,18 @@ export default function AppNavigator() {
   const handleProfileComplete = () => {
     setNeedsProfileSetup(false);
     setPendingGoogleUser(null);
+  };
+
+  const handleBanRecheck = async () => {
+    const { data } = await supabase.auth.getUser().catch(() => ({ data: null }));
+    if (data?.user?.id) checkBanStatus(data.user.id);
+  };
+
+  const handleTerminationAck = async () => {
+    await supabase.auth.signOut().catch(() => {});
+    setBanState(null);
+    setSignedIn(false);
+    signedInRef.current = false;
   };
 
   return (
@@ -265,6 +455,10 @@ export default function AppNavigator() {
               needsProfileSetup={needsProfileSetup}
               pendingGoogleUser={pendingGoogleUser}
               onProfileComplete={handleProfileComplete}
+              navRef={navRef}
+              banState={banState}
+              onBanRecheck={handleBanRecheck}
+              onTerminationAck={handleTerminationAck}
             />
           )}
         </ThemeProvider>

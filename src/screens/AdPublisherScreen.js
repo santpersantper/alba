@@ -69,7 +69,7 @@ const BAR_AREA_H = CHART_H - 36;
 
 const POSTS_TABLE = "posts";
 const POSTS_COLS =
-  "id, title, description, date, time, end_date, end_time, location, user, postmediauri, product_types, product_prices, product_notes, product_required_info, product_options, labels";
+  "id, title, description, date, time, end_date, end_time, location, user, postmediauri, product_types, product_prices, product_notes, product_required_info, product_options, labels, actions";
 const POSTS_COLS_BASIC = "id, title, description, date, time, location, user";
 const TAB_KEYS = [
   "ad_tab_overview",
@@ -201,22 +201,30 @@ export default function AdPublisherScreen() {
       try {
         const { data } = await supabase.auth.getUser();
         const user = data?.user;
+        console.log("[AdPublisher] auth user:", user?.id ?? "null");
         if (!user || !alive) return;
-        const { data: prof } = await supabase
+        const { data: prof, error: profErr } = await supabase
           .from("profiles")
           .select("username")
           .eq("id", user.id)
           .maybeSingle();
+        console.log("[AdPublisher] profile:", prof?.username ?? "null", "error:", profErr?.message ?? "none");
         if (!alive) return;
         setMyUsername(prof?.username || user.user_metadata?.username || null);
-      } catch {}
+      } catch (e) {
+        console.warn("[AdPublisher] auth error:", e?.message);
+      }
     })();
     return () => { alive = false; };
   }, []);
 
   /* ── load ads ── */
   const loadAds = useCallback(async () => {
-    if (!myUsername) return;
+    if (!myUsername) {
+      console.log("[AdPublisher] loadAds skipped — no username yet");
+      return;
+    }
+    console.log("[AdPublisher] loadAds — username:", myUsername);
     try {
       setLoading(true);
       let data, error;
@@ -228,6 +236,7 @@ export default function AdPublisherScreen() {
         .order("date", { ascending: false })
         .order("time", { ascending: false })
         .limit(100));
+      console.log("[AdPublisher] posts query — rows:", data?.length ?? 0, "error:", error?.message ?? "none");
       if (error) {
         if (error.code === "PGRST204" || error.message?.includes("column") || error.message?.includes("schema")) {
           ({ data, error } = await supabase
@@ -237,6 +246,7 @@ export default function AdPublisherScreen() {
             .eq("type", "Ad")
             .order("date", { ascending: false })
             .limit(100));
+          console.log("[AdPublisher] posts fallback — rows:", data?.length ?? 0, "error:", error?.message ?? "none");
           if (error) throw error;
         } else {
           throw error;
@@ -246,21 +256,23 @@ export default function AdPublisherScreen() {
       let statsMap = {};
       if (adList.length > 0) {
         const ids = adList.map((a) => a.id);
-        const { data: stats } = await supabase
+        const { data: stats, error: statsErr } = await supabase
           .from("ad_stats")
           .select("post_id, views, purchases, contacts")
           .in("post_id", ids);
+        console.log("[AdPublisher] ad_stats — rows:", stats?.length ?? 0, "error:", statsErr?.message ?? "none");
         (stats || []).forEach((s) => { statsMap[s.post_id] = s; });
       }
       const enriched = adList.map((a) => ({
         ...a,
         stats: statsMap[a.id] || { views: 0, purchases: 0, contacts: 0 },
       }));
+      console.log("[AdPublisher] enriched ads:", enriched.map(a => ({ id: a.id, title: a.title, stats: a.stats })));
       setAds(enriched);
       setSelectedAdId((prev) => prev || enriched[0]?.id || null);
       setBcAdId((prev) => prev || enriched[0]?.id || null);
     } catch (e) {
-      console.warn("[AdPublisher] load error", e);
+      console.warn("[AdPublisher] load error", e?.message ?? e);
     } finally {
       setLoading(false);
     }
@@ -282,8 +294,9 @@ export default function AdPublisherScreen() {
   const loadBuyersContacts = useCallback(async (adId) => {
     if (!adId) return;
     setBcLoading(true);
+    console.log("[AdPublisher] loadBuyersContacts — adId:", adId);
     try {
-      const [{ data: buyerData }, { data: contactData }] = await Promise.all([
+      const [{ data: buyerData, error: buyErr }, { data: contactData, error: contactErr }] = await Promise.all([
         supabase
           .from("ad_purchases")
           .select("id, buyer_username, product_name, required_info, purchased_at")
@@ -295,10 +308,12 @@ export default function AdPublisherScreen() {
           .eq("post_id", adId)
           .order("contacted_at", { ascending: false }),
       ]);
+      console.log("[AdPublisher] buyers:", buyerData?.length ?? 0, "error:", buyErr?.message ?? "none");
+      console.log("[AdPublisher] contacts:", contactData?.length ?? 0, "error:", contactErr?.message ?? "none");
       setBuyers(buyerData || []);
       setContacts(contactData || []);
     } catch (e) {
-      console.warn("[AdPublisher] bc load error", e);
+      console.warn("[AdPublisher] bc load error", e?.message ?? e);
     } finally {
       setBcLoading(false);
     }
@@ -451,6 +466,25 @@ export default function AdPublisherScreen() {
     }
   };
 
+  /* ── pause / resume selling ── */
+  const toggleSelling = async (ad) => {
+    const currentActions = Array.isArray(ad.actions) ? ad.actions : [];
+    const isSelling = currentActions.some((a) => String(a).toLowerCase() === "buy");
+    let nextActions;
+    if (isSelling) {
+      nextActions = currentActions.filter((a) => String(a).toLowerCase() !== "buy");
+    } else {
+      nextActions = ["buy", ...currentActions.filter((a) => String(a).toLowerCase() !== "buy")];
+    }
+    // Optimistic update
+    setAds((prev) => prev.map((a) => a.id === ad.id ? { ...a, actions: nextActions } : a));
+    const { error } = await supabase.from(POSTS_TABLE).update({ actions: nextActions }).eq("id", ad.id);
+    if (error) {
+      console.warn("[AdPublisher] toggleSelling error", error.message);
+      setAds((prev) => prev.map((a) => a.id === ad.id ? { ...a, actions: currentActions } : a));
+    }
+  };
+
   /* ── computed totals ── */
   const totalViews     = ads.reduce((s, a) => s + (a.stats?.views     ?? 0), 0);
   const totalPurchases = ads.reduce((s, a) => s + (a.stats?.purchases ?? 0), 0);
@@ -530,7 +564,7 @@ export default function AdPublisherScreen() {
         </>
       )}
 
-      <TouchableOpacity style={s.createBtn} onPress={() => navigation.navigate("CreatePostScreen")} activeOpacity={0.85}>
+      <TouchableOpacity style={s.createBtn} onPress={() => navigation.navigate("CreatePost")} activeOpacity={0.85}>
         <Feather name="plus" size={16} color="#fff" style={{ marginRight: 8 }} />
         <Text style={s.createBtnText}>{t("ad_create_new")}</Text>
       </TouchableOpacity>
@@ -662,6 +696,18 @@ export default function AdPublisherScreen() {
                 </Text>
               </View>
               <View style={s.adBtns}>
+                {(() => {
+                  const selling = (Array.isArray(ad.actions) ? ad.actions : []).some((a) => String(a).toLowerCase() === "buy");
+                  return (
+                    <TouchableOpacity
+                      style={[s.adBtn, { backgroundColor: selling ? (isDark ? "#1a2a1a" : "#F0FFF4") : (isDark ? "#2a2a1a" : "#FFFBEB") }]}
+                      onPress={() => toggleSelling(ad)}
+                      activeOpacity={0.85}
+                    >
+                      <Feather name={selling ? "pause" : "play"} size={14} color={selling ? "#2BB673" : "#FF9500"} />
+                    </TouchableOpacity>
+                  );
+                })()}
                 <TouchableOpacity
                   style={[s.adBtn, { backgroundColor: isDark ? "#1e2a3a" : "#EBF5FF" }]}
                   onPress={() => openEdit(ad)}
@@ -1185,7 +1231,7 @@ const s = StyleSheet.create({
   bannerText: { flex: 1, fontFamily: "Poppins", fontSize: 12, lineHeight: 18 },
 
   /* Create button */
-  createBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#2F91FF", borderRadius: 12, paddingVertical: 14, marginTop: 16 },
+  createBtn:     { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#2F91FF", borderRadius: 12, paddingVertical: 14, paddingHorizontal: 32, marginTop: 16, alignSelf: "stretch" },
   createBtnText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#fff" },
 
   /* Empty state */

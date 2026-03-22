@@ -9,18 +9,21 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
-  Alert,
+  TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
 
-export default function LocationMessage({ id, isMe, time, locationData, onDeleted, failed = false, onRetry }) {
+export default function LocationMessage({ id, isMe, time, locationData, onDeleted, failed = false, onRetry, isAdmin = false, onKick, senderUsername, groupId }) {
   const { theme, isDark } = useAlbaTheme();
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [reportVisible, setReportVisible] = useState(false);
+  const [reportText, setReportText] = useState("");
+  const [kickVisible, setKickVisible] = useState(false);
 
   const lat = locationData?.lat;
   const lng = locationData?.lng;
@@ -49,6 +52,22 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
       });
   };
 
+  const openReport = () => {
+    setMenuVisible(false);
+    setReportVisible(true);
+  };
+
+  const submitReport = () => {
+    setReportText("");
+    setReportVisible(false);
+    Alert.alert("", "Thanks for your report.");
+  };
+
+  const openDeleteConfirm = () => {
+    setMenuVisible(false);
+    setConfirmVisible(true);
+  };
+
   const runDelete = async () => {
     if (!id) { setConfirmVisible(false); return; }
     try {
@@ -62,6 +81,11 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
     } finally {
       setDeleting(false);
     }
+  };
+
+  const handleRemoveFromGroup = () => {
+    setMenuVisible(false);
+    setKickVisible(true);
   };
 
   const alignStyle = isMe ? { alignSelf: "flex-end" } : { alignSelf: "flex-start" };
@@ -136,10 +160,20 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
             </Text>
           </TouchableOpacity>
 
-          {isMe && (
+          <TouchableOpacity style={styles.menuItem} onPress={openReport}>
+            <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>Report</Text>
+          </TouchableOpacity>
+
+          {isAdmin && !isMe && onKick && senderUsername && (
+            <TouchableOpacity style={styles.menuItem} onPress={handleRemoveFromGroup}>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Remove from group</Text>
+            </TouchableOpacity>
+          )}
+
+          {(isMe || isAdmin) && (
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={() => { setMenuVisible(false); setConfirmVisible(true); }}
+              onPress={openDeleteConfirm}
             >
               <Text style={[styles.menuText, { color: "#d23b3b" }]}>Delete</Text>
             </TouchableOpacity>
@@ -151,6 +185,43 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
           >
             <Text style={[styles.menuText, { color: "#6B7280" }]}>Cancel</Text>
           </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Report modal */}
+      <Modal
+        visible={reportVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReportVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.reportCard}>
+            <Text style={styles.reportTitle}>Report message</Text>
+            <TextInput
+              style={styles.reportInput}
+              placeholder="Tell us what's wrong..."
+              placeholderTextColor="#9CA3AF"
+              value={reportText}
+              onChangeText={setReportText}
+              multiline
+            />
+            <View style={styles.reportRow}>
+              <TouchableOpacity
+                style={[styles.reportBtn, { backgroundColor: "#b0b6c0" }]}
+                onPress={() => setReportVisible(false)}
+              >
+                <Text style={styles.reportBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.reportBtn, { backgroundColor: "#3D8BFF", opacity: reportText.trim() ? 1 : 0.6 }]}
+                onPress={submitReport}
+                disabled={!reportText.trim()}
+              >
+                <Text style={styles.reportBtnText}>Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 
@@ -183,6 +254,36 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
                 onPress={() => setConfirmVisible(false)}
               >
                 <Text style={styles.confirmBtnText}>No</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Remove from group confirm */}
+      <Modal
+        visible={kickVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setKickVisible(false)}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>
+              Remove {senderUsername} from this group?
+            </Text>
+            <View style={styles.confirmRow}>
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: "#EF4444" }]}
+                onPress={() => { setKickVisible(false); onKick?.(senderUsername); }}
+              >
+                <Text style={styles.confirmBtnText}>Remove</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]}
+                onPress={() => setKickVisible(false)}
+              >
+                <Text style={styles.confirmBtnText}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -234,6 +335,24 @@ const styles = StyleSheet.create({
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
   confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
+
+  reportCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  reportTitle: { fontFamily: "Poppins", fontSize: 16, marginBottom: 10, textAlign: "center" },
+  reportInput: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    minHeight: 80,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontFamily: "Poppins",
+    fontSize: 14,
+    textAlignVertical: "top",
+    marginBottom: 12,
+  },
+  reportRow: { flexDirection: "row", gap: 10 },
+  reportBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
+  reportBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
   menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
   menuCard: {

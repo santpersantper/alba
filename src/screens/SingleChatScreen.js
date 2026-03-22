@@ -5,6 +5,7 @@ import {
   Text,
   FlatList,
   TouchableOpacity,
+  Pressable,
   TextInput,
   StyleSheet,
   Platform,
@@ -28,6 +29,7 @@ import { useAlbaLanguage } from "../theme/LanguageContext";
 import { Image as ExpoImage } from "expo-image";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { setLastVisited } from "../lib/chatLastVisited";
+import Constants from "expo-constants";
 
 import TextMessage from "../components/chat/TextMessage";
 import MediaMessage from "../components/chat/MediaMessage";
@@ -97,22 +99,16 @@ const sendTextRow = async ({ chatId, text, senderUsername, sender_id }) => {
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
 
+  const payload = { sender_id, chat_id: chatId, is_group: false, sender_username: senderUsername || "me", content: text, sent_date, sent_time };
+  console.log("[SingleChat][SEND] sendTextRow payload:", JSON.stringify(payload));
+
   const { data, error } = await supabase
     .from("messages")
-    .insert([
-      {
-        sender_id,
-        chat_id: chatId,
-        is_group: false,
-        sender_username: senderUsername || "me",
-        content: text,
-        sent_date,
-        sent_time,
-      },
-    ])
+    .insert([payload])
     .select("*")
     .single();
 
+  console.log("[SingleChat][SEND] sendTextRow result — data:", data?.id, "error:", error?.message, "code:", error?.code, "details:", error?.details);
   if (error) throw error;
   return data;
 };
@@ -160,9 +156,9 @@ const sendLocationRow = async ({ chatId, locationData, senderUsername, sender_id
   return data;
 };
 
-const subscribeChatInserts = (chatId, onInsert) => {
+const subscribeChatChanges = (chatId, onInsert, onDelete) => {
   if (!chatId) return () => {};
-  console.log("[SingleChat][RT] subscribeChatInserts — channel:", `messages-${chatId}`);
+  console.log("[SingleChat][RT] subscribeChatChanges — channel:", `messages-${chatId}`);
   const channel = supabase
     .channel(`messages-${chatId}`)
     .on(
@@ -171,6 +167,14 @@ const subscribeChatInserts = (chatId, onInsert) => {
       (payload) => {
         console.log("[SingleChat][RT] messages INSERT received, chat_id:", payload.new?.chat_id, "sender:", payload.new?.sender_username);
         onInsert?.(payload.new);
+      }
+    )
+    .on(
+      "postgres_changes",
+      { event: "DELETE", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
+      (payload) => {
+        console.log("[SingleChat][RT] messages DELETE received — full payload:", JSON.stringify(payload));
+        onDelete?.(payload.old?.id);
       }
     )
     .subscribe((status, err) => {
@@ -287,6 +291,10 @@ export default function SingleChatScreen({ navigation, route }) {
 
   const [input, setInput] = useState("");
   const [sendingMedia, setSendingMedia] = useState(false);
+  const [reportingMsg, setReportingMsg] = useState(null);
+  const [reportText, setReportText] = useState("");
+  const [reportSending, setReportSending] = useState(false);
+  const [reportSuccessOpen, setReportSuccessOpen] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [items, setItems] = useState([]);
   const [booting, setBooting] = useState(true);
@@ -306,6 +314,7 @@ export default function SingleChatScreen({ navigation, route }) {
   const [locationSuggestions, setLocationSuggestions] = useState([]);
   const [locationSearching, setLocationSearching] = useState(false);
   const locationSearchTimeout = useRef(null);
+  const locationSessionToken = useRef(null);
 
   const getSessionUid = useCallback(async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -520,7 +529,12 @@ export default function SingleChatScreen({ navigation, route }) {
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: true }), 0);
     };
 
-    const un = subscribeChatInserts(chatId, handleRow);
+    const handleRemoteDelete = (deletedId) => {
+      if (!deletedId) return;
+      setItems((prev) => prev.filter((m) => String(m.id) !== String(deletedId)));
+    };
+
+    const un = subscribeChatChanges(chatId, handleRow, handleRemoteDelete);
     return un;
   }, [chatId, myUserId, peerUsername]);
 
@@ -744,9 +758,11 @@ export default function SingleChatScreen({ navigation, route }) {
 
     try {
       const sender_id = await getSessionUid();
+      console.log("[SingleChat][SEND] text — chatId:", chatId, "sender_id:", sender_id, "myUsername:", myUsername);
       if (!sender_id) throw new Error("Not authenticated");
       await sendTextRow({ chatId, text, senderUsername: myUsername, sender_id });
-    } catch {
+    } catch (e) {
+      console.error("[SingleChat][SEND] text FAILED:", e?.message, e?.code, e?.details, e?.hint);
       setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
     }
   }, [chatId, input, pendingImage, myUsername, isBlocked, getSessionUid, peerUsername]);
@@ -807,11 +823,14 @@ export default function SingleChatScreen({ navigation, route }) {
       const { latitude: lat, longitude: lng } = loc.coords;
       let address = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
       try {
-        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&limit=1`;
-        const res = await fetch(url);
-        const json = await res.json();
-        if (json.features?.[0]?.place_name) address = json.features[0].place_name;
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN ?? Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+        if (token) {
+          const url = `https://api.mapbox.com/search/geocode/v6/reverse?longitude=${lng}&latitude=${lat}&limit=1&access_token=${token}`;
+          const res = await fetch(url);
+          const json = await res.json();
+          const feat = json.features?.[0];
+          if (feat) address = feat.properties?.place_formatted ?? feat.properties?.name ?? address;
+        }
       } catch {}
       onSendLocation({ lat, lng, address });
     } catch {
@@ -826,16 +845,28 @@ export default function SingleChatScreen({ navigation, route }) {
     locationSearchTimeout.current = setTimeout(async () => {
       try {
         setLocationSearching(true);
-        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN ?? Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+        if (!token) return;
+        if (!locationSessionToken.current) {
+          locationSessionToken.current = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+          });
+        }
         const q = encodeURIComponent(text.trim());
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=5`;
+        let proximityParam = "";
+        try {
+          const pos = await Location.getLastKnownPositionAsync({});
+          if (pos) proximityParam = `&proximity=${pos.coords.longitude},${pos.coords.latitude}`;
+        } catch {}
+        const url = `https://api.mapbox.com/search/searchbox/v1/suggest?q=${q}&session_token=${locationSessionToken.current}&types=poi,street,address,place,locality,neighborhood&limit=8${proximityParam}&access_token=${token}`;
         const res = await fetch(url);
         const json = await res.json();
         setLocationSuggestions(
-          (json.features || []).map((f) => ({
-            address: f.place_name,
-            lat: f.center[1],
-            lng: f.center[0],
+          (json.suggestions || []).map((s) => ({
+            mapbox_id: s.mapbox_id,
+            name: s.name ?? "",
+            subtitle: s.place_formatted ?? "",
           }))
         );
       } catch {
@@ -845,6 +876,23 @@ export default function SingleChatScreen({ navigation, route }) {
       }
     }, 400);
   }, []);
+
+  const onSelectSuggestion = useCallback(async (suggestion) => {
+    try {
+      const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN ?? Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+      const sessionToken = locationSessionToken.current;
+      locationSessionToken.current = null;
+      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${suggestion.mapbox_id}?session_token=${sessionToken}&access_token=${token}`);
+      const json = await res.json();
+      const feat = json.features?.[0];
+      if (!feat) return;
+      const [lng, lat] = feat.geometry.coordinates;
+      const address = feat.properties.full_address ?? feat.properties.place_formatted ?? feat.properties.name ?? suggestion.name;
+      onSendLocation({ lat, lng, address });
+    } catch {
+      onSendLocation({ lat: 0, lng: 0, address: suggestion.name + (suggestion.subtitle ? `, ${suggestion.subtitle}` : "") });
+    }
+  }, [onSendLocation]);
 
   const onPickGallery = useCallback(async () => {
     if (isBlocked) { setUnblockModalVisible(true); return; }
@@ -929,7 +977,11 @@ export default function SingleChatScreen({ navigation, route }) {
         return null;
     }
 
-    return <View style={{ marginTop: needsTopMargin ? 10 : 0 }}>{body}</View>;
+    return (
+      <Pressable onLongPress={() => setReportingMsg(item)} style={{ marginTop: needsTopMargin ? 10 : 0 }}>
+        {body}
+      </Pressable>
+    );
   };
 
   if (!fontsLoaded) return null;
@@ -962,25 +1014,23 @@ export default function SingleChatScreen({ navigation, route }) {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: theme.background }}
+      style={{ flex: 1, backgroundColor: theme.gray }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
     >
-      <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={["top", "left", "right"]}>
+      <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]} edges={["top", "left", "right"]}>
         <View style={[styles.header, { borderBottomColor: theme.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
           <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={8}>
             <Feather name="chevron-left" size={26} color={theme.text} />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={{ flex: 1 }}
-            onPress={() => navigation.navigate("Profile", { username: peerUsername })}
-            hitSlop={8}
-          >
-            <Text style={[styles.headerTitle, { color: theme.text }]} numberOfLines={1}>
-              {peerDisplayName}
-            </Text>
-          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: "center" }}>
+            <TouchableOpacity onPress={() => navigation.navigate("Profile", { username: peerUsername })} hitSlop={8}>
+              <Text style={[styles.headerTitle, { color: theme.text }]} numberOfLines={1}>
+                {peerDisplayName}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <View style={{ width: 26 }} />
         </View>
@@ -1003,7 +1053,7 @@ export default function SingleChatScreen({ navigation, route }) {
                     padding: 16,
                     paddingTop: 24,
                     paddingBottom: 8,
-                    backgroundColor: theme.background,
+                    backgroundColor: theme.gray,
                   }}
                   showsVerticalScrollIndicator={false}
                   keyboardShouldPersistTaps="handled"
@@ -1098,13 +1148,17 @@ export default function SingleChatScreen({ navigation, route }) {
           visible={locationModalVisible}
           transparent
           animationType="slide"
-          onRequestClose={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+          onRequestClose={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); locationSessionToken.current = null; }}
         >
-          <TouchableOpacity
-            style={styles.modalOverlay}
-            activeOpacity={1}
-            onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
-          />
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+          >
+            <TouchableOpacity
+              style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)" }}
+              activeOpacity={1}
+              onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); locationSessionToken.current = null; }}
+            />
           <View style={[styles.locationSheet, { backgroundColor: isDark ? "#1A2330" : "#FFFFFF" }]}>
             <Text style={[styles.locationSheetTitle, { color: theme.text }]}>Share Location</Text>
 
@@ -1137,10 +1191,13 @@ export default function SingleChatScreen({ navigation, route }) {
                   <TouchableOpacity
                     key={i}
                     style={[styles.suggestionRow, i < locationSuggestions.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: isDark ? "#333" : "#E5E9F0" }]}
-                    onPress={() => onSendLocation(s)}
+                    onPress={() => onSelectSuggestion(s)}
                   >
                     <Ionicons name="location-outline" size={14} color="#4EBCFF" style={{ marginRight: 8 }} />
-                    <Text style={[styles.suggestionText, { color: theme.text }]} numberOfLines={2}>{s.address}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.suggestionText, { color: theme.text }]} numberOfLines={1}>{s.name}</Text>
+                      {!!s.subtitle && <Text style={[styles.suggestionText, { color: isDark ? "#9CA3AF" : "#888", fontSize: 12 }]} numberOfLines={1}>{s.subtitle}</Text>}
+                    </View>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -1148,11 +1205,12 @@ export default function SingleChatScreen({ navigation, route }) {
 
             <TouchableOpacity
               style={styles.locationCancelBtn}
-              onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); }}
+              onPress={() => { setLocationModalVisible(false); setLocationSearchText(""); setLocationSuggestions([]); locationSessionToken.current = null; }}
             >
               <Text style={[styles.locationCancelText, { color: isDark ? "#9CA3AF" : "#888" }]}>Cancel</Text>
             </TouchableOpacity>
           </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         <Modal visible={unblockModalVisible} transparent animationType="fade" onRequestClose={() => setUnblockModalVisible(false)}>
@@ -1174,6 +1232,78 @@ export default function SingleChatScreen({ navigation, route }) {
           </View>
         </Modal>
       </SafeAreaView>
+
+      {/* Message report modal */}
+      <Modal visible={!!reportingMsg} transparent animationType="fade" onRequestClose={() => setReportingMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", paddingHorizontal: 24 }}>
+          <View style={{ width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" }}>
+            <Text style={{ fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 10, textAlign: "center" }}>Report message</Text>
+            <TextInput
+              style={{ borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 10, minHeight: 80, paddingHorizontal: 10, paddingVertical: 8, fontFamily: "Poppins", fontSize: 14, textAlignVertical: "top", marginBottom: 12 }}
+              placeholder="Tell us briefly what is wrong"
+              placeholderTextColor="#9CA3AF"
+              value={reportText}
+              onChangeText={setReportText}
+              multiline
+              maxLength={300}
+            />
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: "#b0b6c0" }}
+                onPress={() => { setReportingMsg(null); setReportText(""); }}
+              >
+                <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: "#3D8BFF", opacity: reportText.trim() && !reportSending ? 1 : 0.6 }}
+                disabled={!reportText.trim() || reportSending}
+                onPress={async () => {
+                  const msg = reportingMsg;
+                  setReportSending(true);
+                  try {
+                    const { data: authData } = await supabase.auth.getUser();
+                    const reporterId = authData?.user?.id || null;
+                    await supabase.functions.invoke("send-report", {
+                      body: {
+                        type: "dm_message",
+                        reported_by_id: reporterId,
+                        reason: reportText.trim(),
+                        context: {
+                          message_content: msg?.content || "",
+                          message_sent_at: msg?.time || "",
+                          receiver_username: peerUsername,
+                        },
+                      },
+                    }).catch(() => {});
+                  } catch {}
+                  setReportSending(false);
+                  setReportingMsg(null);
+                  setReportText("");
+                  setReportSuccessOpen(true);
+                }}
+              >
+                {reportSending ? <ActivityIndicator color="#fff" /> : <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 }}>OK</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Report success modal */}
+      <Modal visible={reportSuccessOpen} transparent animationType="fade" onRequestClose={() => setReportSuccessOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", paddingHorizontal: 24 }}>
+          <View style={{ width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" }}>
+            <Text style={{ fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 6, textAlign: "center" }}>Thanks for your report.</Text>
+            <Text style={{ fontFamily: "Poppins", fontSize: 13, color: "#6B7280", marginBottom: 16, textAlign: "center" }}>We'll review it and take action if it goes against our guidelines.</Text>
+            <TouchableOpacity
+              style={{ paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: "#3D8BFF" }}
+              onPress={() => setReportSuccessOpen(false)}
+            >
+              <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1294,10 +1424,6 @@ const styles = StyleSheet.create({
 
   // Location modal
   locationSheet: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 20,
@@ -1343,7 +1469,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  suggestionText: { flex: 1, fontFamily: "Poppins", fontSize: 13 },
+  suggestionText: { fontFamily: "Poppins", fontSize: 13 },
   locationCancelBtn: { alignItems: "center", paddingVertical: 12, marginTop: 4 },
   locationCancelText: { fontFamily: "Poppins", fontSize: 14 },
 });

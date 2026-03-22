@@ -103,11 +103,15 @@ export default function CommunityEventSettings() {
 
         const { data, error } = await supabase
           .from("profiles")
-          .select("event_tags")
+          .select("event_tags, max_event_distance")
           .eq("id", u.id)
           .maybeSingle();
 
         if (!mounted) return;
+
+        if (typeof data?.max_event_distance === "number" && data.max_event_distance > 0) {
+          setMaxDistance(data.max_event_distance);
+        }
 
         if (Array.isArray(data?.event_tags)) {
           const merged = [...BASE_LABELS];

@@ -126,10 +126,21 @@ export default function GroupInfoScreen() {
   const [myUsername, setMyUsername] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
+  // description editing
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [draftGroupDesc, setDraftGroupDesc] = useState("");
+
   // pending member approvals
   const [requireApproval, setRequireApproval] = useState(false);
   const [pendingMembers, setPendingMembers] = useState([]);
+  const [pendingProfiles, setPendingProfiles] = useState({});
+  const [requestsExpanded, setRequestsExpanded] = useState(false);
   const [reviewLinks, setReviewLinks] = useState(false);
+
+  // pending link messages
+  const [pendingMessages, setPendingMessages] = useState([]);
+  const [reviewMsgExpanded, setReviewMsgExpanded] = useState(false);
+  const [expandedMsgIds, setExpandedMsgIds] = useState(new Set());
 
   // exit/report
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -226,13 +237,61 @@ export default function GroupInfoScreen() {
     loadGroup();
   }, [loadGroup]);
 
+  // fetch profile data for pending members when the list changes
+  useEffect(() => {
+    if (!pendingMembers.length) { setPendingProfiles({}); return; }
+    let alive = true;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("username, name, avatar_url")
+        .in("username", pendingMembers);
+      if (!alive) return;
+      const map = {};
+      (data || []).forEach((p) => { map[p.username] = p; });
+      setPendingProfiles(map);
+    })();
+    return () => { alive = false; };
+  }, [pendingMembers]);
+
+  // load pending link messages (admin only, when groupId known)
+  const loadPendingMessages = useCallback(async () => {
+    if (!groupId || !isAdmin) return;
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, sender_username, content, sent_date, sent_time")
+      .eq("chat_id", groupId)
+      .eq("pending_review", true)
+      .order("sent_date", { ascending: true })
+      .order("sent_time", { ascending: true });
+    if (error) { console.warn("[GroupInfo] loadPendingMessages error:", error.message); return; }
+
+    // Enrich with profile display names
+    const usernames = [...new Set((data || []).map((m) => m.sender_username).filter(Boolean))];
+    let nameMap = {};
+    if (usernames.length) {
+      const { data: profs } = await supabase.from("profiles").select("username, name").in("username", usernames);
+      (profs || []).forEach((p) => { nameMap[p.username] = p.name || p.username; });
+    }
+
+    setPendingMessages((data || []).map((m) => ({
+      ...m,
+      senderName: nameMap[m.sender_username] || m.sender_username || "Unknown",
+    })));
+  }, [groupId, isAdmin]);
+
+  useEffect(() => {
+    loadPendingMessages();
+  }, [loadPendingMessages]);
+
   // reload every time screen gains focus
   useFocusEffect(
     useCallback(() => {
       setSearchQuery("");
       setSearchResults([]);
       loadGroup();
-    }, [loadGroup])
+      loadPendingMessages();
+    }, [loadGroup, loadPendingMessages])
   );
 
   /* ---------------- load subgroups for this group ---------------- */
@@ -373,53 +432,45 @@ export default function GroupInfoScreen() {
     setExiting(true);
 
     try {
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser();
-
-      if (authError || !user) {
-        console.error("Error getting user:", authError);
-        Alert.alert("Error", "Could not identify current user.");
-        setExiting(false);
-        return;
-      }
-
-      const username =
-        user.user_metadata?.username || user.email || user.id;
-
       if (!groupId) {
-        console.error("No groupId set when exiting group");
         Alert.alert("Error", "Group not found.");
         setExiting(false);
         return;
       }
 
+      if (!myUsername) {
+        Alert.alert("Error", "Could not identify current user.");
+        setExiting(false);
+        return;
+      }
+
+      // (b) Remove from members + admins arrays
       const nextMembers = (membersUsernames || []).filter(
-        (u) => u !== username
+        (u) => String(u).toLowerCase() !== String(myUsername).toLowerCase()
       );
-      const nextAdmins = (groupAdmins || []).filter((u) => u !== username);
+      const nextAdmins = (groupAdmins || []).filter(
+        (u) => String(u).toLowerCase() !== String(myUsername).toLowerCase()
+      );
 
       const { error: updError } = await supabase
         .from("groups")
-        .update({
-          members: nextMembers,
-          group_admin: nextAdmins,
-        })
+        .update({ members: nextMembers, group_admin: nextAdmins })
         .eq("id", groupId);
 
       if (updError) {
-        console.error("Error exiting group (groups update):", updError);
         Alert.alert("Error", "Could not exit the group.");
         setExiting(false);
         return;
       }
 
-      setMembersUsernames(nextMembers);
-      setGroupAdmins(nextAdmins);
+      // (c) Remove group from chat list
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        await supabase.from("chat_threads").delete().eq("chat_id", groupId).eq("owner_id", user.id);
+      }
 
-      setInfoModal({ visible: true, message: t("group_exit_success") || "You left this group." });
-      navigation.goBack();
+      // (a) Navigate to ChatListScreen
+      navigation.navigate("Chat");
     } catch (e) {
       console.error("Unexpected error exiting group:", e);
       Alert.alert("Error", "Could not exit the group.");
@@ -662,8 +713,15 @@ export default function GroupInfoScreen() {
         return;
       }
 
-      setInfoModal({ visible: true, message: t("group_deleted") || "Group deleted." });
-      navigation.goBack();
+      // Mark all chat_threads for this group so every member's ChatListScreen
+      // shows "This group was deleted." and the realtime listener triggers a refresh.
+      supabase
+        .from("chat_threads")
+        .update({ last_content: "__group_deleted__" })
+        .eq("chat_id", groupId)
+        .then(() => {});
+
+      navigation.navigate("Chat");
     } catch (e) {
       console.error("delete group unexpected", e);
       Alert.alert("Error", "Could not delete group.");
@@ -674,6 +732,21 @@ export default function GroupInfoScreen() {
 
   const handleSubgroupPress = async (group, alreadyMember) => {
     if (!myUsername) return;
+
+    // Fresh verification check before entering any group chat
+    const { data: authData } = await supabase.auth.getUser();
+    const uid = authData?.user?.id;
+    if (uid) {
+      const { data: verCheck } = await supabase
+        .from("profiles")
+        .select("is_verified")
+        .eq("id", uid)
+        .maybeSingle();
+      if (!verCheck?.is_verified) {
+        navigation.navigate("PreFaceRecognition");
+        return;
+      }
+    }
 
     // If I'm already a member, just navigate
     if (alreadyMember) {
@@ -1031,16 +1104,54 @@ export default function GroupInfoScreen() {
               {(memberCount === 1 ? t("group_meta") : t("group_meta_plural")).replace("{n}", memberCount)}
             </Text>
 
-            {!!groupDesc && (
-              <Text
-                style={[
-                  styles.groupDesc,
-                  { color: theme.subtleText || theme.text },
-                ]}
-                numberOfLines={2}
+            {isAdmin && editingDesc ? (
+              <View style={{ width: "100%", marginTop: 8, paddingHorizontal: 4 }}>
+                <TextInput
+                  value={draftGroupDesc}
+                  onChangeText={setDraftGroupDesc}
+                  placeholder="Group description"
+                  placeholderTextColor={theme.subtleText || "#888"}
+                  style={[styles.groupDescInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.card }]}
+                  multiline
+                  autoFocus
+                />
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 6, justifyContent: "center" }}>
+                  <TouchableOpacity
+                    style={[styles.descSaveBtn, { backgroundColor: "#3D8BFF" }]}
+                    onPress={async () => {
+                      if (groupId) await supabase.from("groups").update({ group_desc: draftGroupDesc.trim() || null }).eq("id", groupId);
+                      setGroupDesc(draftGroupDesc.trim());
+                      setEditingDesc(false);
+                    }}
+                  >
+                    <Text style={styles.descSaveBtnText}>Save</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.descSaveBtn, { backgroundColor: theme.border || "#ccc" }]}
+                    onPress={() => setEditingDesc(false)}
+                  >
+                    <Text style={[styles.descSaveBtnText, { color: theme.text }]}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={{ flexDirection: "row", alignItems: "center", marginTop: groupDesc ? 4 : 8, gap: 6 }}
+                onPress={() => { if (isAdmin) { setDraftGroupDesc(groupDesc); setEditingDesc(true); } }}
+                activeOpacity={isAdmin ? 0.7 : 1}
               >
-                {groupDesc}
-              </Text>
+                {!!groupDesc && (
+                  <Text style={[styles.groupDesc, { color: theme.subtleText || theme.text, flex: 1 }]} numberOfLines={2}>
+                    {groupDesc}
+                  </Text>
+                )}
+                {isAdmin && (
+                  <Feather name="edit-2" size={14} color={theme.subtleText || "#888"} />
+                )}
+                {isAdmin && !groupDesc && (
+                  <Text style={[styles.groupDesc, { color: theme.subtleText || "#888" }]}>Add description</Text>
+                )}
+              </TouchableOpacity>
             )}
           </View>
 
@@ -1207,6 +1318,77 @@ export default function GroupInfoScreen() {
                 </View>
               </TouchableOpacity>
 
+              {/* Requests to join — collapsible */}
+              <TouchableOpacity
+                style={styles.approvalToggleRow}
+                activeOpacity={0.7}
+                onPress={() => setRequestsExpanded((v) => !v)}
+              >
+                <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888", flex: 1 }]}>
+                  {t("group_see_requests") || "See requests to join"}{pendingMembers.length > 0 ? ` (${pendingMembers.length})` : ""}
+                </Text>
+                <Feather
+                  name={requestsExpanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={theme.subtleText || "#888"}
+                />
+              </TouchableOpacity>
+
+              {requestsExpanded && (
+                <View style={styles.pendingList}>
+                  {pendingMembers.length === 0 ? (
+                    <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888", paddingVertical: 8 }]}>
+                      {t("group_no_requests") || "No pending requests."}
+                    </Text>
+                  ) : pendingMembers.map((uname) => {
+                    const prof = pendingProfiles[uname];
+                    return (
+                      <View key={uname} style={styles.pendingRow}>
+                        {prof?.avatar_url ? (
+                          <Image source={{ uri: prof.avatar_url }} style={styles.pendingAvatar} />
+                        ) : (
+                          <View style={[styles.pendingAvatar, { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" }]}>
+                            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>
+                              {(prof?.name || uname).charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                        <View style={{ flex: 1, marginLeft: 10 }}>
+                          {!!prof?.name && (
+                            <Text style={[styles.pendingName, { color: theme.text }]}>{prof.name}</Text>
+                          )}
+                          <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888" }]}>@{uname}</Text>
+                        </View>
+                        <View style={styles.pendingBtns}>
+                          <TouchableOpacity
+                            style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
+                            onPress={async () => {
+                              const nextPending = pendingMembers.filter((u) => u !== uname);
+                              const nextMembers = [...membersUsernames, uname];
+                              await supabase.from("groups").update({ pending_members: nextPending, members: nextMembers }).eq("id", groupId);
+                              setPendingMembers(nextPending);
+                              setMembersUsernames(nextMembers);
+                            }}
+                          >
+                            <Feather name="check" size={16} color="#fff" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
+                            onPress={async () => {
+                              const nextPending = pendingMembers.filter((u) => u !== uname);
+                              await supabase.from("groups").update({ pending_members: nextPending }).eq("id", groupId);
+                              setPendingMembers(nextPending);
+                            }}
+                          >
+                            <Feather name="x" size={16} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
               <TouchableOpacity
                 style={styles.approvalToggleRow}
                 activeOpacity={0.7}
@@ -1225,38 +1407,79 @@ export default function GroupInfoScreen() {
                 </View>
               </TouchableOpacity>
 
-              {pendingMembers.length > 0 && (
+              {/* Review messages — collapsible list */}
+              <TouchableOpacity
+                style={styles.approvalToggleRow}
+                activeOpacity={0.7}
+                onPress={() => setReviewMsgExpanded((v) => !v)}
+              >
+                <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888", flex: 1 }]}>
+                  {t("group_review_messages") || "Review messages"}{pendingMessages.length > 0 ? ` (${pendingMessages.length})` : ""}
+                </Text>
+                <Feather
+                  name={reviewMsgExpanded ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={theme.subtleText || "#888"}
+                />
+              </TouchableOpacity>
+
+              {reviewMsgExpanded && (
                 <View style={styles.pendingList}>
-                  <Text style={[styles.pendingTitle, { color: theme.text }]}>{t("group_pending_requests").replace("{n}", pendingMembers.length)}</Text>
-                  {pendingMembers.map((uname) => (
-                    <View key={uname} style={styles.pendingRow}>
-                      <Text style={[styles.pendingName, { color: theme.text }]}>@{uname}</Text>
-                      <View style={styles.pendingBtns}>
-                        <TouchableOpacity
-                          style={[styles.pendingBtn, { backgroundColor: "#3D8BFF" }]}
-                          onPress={async () => {
-                            const nextPending = pendingMembers.filter((u) => u !== uname);
-                            const nextMembers = [...membersUsernames, uname];
-                            await supabase.from("groups").update({ pending_members: nextPending, members: nextMembers }).eq("id", groupId);
-                            setPendingMembers(nextPending);
-                            setMembersUsernames(nextMembers);
-                          }}
-                        >
-                          <Text style={styles.pendingBtnText}>{t("group_approve")}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.pendingBtn, { backgroundColor: "#EF4444" }]}
-                          onPress={async () => {
-                            const nextPending = pendingMembers.filter((u) => u !== uname);
-                            await supabase.from("groups").update({ pending_members: nextPending }).eq("id", groupId);
-                            setPendingMembers(nextPending);
-                          }}
-                        >
-                          <Text style={styles.pendingBtnText}>{t("group_decline")}</Text>
-                        </TouchableOpacity>
+                  {pendingMessages.length === 0 ? (
+                    <Text style={[styles.approvalToggleSub, { color: theme.subtleText || "#888", paddingVertical: 8 }]}>
+                      {t("group_no_pending_messages") || "No messages to review."}
+                    </Text>
+                  ) : pendingMessages.map((msg) => {
+                    const isExpanded = expandedMsgIds.has(msg.id);
+                    return (
+                      <View key={msg.id} style={[styles.pendingRow, { alignItems: "flex-start", paddingVertical: 10 }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.pendingName, { color: theme.text }]}>{msg.senderName}:</Text>
+                          <Text
+                            style={[styles.approvalToggleSub, { color: theme.subtleText || "#888", marginTop: 2 }]}
+                            numberOfLines={isExpanded ? undefined : 1}
+                          >
+                            "{msg.content}"
+                          </Text>
+                          {msg.content && msg.content.length > 50 && (
+                            <TouchableOpacity
+                              onPress={() => setExpandedMsgIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(msg.id)) next.delete(msg.id); else next.add(msg.id);
+                                return next;
+                              })}
+                            >
+                              <Text style={{ color: "#3D8BFF", fontSize: 12, fontFamily: "Poppins", marginTop: 2 }}>
+                                {isExpanded ? (t("group_read_less") || "Read less") : (t("group_read_more") || "Read more")}
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                        <View style={[styles.pendingBtns, { marginTop: 2 }]}>
+                          <TouchableOpacity
+                            style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
+                            onPress={async () => {
+                              const { error } = await supabase.rpc("approve_pending_message", { p_message_id: msg.id });
+                              if (error) { console.warn("[GroupInfo] approve error:", error.message); return; }
+                              setPendingMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                            }}
+                          >
+                            <Feather name="check" size={16} color="#fff" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
+                            onPress={async () => {
+                              const { error } = await supabase.rpc("deny_pending_message", { p_message_id: msg.id });
+                              if (error) { console.warn("[GroupInfo] deny error:", error.message); return; }
+                              setPendingMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                            }}
+                          >
+                            <Feather name="x" size={16} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               )}
             </View>
@@ -1264,16 +1487,6 @@ export default function GroupInfoScreen() {
 
           {/* Footer buttons */}
           <View style={styles.footer}>
-            <TouchableOpacity
-              style={styles.exitButton}
-              onPress={handleExitGroup}
-              disabled={exiting}
-            >
-              <Text style={styles.exitButtonText}>
-                {t("exit_group_button") || "Exit group"}
-              </Text>
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.reportButton}
               onPress={() => setReportModalVisible(true)}
@@ -1578,6 +1791,27 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: "center",
   },
+  groupDescInput: {
+    fontFamily: "Poppins",
+    fontSize: 13,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 70,
+    textAlignVertical: "top",
+  },
+  descSaveBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 7,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  descSaveBtnText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+    color: "#fff",
+  },
 
   searchContainer: {
     flexDirection: "row",
@@ -1812,17 +2046,27 @@ const styles = StyleSheet.create({
   pendingRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 6,
+    paddingVertical: 8,
+  },
+  pendingAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   pendingName: {
-    fontFamily: "Poppins",
-    fontSize: 14,
-    flex: 1,
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
   },
   pendingBtns: {
     flexDirection: "row",
     gap: 8,
+  },
+  pendingIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
   pendingBtn: {
     paddingHorizontal: 12,

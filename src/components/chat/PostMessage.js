@@ -462,7 +462,7 @@ export default function PostMessage({
 const RADIUS = 16;
 
 const styles = StyleSheet.create({
-  row: { width: "100%", paddingBottom: 10 },
+  row: { width: "100%" },
   bubble: { width: "78%" },
   bubbleLeft: { alignSelf: "flex-start" },
   bubbleRight: { alignSelf: "flex-end" },
@@ -492,7 +492,7 @@ const styles = StyleSheet.create({
   },
   excerpt: { paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, fontFamily: "Poppins" },
 
-  timeLine: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 3, gap: 4, paddingHorizontal: 2 },
+  timeLine: { width: "100%", flexDirection: "row", alignItems: "center", marginTop: 3, marginBottom: 10, gap: 4, paddingHorizontal: 2 },
   time: { fontSize: 11, fontFamily: "Poppins" },
 
   menuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },

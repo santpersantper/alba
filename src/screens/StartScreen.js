@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -22,12 +22,12 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
+import { getDeviceId } from '../lib/deviceId';
 
 // Required for expo-web-browser to close the auth session on redirect
 WebBrowser.maybeCompleteAuthSession();
 
 const { height } = Dimensions.get('window');
-
 
 export default function StartScreen({ navigation }) {
   const { theme, isDark } = useAlbaTheme();
@@ -42,6 +42,19 @@ export default function StartScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  // ── New device verification state ─────────────────────────────────────────
+  const [deviceOtpVisible, setDeviceOtpVisible] = useState(false);
+  const [deviceOtp, setDeviceOtp] = useState('');
+  const [verifyingDevice, setVerifyingDevice] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
+  // Stored while waiting for device OTP
+  const pendingEmailRef = useRef('');
+  const pendingPasswordRef = useRef('');
+  const pendingDeviceIdRef = useRef('');
+  const pendingUserIdRef = useRef('');
+
+  const [signUpCheckLoading, setSignUpCheckLoading] = useState(false);
 
   const [forgotVisible, setForgotVisible] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
@@ -62,6 +75,31 @@ export default function StartScreen({ navigation }) {
 
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? '#222' : '#FFFFFF' }} />;
 
+  const accent = isDark ? '#FFFFFF' : '#00A9FF';
+
+  // ── Login helpers ─────────────────────────────────────────────────────────
+
+  const resolveEmail = async (raw) => {
+    const trimmed = raw.trim();
+    if (trimmed.includes('@')) return trimmed;
+    const { data, error } = await supabase.rpc('get_email_for_username', {
+      uname: trimmed.toLowerCase(),
+    });
+    if (error || !data) throw new Error('Invalid username');
+    return data;
+  };
+
+  const completeLogin = async () => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: pendingEmailRef.current,
+      password: pendingPasswordRef.current,
+    });
+    if (error) throw error;
+    navigation.getParent()?.reset({ index: 0, routes: [{ name: 'App' }] });
+  };
+
+  // ── Step 1: tap "Log in" ──────────────────────────────────────────────────
+
   const onLogin = async () => {
     if (!identifier || !password) {
       showAlert('Missing info', 'Please enter your email/username and password.');
@@ -70,24 +108,48 @@ export default function StartScreen({ navigation }) {
 
     setLoading(true);
     try {
-      let emailToUse = identifier.trim();
+      const email = await resolveEmail(identifier);
+      const deviceId = await getDeviceId();
 
-      if (!emailToUse.includes('@')) {
-        // Username lookup is case-insensitive; password remains case-sensitive
-        const { data, error } = await supabase.rpc('get_email_for_username', {
-          uname: emailToUse.toLowerCase(),
-        });
-        if (error || !data) throw new Error('Invalid username');
-        emailToUse = data;
+      // Check whether this device is known for this account
+      const { data, error: checkErr } = await supabase.functions.invoke(
+        'send-verification-code',
+        { body: { action: 'check_login_device', email, device_id: deviceId } }
+      );
+      if (checkErr) throw checkErr;
+
+      pendingEmailRef.current = email;
+      pendingPasswordRef.current = password;
+      pendingDeviceIdRef.current = deviceId ?? '';
+      pendingUserIdRef.current = data?.user_id ?? '';
+
+      const status = data?.status ?? 'known';
+
+      if (status === 'new_device') {
+        // Unknown device — send OTP before allowing login
+        const { data: sendData, error: sendErr } = await supabase.functions.invoke(
+          'send-verification-code',
+          { body: { action: 'send_login_otp', email } }
+        );
+        if (sendErr) throw sendErr;
+        if (sendData?.error === 'rate_limit') {
+          showAlert(t('login_device_ratelimit_title'), `${t('login_device_ratelimit_body')} ${sendData.wait}s.`);
+          return;
+        }
+        setDeviceOtp('');
+        setDeviceOtpVisible(true);
+        return;
       }
 
-      const { error } = await supabase.auth.signInWithPassword({
-        email: emailToUse,
-        password,
-      });
-      if (error) throw error;
+      // Known or first device — log in directly
+      await completeLogin();
 
-      navigation.getParent()?.reset({ index: 0, routes: [{ name: 'App' }] });
+      if (status === 'first_device' && deviceId) {
+        // Register this device in the background (non-blocking)
+        supabase.functions.invoke('send-verification-code', {
+          body: { action: 'register_device', device_id: deviceId },
+        }).catch(() => {});
+      }
     } catch (e) {
       showAlert('Login failed', e.message || 'Try again.');
     } finally {
@@ -95,10 +157,63 @@ export default function StartScreen({ navigation }) {
     }
   };
 
-  // Google sign-in via Supabase OAuth browser flow — works on both iOS and Android.
-  // On Android, the Chrome Custom Tab sometimes closes before the redirect is captured,
-  // so we use Linking.addEventListener as the primary URL capture with openAuthSessionAsync
-  // as fallback.
+  // ── Step 2: user entered OTP for new device ───────────────────────────────
+
+  const onDeviceOtpVerify = async () => {
+    if (deviceOtp.length < 6) return;
+    setVerifyingDevice(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-verification-code', {
+        body: {
+          action: 'verify_login_otp',
+          email: pendingEmailRef.current,
+          code: deviceOtp,
+          device_id: pendingDeviceIdRef.current,
+          user_id: pendingUserIdRef.current || undefined,
+        },
+      });
+      if (error) throw error;
+
+      if (!data?.ok) {
+        const reason = data?.reason;
+        const msg = reason === 'expired'
+          ? t('signup_code_expired_body')
+          : t('signup_code_invalid_body');
+        showAlert(t('signup_code_invalid_title'), msg);
+        return;
+      }
+
+      setDeviceOtpVisible(false);
+      await completeLogin();
+    } catch (e) {
+      showAlert('Verification failed', e.message || 'Please try again.');
+    } finally {
+      setVerifyingDevice(false);
+    }
+  };
+
+  const onDeviceOtpResend = async () => {
+    if (resendingOtp) return;
+    setResendingOtp(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-verification-code', {
+        body: { action: 'send_login_otp', email: pendingEmailRef.current },
+      });
+      if (error) throw error;
+      if (data?.error === 'rate_limit') {
+        showAlert(t('login_device_ratelimit_title'), `${t('login_device_ratelimit_body')} ${data.wait}s.`);
+        return;
+      }
+      showAlert(t('signup_code_resent_title'), t('signup_code_resent_body'));
+    } catch (e) {
+      showAlert('Error', e.message || 'Could not resend code.');
+    } finally {
+      setResendingOtp(false);
+    }
+  };
+
+  // ── Google sign-in ────────────────────────────────────────────────────────
+
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
     let settled = false;
@@ -106,26 +221,30 @@ export default function StartScreen({ navigation }) {
     const finish = async (url) => {
       if (settled) return;
       settled = true;
+      console.log('[Google] finish() called, url:', url?.substring(0, 80));
       try {
-        // PKCE flow: code in query string (?code= or &code=)
         const codeMatch = url?.match(/[?&]code=([^&#]+)/);
         if (codeMatch?.[1]) {
+          console.log('[Google] branch: exchangeCodeForSession');
           const { error } = await supabase.auth.exchangeCodeForSession(codeMatch[1]);
+          console.log('[Google] exchangeCodeForSession result — error:', error?.message ?? null);
           if (error) throw error;
-          return; // onAuthStateChange in AppNavigator handles navigation
+          return;
         }
-        // Implicit flow fallback: tokens in hash fragment
         const fragMatch = url?.match(/#(.+)/);
         if (fragMatch) {
           const params = new URLSearchParams(fragMatch[1]);
           const access_token = params.get('access_token');
           const refresh_token = params.get('refresh_token');
+          console.log('[Google] branch: setSession, has access_token:', !!access_token, 'has refresh_token:', !!refresh_token);
           if (access_token) {
             const { error } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
+            console.log('[Google] setSession result — error:', error?.message ?? null);
             if (error) throw error;
             return;
           }
         }
+        console.warn('[Google] finish(): no code or token found in URL');
         throw new Error('Authentication failed. Please try again.');
       } catch (e) {
         showAlert('Google sign in failed', e.message || 'Please try again.');
@@ -142,25 +261,23 @@ export default function StartScreen({ navigation }) {
       if (error) throw error;
       if (!data?.url) throw new Error('No OAuth URL received');
 
-      // Primary: listen for the deep link via Linking (more reliable on Android)
       const subscription = Linking.addEventListener('url', ({ url }) => {
         subscription.remove();
         finish(url);
       });
 
       const result = await WebBrowser.openAuthSessionAsync(data.url, 'alba://');
+      console.log('[Google] WebBrowser result type:', result.type, 'settled:', settled);
 
-      // Fallback: if Linking didn't fire but openAuthSessionAsync captured the full URL
       if (!settled && result.type === 'success' && result.url && result.url.length > 'alba://'.length) {
         subscription.remove();
         finish(result.url);
       } else if (!settled && result.type !== 'success') {
-        // User cancelled
+        console.log('[Google] auth cancelled or failed, result:', result.type);
         subscription.remove();
         settled = true;
         setGoogleLoading(false);
       }
-      // If already settled by the Linking listener, do nothing
     } catch (e) {
       if (!settled) {
         settled = true;
@@ -170,8 +287,38 @@ export default function StartScreen({ navigation }) {
     }
   };
 
-  const onGoogleSignIn = () => {
-    handleGoogleSignIn();
+  const onSignUpPress = async () => {
+    setSignUpCheckLoading(true);
+    try {
+      const deviceId = await getDeviceId();
+      const { data, error } = await supabase.functions.invoke('check-signup-eligibility', {
+        body: { device_id: deviceId ?? null },
+      });
+      if (error) throw error;
+
+      if (!data?.allowed) {
+        const reason = data?.reason;
+        if (reason === 'device_limit') {
+          showAlert(
+            'Account limit reached',
+            'This device already has 2 Alba accounts. You cannot create another account from this device.'
+          );
+        } else {
+          showAlert(
+            'Account limit reached',
+            'Too many accounts have been created from your network. You cannot create another account at this time.'
+          );
+        }
+        return;
+      }
+
+      navigation.navigate('SignUp');
+    } catch {
+      // Fail open — let them through if the check errors
+      navigation.navigate('SignUp');
+    } finally {
+      setSignUpCheckLoading(false);
+    }
   };
 
   const onForgotPassword = async () => {
@@ -205,199 +352,263 @@ export default function StartScreen({ navigation }) {
     }
   };
 
-  const accent = isDark ? '#FFFFFF' : '#00A9FF';
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-    <View
-      style={[
-        styles.container,
-        { backgroundColor: isDark ? theme.gray : '#FFFFFF' },
-      ]}
-    >
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      <View style={[styles.container, { backgroundColor: isDark ? theme.gray : '#FFFFFF' }]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-      {navigation.canGoBack() && (
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} hitSlop={8}>
-          <Feather name="chevron-left" size={26} color={accent} />
+        <Image source={require('../../assets/icon.png')} style={styles.logo} />
+
+        <TextInput
+          style={[styles.input, { borderColor: accent, color: accent }]}
+          placeholder="email or username"
+          placeholderTextColor={accent}
+          autoCapitalize="none"
+          value={identifier}
+          onChangeText={setIdentifier}
+        />
+
+        <TextInput
+          style={[styles.input, { borderColor: accent, color: accent }]}
+          placeholder="password"
+          placeholderTextColor={accent}
+          secureTextEntry
+          value={password}
+          onChangeText={setPassword}
+        />
+
+        <TouchableOpacity
+          onPress={onLogin}
+          disabled={loading}
+          style={[
+            styles.nextBtn,
+            isDark && { backgroundColor: theme.gray, borderWidth: 1, borderColor: '#FFFFFF' },
+          ]}
+        >
+          <Text style={styles.btnText}>
+            {loading ? 'logging in…' : 'log in'}
+          </Text>
         </TouchableOpacity>
-      )}
 
-      <Image source={require('../../assets/icon.png')} style={styles.logo} />
-
-      <TextInput
-        style={[styles.input, { borderColor: accent, color: accent }]}
-        placeholder="email or username"
-        placeholderTextColor={accent}
-        autoCapitalize="none"
-        value={identifier}
-        onChangeText={setIdentifier}
-      />
-
-      <TextInput
-        style={[styles.input, { borderColor: accent, color: accent }]}
-        placeholder="password"
-        placeholderTextColor={accent}
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
-
-      <TouchableOpacity
-        onPress={onLogin}
-        disabled={loading}
-        style={[
-          styles.nextBtn,
-          isDark && { backgroundColor: theme.gray, borderWidth: 1, borderColor: '#FFFFFF' },
-        ]}
-      >
-        <Text style={styles.btnText}>
-          {loading ? 'logging in…' : 'log in'}
-        </Text>
-      </TouchableOpacity>
-
-      {/* Google Sign-In */}
-      <TouchableOpacity
-        onPress={onGoogleSignIn}
-        disabled={googleLoading}
-        style={[
-          styles.googleBtn,
-          isDark ? { borderColor: '#FFFFFF' } : { borderColor: '#00A9FF' },
-          { opacity: googleLoading ? 0.7 : 1 },
-        ]}
-      >
-        {googleLoading ? (
-          <ActivityIndicator color={accent} size="small" />
-        ) : (
-          <>
-            <Text style={[styles.googleG, { color: accent }]}>G</Text>
-            <Text style={[styles.googleBtnText, { color: accent }]}>
-              continue with google
-            </Text>
-          </>
-        )}
-      </TouchableOpacity>
-
-      <Text style={{ marginTop: 24, color: accent, fontFamily: 'Poppins' }}>
-        don't have an account?{' '}
-        <Text
-          style={[styles.link, { color: accent }]}
-          onPress={() => navigation.navigate('SignUp')}
+        <TouchableOpacity
+          onPress={handleGoogleSignIn}
+          disabled={googleLoading}
+          style={[
+            styles.googleBtn,
+            isDark ? { borderColor: '#FFFFFF' } : { borderColor: '#00A9FF' },
+            { opacity: googleLoading ? 0.7 : 1 },
+          ]}
         >
-          sign up
+          {googleLoading ? (
+            <ActivityIndicator color={accent} size="small" />
+          ) : (
+            <>
+              <Text style={[styles.googleG, { color: accent }]}>G</Text>
+              <Text style={[styles.googleBtnText, { color: accent }]}>
+                continue with google
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        <Text style={{ marginTop: 24, color: accent, fontFamily: 'Poppins' }}>
+          don't have an account?{' '}
+          {signUpCheckLoading ? (
+            <ActivityIndicator size="small" color={accent} style={{ marginLeft: 4 }} />
+          ) : (
+            <Text
+              style={[styles.link, { color: accent }]}
+              onPress={onSignUpPress}
+            >
+              sign up
+            </Text>
+          )}
         </Text>
-      </Text>
 
-      <TouchableOpacity
-        onPress={() => { setForgotEmail(''); setForgotDone(false); setForgotVisible(true); }}
-        style={{ marginTop: 14 }}
-      >
-        <Text style={[styles.forgotLink, { color: accent }]}>forgot your password?</Text>
-      </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => { setForgotEmail(''); setForgotDone(false); setForgotVisible(true); }}
+          style={{ marginTop: 14 }}
+        >
+          <Text style={[styles.forgotLink, { color: accent }]}>forgot your password?</Text>
+        </TouchableOpacity>
 
-      {/* Alba-native alert modal */}
-      <Modal
-        visible={!!alertConfig}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAlertConfig(null)}
-      >
-        <View style={styles.alertOverlay}>
-          <View style={[styles.alertCard, { backgroundColor: isDark ? '#2a2a2a' : '#FFFFFF' }]}>
-            <Text style={[styles.alertTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
-              {alertConfig?.title}
-            </Text>
-            <Text style={[styles.alertBody, { color: isDark ? '#aaa' : '#555' }]}>
-              {alertConfig?.message}
-            </Text>
-            <TouchableOpacity style={styles.alertBtn} onPress={() => setAlertConfig(null)}>
-              <Text style={styles.alertBtnText}>OK</Text>
-            </TouchableOpacity>
+        {/* ── Alert modal ──────────────────────────────────────────────── */}
+        <Modal
+          visible={!!alertConfig}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setAlertConfig(null)}
+        >
+          <View style={styles.alertOverlay}>
+            <View style={[styles.alertCard, { backgroundColor: isDark ? '#2a2a2a' : '#FFFFFF' }]}>
+              <Text style={[styles.alertTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
+                {alertConfig?.title}
+              </Text>
+              <Text style={[styles.alertBody, { color: isDark ? '#aaa' : '#555' }]}>
+                {alertConfig?.message}
+              </Text>
+              <TouchableOpacity style={styles.alertBtn} onPress={() => setAlertConfig(null)}>
+                <Text style={styles.alertBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
 
-      <Modal
-        visible={forgotVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setForgotVisible(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.forgotOverlay}
+        {/* ── New device OTP modal ─────────────────────────────────────── */}
+        <Modal
+          visible={deviceOtpVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDeviceOtpVisible(false)}
         >
-          <View style={[styles.forgotCard, { backgroundColor: isDark ? '#2a2a2a' : '#FFFFFF' }]}>
-            {forgotDone ? (
-              <>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.forgotOverlay}
+          >
+            <View style={[styles.forgotCard, { backgroundColor: isDark ? '#2a2a2a' : '#FFFFFF' }]}>
+              <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
+                {t('login_new_device_title')}
+              </Text>
+              <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
+                {t('login_new_device_body')} {pendingEmailRef.current}.
+              </Text>
+
+              <TextInput
+                style={[
+                  styles.otpInput,
+                  {
+                    borderColor: isDark ? '#555' : '#d0d7e2',
+                    color: isDark ? '#FFFFFF' : '#111',
+                    backgroundColor: isDark ? '#1a1a1a' : '#f5f6fa',
+                  },
+                ]}
+                placeholder="000000"
+                placeholderTextColor={isDark ? '#666' : '#aaa'}
+                keyboardType="number-pad"
+                maxLength={6}
+                value={deviceOtp}
+                onChangeText={(v) => setDeviceOtp(v.replace(/[^0-9]/g, '').slice(0, 6))}
+                autoFocus
+              />
+
+              <View style={styles.forgotRow}>
                 <TouchableOpacity
-                  onPress={() => setForgotVisible(false)}
-                  style={styles.forgotCloseBtn}
-                  hitSlop={8}
+                  style={[styles.forgotBtn, styles.forgotCancelBtn]}
+                  onPress={() => setDeviceOtpVisible(false)}
+                  disabled={verifyingDevice}
                 >
-                  <Feather name="x" size={20} color={isDark ? '#aaa' : '#6F7D95'} />
+                  <Text style={[styles.forgotBtnText, { color: isDark ? '#aaa' : '#6F7D95' }]}>
+                    Cancel
+                  </Text>
                 </TouchableOpacity>
-                <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
-                  Check your inbox
-                </Text>
-                <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
-                  If that email is registered with Alba, you'll receive a temporary password shortly. Use it to log in, then change it from Settings.
-                </Text>
-                <TouchableOpacity style={styles.forgotBtn} onPress={() => setForgotVisible(false)}>
-                  <Text style={styles.forgotBtnText}>Done</Text>
+                <TouchableOpacity
+                  style={[styles.forgotBtn, (verifyingDevice || deviceOtp.length < 6) && { opacity: 0.6 }]}
+                  onPress={onDeviceOtpVerify}
+                  disabled={verifyingDevice || deviceOtp.length < 6}
+                >
+                  {verifyingDevice
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={styles.forgotBtnText}>{t('login_new_device_verify_btn')}</Text>}
                 </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
-                  Reset your password
+              </View>
+
+              <TouchableOpacity
+                onPress={onDeviceOtpResend}
+                disabled={resendingOtp}
+                style={{ marginTop: 14, alignSelf: 'center' }}
+              >
+                <Text style={[styles.forgotLink, { color: accent, opacity: resendingOtp ? 0.4 : 0.75 }]}>
+                  {resendingOtp ? t('signup_code_sending') : t('signup_code_resend')}
                 </Text>
-                <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
-                  Enter the email address associated with your Alba account. We'll send you a temporary password you can use to log back in.
-                </Text>
-                <TextInput
-                  style={[
-                    styles.forgotInput,
-                    {
-                      borderColor: isDark ? '#555' : '#d0d7e2',
-                      color: isDark ? '#FFFFFF' : '#111',
-                      backgroundColor: isDark ? '#1a1a1a' : '#f5f6fa',
-                    },
-                  ]}
-                  placeholder="your email"
-                  placeholderTextColor={isDark ? '#888' : '#9fa5b3'}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
-                  value={forgotEmail}
-                  onChangeText={setForgotEmail}
-                  editable={!forgotLoading}
-                />
-                <View style={styles.forgotRow}>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+
+        {/* ── Forgot password modal ────────────────────────────────────── */}
+        <Modal
+          visible={forgotVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setForgotVisible(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.forgotOverlay}
+          >
+            <View style={[styles.forgotCard, { backgroundColor: isDark ? '#2a2a2a' : '#FFFFFF' }]}>
+              {forgotDone ? (
+                <>
                   <TouchableOpacity
-                    style={[styles.forgotBtn, styles.forgotCancelBtn]}
                     onPress={() => setForgotVisible(false)}
-                    disabled={forgotLoading}
+                    style={styles.forgotCloseBtn}
+                    hitSlop={8}
                   >
-                    <Text style={[styles.forgotBtnText, { color: isDark ? '#aaa' : '#6F7D95' }]}>
-                      Cancel
-                    </Text>
+                    <Feather name="x" size={20} color={isDark ? '#aaa' : '#6F7D95'} />
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.forgotBtn, { opacity: forgotLoading ? 0.6 : 1 }]}
-                    onPress={onForgotPassword}
-                    disabled={forgotLoading}
-                  >
-                    {forgotLoading
-                      ? <ActivityIndicator color="#fff" />
-                      : <Text style={styles.forgotBtnText}>Send</Text>}
+                  <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
+                    Check your inbox
+                  </Text>
+                  <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
+                    If that email is registered with Alba, you'll receive a temporary password shortly. Use it to log in, then change it from Settings.
+                  </Text>
+                  <TouchableOpacity style={styles.forgotBtn} onPress={() => setForgotVisible(false)}>
+                    <Text style={styles.forgotBtnText}>Done</Text>
                   </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </View>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
+                    Reset your password
+                  </Text>
+                  <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
+                    Enter the email address associated with your Alba account. We'll send you a temporary password you can use to log back in.
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.forgotInput,
+                      {
+                        borderColor: isDark ? '#555' : '#d0d7e2',
+                        color: isDark ? '#FFFFFF' : '#111',
+                        backgroundColor: isDark ? '#1a1a1a' : '#f5f6fa',
+                      },
+                    ]}
+                    placeholder="your email"
+                    placeholderTextColor={isDark ? '#888' : '#9fa5b3'}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    value={forgotEmail}
+                    onChangeText={setForgotEmail}
+                    editable={!forgotLoading}
+                  />
+                  <View style={styles.forgotRow}>
+                    <TouchableOpacity
+                      style={[styles.forgotBtn, styles.forgotCancelBtn]}
+                      onPress={() => setForgotVisible(false)}
+                      disabled={forgotLoading}
+                    >
+                      <Text style={[styles.forgotBtnText, { color: isDark ? '#aaa' : '#6F7D95' }]}>
+                        Cancel
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.forgotBtn, { opacity: forgotLoading ? 0.6 : 1 }]}
+                      onPress={onForgotPassword}
+                      disabled={forgotLoading}
+                    >
+                      {forgotLoading
+                        ? <ActivityIndicator color="#fff" />
+                        : <Text style={styles.forgotBtnText}>Send</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+      </View>
     </TouchableWithoutFeedback>
   );
 }
@@ -544,6 +755,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontFamily: 'Poppins',
     fontSize: 14,
+    marginBottom: 18,
+  },
+  otpInput: {
+    height: 56,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontFamily: 'Poppins',
+    fontSize: 26,
+    letterSpacing: 14,
+    textAlign: 'center',
     marginBottom: 18,
   },
   forgotRow: {

@@ -28,7 +28,6 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { decode as b64decodeStr } from "base-64";
 
-import Constants from "expo-constants";
 import {
   getCachedProfile,
   setCachedProfile,
@@ -45,10 +44,6 @@ const PLACEHOLDERS = {
 
 // Reads from the environment so we never hardcode a development IP or HTTP URL.
 // Set EXPO_PUBLIC_API_URL to your production server domain (must be HTTPS in prod).
-const LAMBDA_VERIFY_URL =
-  process.env.EXPO_PUBLIC_LAMBDA_VERIFY_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.LAMBDA_VERIFY_URL ??
-  "";
 
 /* ------------ tiny utils ------------ */
 const isHeicUrl = (u = "") => /\.heic($|\?)/i.test(String(u).split("?")[0] || "");
@@ -84,7 +79,7 @@ async function fetchProfileById(id) {
   if (!id) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms")
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
@@ -96,7 +91,7 @@ async function fetchProfileByUsername(username) {
   const uname = asAt(username);
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms")
     .eq("username", uname)
     .maybeSingle();
   if (error) throw error;
@@ -178,6 +173,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
   const [unverifyModalVisible, setUnverifyModalVisible] = useState(false);
+  const [dmBlockedModalVisible, setDmBlockedModalVisible] = useState(false);
   const [pendingAvatarAsset, setPendingAvatarAsset] = useState(null);
 
   const [toastMessage, setToastMessage] = useState("");
@@ -379,7 +375,27 @@ export default function ProfileScreen({ navigation, route }) {
 
   const displayedBio = showFullBio || !shouldShowReadMore ? bioText : firstLineBio;
 
-  const goMessage = () => {
+  const goMessage = async () => {
+    // If allow_dms is explicitly false, check for an existing thread first
+    if (display.allow_dms === false) {
+      const targetUsername = display.username;
+      if (targetUsername && authId) {
+        const { data: thread } = await supabase
+          .from("chat_threads")
+          .select("chat_id")
+          .eq("owner_id", authId)
+          .eq("chat_id", `@${targetUsername}`)
+          .eq("is_group", false)
+          .maybeSingle();
+        if (!thread) {
+          setDmBlockedModalVisible(true);
+          return;
+        }
+      } else {
+        setDmBlockedModalVisible(true);
+        return;
+      }
+    }
     const chatKey = display.username ? `@${display.username}` : display.id ? `user:${display.id}` : firstName;
     navigation.navigate("SingleChat", {
       chat: chatKey,
@@ -397,7 +413,7 @@ export default function ProfileScreen({ navigation, route }) {
       // Load current followed_users, then add/remove target
       const { data: myProfile } = await supabase
         .from("profiles")
-        .select("followed_users")
+        .select("followed_users, username")
         .eq("id", authId)
         .maybeSingle();
       const current = Array.isArray(myProfile?.followed_users) ? myProfile.followed_users : [];
@@ -618,25 +634,17 @@ export default function ProfileScreen({ navigation, route }) {
   ]);
 
   const detectFaceInAvatar = async (localUri) => {
-    if (!LAMBDA_VERIFY_URL) return true; // no URL configured — skip check
     try {
       const resized = await ImageManipulator.manipulateAsync(
         localUri,
         [{ resize: { width: 800 } }],
         { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
       );
-      const base64 = resized.base64;
-
-      const res = await fetch(LAMBDA_VERIFY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Pass the same image as both sides — we only care about faceDetected
-        body: JSON.stringify({ profileBase64: base64, selfieBase64: base64, userId: "avatar-detect" }),
+      const { data, error } = await supabase.functions.invoke("verify-face", {
+        body: { selfieBase64: resized.base64, detectOnly: true },
       });
-
-      if (!res.ok) return true; // permissive on Lambda errors
-      const json = await res.json();
-      return !!json.faceDetected;
+      if (error) return true; // permissive on service errors
+      return !!data?.faceDetected;
     } catch {
       return true; // permissive on network errors
     }
@@ -1200,6 +1208,30 @@ export default function ProfileScreen({ navigation, route }) {
             >
               <Text style={{ color: theme.text, fontFamily: "Poppins", fontSize: 14 }}>Keep profile picture</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* DM blocked modal */}
+      <Modal
+        visible={dmBlockedModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDmBlockedModalVisible(false)}
+      >
+        <View style={styles.centeredOverlay}>
+          <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111" }]}>
+              {t("profile_dm_blocked_title") || "Can't send message"}
+            </Text>
+            <Text style={{ fontFamily: "Poppins", fontSize: 13, color: theme.secondaryText, marginBottom: 16 }}>
+              {t("profile_dm_blocked_body") || `@${display.username} doesn't accept messages from people they don't know.`}
+            </Text>
+            <View style={styles.dialogBtns}>
+              <TouchableOpacity onPress={() => setDmBlockedModalVisible(false)} style={styles.dialogBtnSubmit}>
+                <Text style={styles.dialogBtnSubmitText}>{t("profile_ok") || "OK"}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

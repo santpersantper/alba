@@ -271,13 +271,13 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
+    backgroundColor: "rgba(0,0,0,0.35)",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
     paddingBottom: 8,
-    backgroundColor: "rgba(0,0,0,0.3)",
   },
   backBtn: { padding: 2 },
   headerTitle: {

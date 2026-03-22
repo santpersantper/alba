@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import {
   Animated,
+  AppState,
   View,
   StyleSheet,
   Alert,
@@ -20,6 +21,7 @@ import {
   FlatList,
   TextInput,
   Modal,
+  Linking,
 } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Location from "expo-location";
@@ -41,7 +43,6 @@ import {
   readCachedFirstPostOverride,
   warmCommunityFirstPost,
 } from "../lib/communityFirstPostCache";
-import { checkVPN } from "../utils/vpnDetector";
 
 /* --------------------------- CONSTANTS ---------------------------- */
 
@@ -76,6 +77,8 @@ const withTimeout = async (promise, ms) => {
 
 const LAST_KNOWN_MAX_AGE_MS = 2 * 60 * 1000; // only trust last-known if <= 2 min old
 
+// Returns { ...coords, mocked } or null. `mocked` is true on Android when a
+// fake GPS provider is active — reliable signal of location spoofing.
 const getFreshCoords = async () => {
   // 1) last-known (only if recent)
   try {
@@ -88,7 +91,7 @@ const getFreshCoords = async () => {
       typeof ts === "number" &&
       Date.now() - ts <= LAST_KNOWN_MAX_AGE_MS
     ) {
-      return coords;
+      return { ...coords, mocked: last.mocked ?? false };
     }
   } catch {}
 
@@ -101,7 +104,7 @@ const getFreshCoords = async () => {
       6500
     );
     if (pos?.coords?.latitude != null && pos?.coords?.longitude != null) {
-      return pos.coords;
+      return { ...pos.coords, mocked: pos.mocked ?? false };
     }
   } catch {}
 
@@ -114,7 +117,7 @@ const getFreshCoords = async () => {
       6500
     );
     if (pos?.coords?.latitude != null && pos?.coords?.longitude != null) {
-      return pos.coords;
+      return { ...pos.coords, mocked: pos.mocked ?? false };
     }
   } catch {}
 
@@ -166,6 +169,7 @@ export default function CommunityScreen() {
 
   const [uid, setUid] = useState(null);
   const [savedMeta, setSavedMeta] = useState({});
+  const [communityRadiusM, setCommunityRadiusM] = useState(DEFAULT_RADIUS_KM * 1000);
 
   const { prefs, reload: reloadPrefs } = useUserPreferences();
   const [travelBannerDismissed, setTravelBannerDismissed] = useState(false);
@@ -195,7 +199,9 @@ export default function CommunityScreen() {
   // Ad interest prompt — track rejected categories so we never ask again this session
   const [rejectedCategories, setRejectedCategories] = useState(new Set());
 
-  const [vpnBlockVisible, setVpnBlockVisible] = useState(false);
+  const [spoofReason, setSpoofReason] = useState(null); // null | "mocked" | "impossible_jump" | "country_mismatch"
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [showLocationInstructions, setShowLocationInstructions] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -261,6 +267,8 @@ export default function CommunityScreen() {
   const fetchNearbyPosts = useCallback(async () => {
     try {
       setLoading(true);
+      setLocationDenied(false);
+      setShowLocationInstructions(false);
 
       const { data: userRes } = await supabase.auth.getUser();
       if (!userRes?.user) throw new Error("Not authenticated");
@@ -271,7 +279,7 @@ export default function CommunityScreen() {
         loadSavedFromProfile(userId),
         supabase
           .from("profiles")
-          .select("event_tags, ad_tags, show_local_news, blocked_users, followed_users, show_followed_users_posts")
+          .select("event_tags, ad_tags, show_local_news, blocked_users, followed_users, show_followed_users_posts, max_event_distance")
           .eq("id", userId)
           .maybeSingle(),
       ]);
@@ -315,10 +323,7 @@ export default function CommunityScreen() {
       if (perm.status !== "granted") {
         const req = await Location.requestForegroundPermissionsAsync();
         if (req.status !== "granted") {
-          Alert.alert(
-            t("community_location_title"),
-            t("community_location_message")
-          );
+          setLocationDenied(true);
           setActivePostId(null);
           return;
         }
@@ -343,6 +348,15 @@ export default function CommunityScreen() {
           setActivePostId(null);
           return;
         }
+
+        // ── Check 1: Android mock location flag (device-level, most reliable) ──
+        if (coords.mocked) {
+          console.warn("[Community] Mock location detected");
+          setSpoofReason("mocked");
+          setActivePostId(null);
+          return;
+        }
+
         ({ latitude, longitude } = coords);
       }
 
@@ -356,15 +370,29 @@ export default function CommunityScreen() {
         .eq("id", userId);
 
       if (upErr) {
-        // still try to fetch, but log (if the RPC relies on profile.location, this matters)
         console.warn("[Community] location update error", upErr);
       }
 
+      // ── Checks 2 & 3: impossible jump + IP vs GPS country (server-side, async) ──
+      // Run after DB update so the jump check can compare against the previous stored location.
+      supabase.functions.invoke("check-location", {
+        body: { latitude, longitude },
+      }).then(({ data }) => {
+        if (data?.spoofed) {
+          console.warn("[Community] Server spoof check:", data.reason);
+          setSpoofReason(data.reason);
+        }
+      }).catch(() => {}); // fail open — don't block on network error
+
       const { trackRequest } = require("../lib/requestTracker");
-      const _doneNearby = trackRequest(`Community.nearby_posts radius=${DEFAULT_RADIUS_KM}km`);
+      const radiusM = (typeof pref?.max_event_distance === "number" && pref.max_event_distance > 0)
+        ? pref.max_event_distance
+        : DEFAULT_RADIUS_KM * 1000;
+      setCommunityRadiusM(radiusM);
+      const _doneNearby = trackRequest(`Community.nearby_posts radius=${radiusM / 1000}km`);
       const { data, error: rpcErr } = await supabase.rpc("nearby_posts", {
         uid: userId,
-        radius_m: DEFAULT_RADIUS_KM * 1000,
+        radius_m: radiusM,
       }).limit(50);
       _doneNearby();
 
@@ -432,11 +460,20 @@ export default function CommunityScreen() {
     }, [fetchNearbyPosts, navigation, topBarOpacity, reloadPrefs])
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      checkVPN().then((detected) => setVpnBlockVisible(detected));
-    }, [])
-  );
+  // Re-check location permission when the app returns to foreground after the
+  // user may have granted access in device Settings.
+  const locationDeniedRef = useRef(locationDenied);
+  useEffect(() => { locationDeniedRef.current = locationDenied; }, [locationDenied]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active" && locationDeniedRef.current) {
+        fetchNearbyPosts();
+      }
+    });
+    return () => sub.remove();
+  }, [fetchNearbyPosts]);
+
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
@@ -502,7 +539,7 @@ export default function CommunityScreen() {
         const { data: results, error: rpcError } = await supabase.rpc("search_community_posts", {
           uid,
           query_embedding: embedData.embedding,
-          radius_m: DEFAULT_RADIUS_KM * 1000,
+          radius_m: communityRadiusM,
           match_count: 60,
         });
         if (rpcError) {
@@ -545,6 +582,7 @@ export default function CommunityScreen() {
       : posts;
 
     // Build list in original RPC order; ads become inline prompts when category unknown
+    const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
     const promptedCategories = new Set();
     let out = postsInput.reduce((acc, p) => {
       const type = String(p.type || "");
@@ -552,6 +590,8 @@ export default function CommunityScreen() {
       if (!VISIBLE_TYPES.has(type) && !isFromFollowed) return acc;
       if (type === "Article" && !showLocalNews) return acc;
       if (blockedUsers.length && blockedUsers.includes(asAt(p.user))) return acc;
+      // Hide events whose date has already passed
+      if (type === "Event" && p.date && String(p.date).slice(0, 10) < todayStr) return acc;
 
       if (type === "Ad") {
         // Creator always sees their own ad directly
@@ -751,6 +791,39 @@ export default function CommunityScreen() {
         setActiveTab={setTopActiveTab}
       />
 
+      {locationDenied ? (
+        <View style={[styles.locationDeniedContainer, { backgroundColor: isDark ? theme.gray : "#FFFFFF" }]}>
+          <Ionicons name="location-outline" size={52} color="#3D8BFF" style={{ marginBottom: 16 }} />
+          <Text style={[styles.locationDeniedCaption, { color: isDark ? "#FFFFFF" : "#111111" }]}>
+            {t("community_location_denied_caption")}
+          </Text>
+          {!showLocationInstructions ? (
+            <TouchableOpacity
+              style={styles.locationSettingsBtn}
+              activeOpacity={0.85}
+              onPress={async () => {
+                try {
+                  await Linking.openSettings();
+                } catch {
+                  setShowLocationInstructions(true);
+                }
+              }}
+            >
+              <Text style={styles.locationSettingsBtnText}>
+                {t("community_location_settings_btn")}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.locationInstructionsBox}>
+              <Text style={[styles.locationInstructionsText, { color: isDark ? "#CCCCCC" : "#444444" }]}>
+                {Platform.OS === "ios"
+                  ? t("community_location_instructions_ios")
+                  : t("community_location_instructions_android")}
+              </Text>
+            </View>
+          )}
+        </View>
+      ) : (
       <FlatList
         ref={scrollRef}
         data={visiblePosts}
@@ -1114,6 +1187,7 @@ export default function CommunityScreen() {
           );
         }}
       />
+      )}
 
       <TouchableOpacity
         activeOpacity={0.9}
@@ -1127,31 +1201,37 @@ export default function CommunityScreen() {
       </TouchableOpacity>
 
       <Modal
-        visible={vpnBlockVisible}
+        visible={!!spoofReason}
         transparent
         animationType="slide"
-        onRequestClose={() => setVpnBlockVisible(false)}
+        onRequestClose={() => setSpoofReason(null)}
       >
         <View style={styles.vpnOverlay}>
           <View style={[styles.vpnCard, { backgroundColor: theme.background }]}>
             <View style={styles.vpnHandle} />
-            <Feather name="shield-off" size={32} color="#FF4D4D" style={{ marginBottom: 12 }} />
-            <Text style={[styles.vpnTitle, { color: theme.text }]}>VPN Detected</Text>
+            <Feather name="map-pin" size={32} color="#FF4D4D" style={{ marginBottom: 12 }} />
+            <Text style={[styles.vpnTitle, { color: theme.text }]}>Location issue detected</Text>
             <Text style={[styles.vpnBody, { color: theme.secondaryText }]}>
-              Community shows real nearby events based on your location. Please turn off your VPN to continue.
+              {spoofReason === "mocked"
+                ? "A mock location app appears to be active on your device. Please disable it and try again."
+                : spoofReason === "impossible_jump"
+                ? "Your location changed faster than physically possible. Please make sure you're sharing your real location."
+                : spoofReason === "country_mismatch"
+                ? "Your GPS location and network location don't match. Please make sure you're sharing your real location."
+                : "We couldn't verify your location. Please make sure you're sharing your real location."}
             </Text>
             <TouchableOpacity
               style={styles.vpnBtn}
-              onPress={() => checkVPN().then((still) => { if (!still) setVpnBlockVisible(false); })}
+              onPress={() => setSpoofReason(null)}
             >
               <Text style={styles.vpnBtnText}>Try Again</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.vpnTravelerBtn}
-              onPress={() => { setVpnBlockVisible(false); navigation.navigate("Settings"); }}
+              onPress={() => { setSpoofReason(null); navigation.navigate("Settings"); }}
             >
               <Text style={[styles.vpnTravelerText, { color: theme.secondaryText }]}>
-                Want to browse another city? Try Traveler Mode →
+                Travelling? Try Traveler Mode →
               </Text>
             </TouchableOpacity>
           </View>
@@ -1327,4 +1407,44 @@ const styles = StyleSheet.create({
   vpnBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
   vpnTravelerBtn: { paddingVertical: 8 },
   vpnTravelerText: { fontFamily: "Poppins", fontSize: 13, textAlign: "center" },
+
+  locationDeniedContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 36,
+  },
+  locationDeniedCaption: {
+    fontFamily: "Poppins",
+    fontSize: 15,
+    textAlign: "center",
+    lineHeight: 24,
+    marginBottom: 24,
+    opacity: 0.85,
+  },
+  locationSettingsBtn: {
+    backgroundColor: "#3D8BFF",
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 32,
+  },
+  locationSettingsBtnText: {
+    color: "#fff",
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
+  },
+  locationInstructionsBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#3D8BFF",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    marginTop: 4,
+  },
+  locationInstructionsText: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: "center",
+  },
 });

@@ -56,9 +56,10 @@ const EXTENSIONS = [
       "AlbaDeviceActivityReport/AlbaDeviceActivityReport.entitlements",
     infoPlist: "AlbaDeviceActivityReport/Info.plist",
     profilePath: "certs/AlbaDeviceActivityReport2.mobileprovision",
-    // Uses EXAppExtensionAttributes (ExtensionKit) instead of NSExtension.
-    // Must be embedded in Extensions/ not PlugIns/.
-    isEXExtension: true,
+    // Info.plist uses EXAppExtensionAttributes (NOT NSExtension) — required to pass
+    // App Store Connect validation and allow device installation. However, the extension
+    // is embedded in PlugIns/ (not Extensions/), same as all other iOS extensions.
+    // The forum fix (thread 812380) was only about the Info.plist key, not the embed location.
   },
 ];
 

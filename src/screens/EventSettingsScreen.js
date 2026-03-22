@@ -37,11 +37,11 @@ import ShareMenu from "../components/ShareMenu";
 
 /* ------------------- schema ------------------- */
 const POSTS_TABLE = "posts";
-const POSTS_COLS = "id, title, description, date, time, location, author_id, group_id";
+const POSTS_COLS = "id, title, description, date, time, end_date, end_time, location, author_id, group_id, actions";
 
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
-  "id, title, post_id, unconfirmed, ticket_holders, organizers, attendees_info, scanned";
+  "id, title, post_id, unconfirmed, ticket_holders, organizers, attendees_info, scanned, purchases_active";
 
 const GROUPS_TABLE = "groups";
 const GROUPS_COLS = "id, members, group_admin, groupname, group_desc";
@@ -138,7 +138,12 @@ export default function EventSettingsScreen() {
   const [draftDesc, setDraftDesc] = useState("");
   const [draftDate, setDraftDate] = useState("");
   const [draftTime, setDraftTime] = useState("");
+  const [draftEndDate, setDraftEndDate] = useState("");
+  const [draftEndTime, setDraftEndTime] = useState("");
   const [draftLocation, setDraftLocation] = useState("");
+
+  const [purchasesActive, setPurchasesActive] = useState(true);
+  const [ticketsPaused, setTicketsPaused] = useState(false);
 
   const [saving, setSaving] = useState(false);
 
@@ -294,12 +299,24 @@ export default function EventSettingsScreen() {
     setDraftDesc(postRow?.description || "");
     setDraftDate(postRow?.date || "");
     setDraftTime((postRow?.time || "").toString().slice(0, 5) || "");
+    setDraftEndDate(postRow?.end_date || "");
+    setDraftEndTime((postRow?.end_time || "").toString().slice(0, 5) || "");
     setDraftLocation(postRow?.location || "");
-  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.location]);
+  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.location]);
 
   useEffect(() => {
     resetDraftsToPost();
   }, [postRow?.id, resetDraftsToPost]);
+
+  useEffect(() => {
+    // purchases_active defaults to true if null/undefined
+    setPurchasesActive(eventRow?.purchases_active !== false);
+  }, [eventRow?.id, eventRow?.purchases_active]);
+
+  useEffect(() => {
+    const acts = safeArr(postRow?.actions).map((a) => String(a).toLowerCase());
+    setTicketsPaused(!acts.includes("tickets"));
+  }, [postRow?.id, postRow?.actions]);
 
   useEffect(() => {
     let alive = true;
@@ -431,6 +448,8 @@ export default function EventSettingsScreen() {
     const baseDesc = postRow?.description || "";
     const baseDate = postRow?.date || "";
     const baseTime = (postRow?.time || "").toString().slice(0, 5) || "";
+    const baseEndDate = postRow?.end_date || "";
+    const baseEndTime = (postRow?.end_time || "").toString().slice(0, 5) || "";
     const baseLoc = postRow?.location || "";
 
     return (
@@ -438,9 +457,11 @@ export default function EventSettingsScreen() {
       (draftDesc || "") !== baseDesc ||
       (draftDate || "") !== baseDate ||
       (draftTime || "") !== baseTime ||
+      (draftEndDate || "") !== baseEndDate ||
+      (draftEndTime || "") !== baseEndTime ||
       (draftLocation || "") !== baseLoc
     );
-  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftLocation]);
+  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation]);
 
   const onSave = async () => {
     if (!postRow?.id) return;
@@ -450,12 +471,16 @@ export default function EventSettingsScreen() {
       const baseDesc = postRow?.description || "";
       const baseDate = postRow?.date || "";
       const baseTime = (postRow?.time || "").toString().slice(0, 5) || "";
+      const baseEndDate = postRow?.end_date || "";
+      const baseEndTime = (postRow?.end_time || "").toString().slice(0, 5) || "";
       const baseLoc = postRow?.location || "";
 
       const titleChanged = (draftTitle || "") !== baseTitle;
       const descChanged = (draftDesc || "") !== baseDesc;
       const dateChanged = (draftDate || "") !== baseDate;
       const timeChanged = (draftTime || "") !== baseTime;
+      const endDateChanged = (draftEndDate || "") !== baseEndDate;
+      const endTimeChanged = (draftEndTime || "") !== baseEndTime;
       const locChanged = (draftLocation || "") !== baseLoc;
 
       const postPatch = {};
@@ -463,6 +488,8 @@ export default function EventSettingsScreen() {
       if (descChanged) postPatch.description = draftDesc;
       if (dateChanged) postPatch.date = draftDate;
       if (timeChanged) postPatch.time = draftTime;
+      if (endDateChanged) postPatch.end_date = draftEndDate || null;
+      if (endTimeChanged) postPatch.end_time = draftEndTime || null;
       if (locChanged) postPatch.location = draftLocation;
 
       if (Object.keys(postPatch).length) {
@@ -722,6 +749,14 @@ export default function EventSettingsScreen() {
     const checked = selectedSet.has(displayName);
     const usernameColor = isExternal ? "#8c97a8" : theme.text;
 
+    // Buyer info from attendees_info (all fields except username)
+    const info = safeObj(eventRow?.attendees_info);
+    const buyerInfo = safeObj(info?.[displayName]);
+    const extraFields = Object.entries(buyerInfo)
+      .filter(([k]) => k !== "username")
+      .map(([k, v]) => `${k}: ${v}`)
+      .filter(Boolean);
+
     return (
       <View key={user.id?.toString() || displayName} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
         {user.avatar_url && !isExternal ? (
@@ -741,9 +776,15 @@ export default function EventSettingsScreen() {
 
         <View style={{ flex: 1 }}>
           <Text style={[styles.memberName, { color: theme.text }]}>{displayName}</Text>
-          <Text style={[styles.memberUsername, { color: usernameColor }]}>
-            {isExternal ? notOnAlbaLabel : `@${username}`}
-          </Text>
+          {extraFields.length > 0 ? (
+            extraFields.map((line, i) => (
+              <Text key={i} style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>{line}</Text>
+            ))
+          ) : (
+            <Text style={[styles.memberUsername, { color: usernameColor }]}>
+              {isExternal ? notOnAlbaLabel : `@${username}`}
+            </Text>
+          )}
         </View>
 
         <TouchableOpacity
@@ -820,9 +861,9 @@ export default function EventSettingsScreen() {
               />
             </View>
 
-            {/* Date/time */}
+            {/* Start date/time */}
             <Text style={[styles.sectionTitle, { color: theme.text }]}>
-              {t("change_date_time") || "Change date and time"}
+              {t("change_date_time") || "Start date and time"}
             </Text>
 
             <View style={styles.dateTimeRow}>
@@ -841,6 +882,33 @@ export default function EventSettingsScreen() {
                   value={draftTime}
                   onChangeText={setDraftTime}
                   placeholder={(postRow?.time || "").toString().slice(0, 5) || "HH:MM"}
+                  placeholderTextColor={theme.subtleText || "#8c97a8"}
+                  style={[styles.pillInput, { color: theme.text }]}
+                />
+              </View>
+            </View>
+
+            {/* End date/time */}
+            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
+              {t("change_end_date_time") || "End date and time"}
+            </Text>
+
+            <View style={styles.dateTimeRow}>
+              <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
+                <TextInput
+                  value={draftEndDate}
+                  onChangeText={setDraftEndDate}
+                  placeholder={postRow?.end_date || "YYYY-MM-DD"}
+                  placeholderTextColor={theme.subtleText || "#8c97a8"}
+                  style={[styles.pillInput, { color: theme.text }]}
+                />
+              </View>
+
+              <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
+                <TextInput
+                  value={draftEndTime}
+                  onChangeText={setDraftEndTime}
+                  placeholder={(postRow?.end_time || "").toString().slice(0, 5) || "HH:MM"}
                   placeholderTextColor={theme.subtleText || "#8c97a8"}
                   style={[styles.pillInput, { color: theme.text }]}
                 />
@@ -883,6 +951,74 @@ export default function EventSettingsScreen() {
                   <Text style={[styles.cancelEditsText, { color: theme.text }]}>Cancel</Text>
                 </TouchableOpacity>
               </View>
+            )}
+
+            {/* Purchases active toggle */}
+            {isAdmin && (
+              <TouchableOpacity
+                style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  if (!eventRow?.id) return;
+                  const next = !purchasesActive;
+                  setPurchasesActive(next);
+                  const { error } = await supabase.from(EVENTS_TABLE).update({ purchases_active: next }).eq("id", eventRow.id);
+                  if (error) { console.warn("[EventSettings] purchases_active update error", error.message); setPurchasesActive(!next); }
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                    {t("event_purchases_active") || "Allow ticket purchases"}
+                  </Text>
+                  <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
+                    {t("event_purchases_active_sub") || "Users can buy tickets for this event"}
+                  </Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: purchasesActive ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: purchasesActive ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {/* Pause / Resume ticket selling (removes or prepends "tickets" in posts.actions) */}
+            {isAdmin && postRow?.id && (
+              <TouchableOpacity
+                style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  const currentActions = safeArr(postRow?.actions);
+                  let nextActions;
+                  if (ticketsPaused) {
+                    // Resume — reinstate "tickets" as the first action
+                    nextActions = ["tickets", ...currentActions.filter((a) => String(a).toLowerCase() !== "tickets")];
+                  } else {
+                    // Pause — remove "tickets" entirely
+                    nextActions = currentActions.filter((a) => String(a).toLowerCase() !== "tickets");
+                  }
+                  setTicketsPaused(!ticketsPaused);
+                  const { error } = await supabase.from(POSTS_TABLE).update({ actions: nextActions }).eq("id", postRow.id);
+                  if (error) {
+                    console.warn("[EventSettings] ticket selling toggle error", error.message);
+                    setTicketsPaused(ticketsPaused); // revert
+                  } else {
+                    setModel((prev) => prev ? { ...prev, post: { ...prev.post, actions: nextActions } } : prev);
+                  }
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                    {ticketsPaused ? "Resume ticket selling" : "Pause ticket selling"}
+                  </Text>
+                  <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
+                    {ticketsPaused
+                      ? "Ticket button will reappear on the post"
+                      : "Ticket button will be hidden from the post"}
+                  </Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: ticketsPaused ? (theme.border || "#ccc") : "#3D8BFF" }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: ticketsPaused ? "flex-start" : "flex-end" }]} />
+                </View>
+              </TouchableOpacity>
             )}
 
             {/* ✅ Scanner button */}
@@ -1137,6 +1273,31 @@ const styles = StyleSheet.create({
   dateTimeRow: { flexDirection: "row", gap: 12 },
   pill: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   pillInput: { fontFamily: "Poppins", fontSize: 14 },
+
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 14,
+  },
+  toggleLabel: { fontFamily: "PoppinsBold", fontSize: 14 },
+  toggleSub: { fontFamily: "Poppins", fontSize: 12, marginTop: 2 },
+  toggleTrack: {
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    padding: 2,
+    justifyContent: "center",
+  },
+  toggleThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#fff",
+  },
 
   saveRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginTop: 12 },
   saveBtn: { backgroundColor: "#59A7FF", paddingVertical: 10, paddingHorizontal: 26, borderRadius: 10 },

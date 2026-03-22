@@ -85,7 +85,7 @@ export default function ChatListScreen({ navigation }) {
 
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
-  const { prefs } = useUserPreferences();
+  const { prefs, updatePrefs } = useUserPreferences();
 
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -96,6 +96,9 @@ export default function ChatListScreen({ navigation }) {
   const [ready, setReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMenu, setChatMenu] = useState(null); // { item } | null
+  const [mutedGroups, setMutedGroups] = useState([]); // group IDs the current user has muted
+  const [muteModalVisible, setMuteModalVisible] = useState(false);
+  const [pendingMuteItem, setPendingMuteItem] = useState(null); // item captured when mute modal opens
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -170,6 +173,12 @@ export default function ChatListScreen({ navigation }) {
     const { data: auth } = await supabase.auth.getUser();
     const uid = auth?.user?.id;
     setCurrentUserId(uid || null);
+
+    if (uid) {
+      supabase.from("profiles").select("muted_groups").eq("id", uid).maybeSingle()
+        .then(({ data }) => { if (data) setMutedGroups(data.muted_groups ?? []); })
+        .catch(() => {});
+    }
 
     if (!uid) {
       setThreads([]);
@@ -257,8 +266,11 @@ export default function ChatListScreen({ navigation }) {
 
       let lastMessage = "";
       const text = (th?.last_content || "").trim();
+      const isGroupDeleted = isGroup && text === "__group_deleted__";
 
-      if (isBlocked) {
+      if (isGroupDeleted) {
+        lastMessage = "This group was deleted.";
+      } else if (isBlocked) {
         lastMessage = t("chat_user_blocked_snippet");
       } else if (text.startsWith("__feed_video__:")) {
         lastMessage = isGroup ? `${actorBase}: Shared a video` : "Shared a video";
@@ -318,6 +330,7 @@ export default function ChatListScreen({ navigation }) {
         displayTime,
         unreadCount,
         isBlocked,
+        isGroupDeleted,
       });
     }
 
@@ -424,6 +437,7 @@ export default function ChatListScreen({ navigation }) {
   };
 
   const openChat = (item) => {
+    if (item.isGroupDeleted) return;
     if (item.type === "group") {
       navigation.navigate("GroupChat", {
         groupId: item.chatId,
@@ -555,6 +569,7 @@ export default function ChatListScreen({ navigation }) {
         myUsername={myUsername}
         prefs={prefs}
         navigation={navigation}
+        onMessageSent={() => updatePrefs({ premiumDiffusionList: false })}
       />
 
       {!ready ? (
@@ -612,17 +627,23 @@ export default function ChatListScreen({ navigation }) {
               {chatMenu?.item?.name}
             </Text>
 
-            {/* Mute */}
-            <TouchableOpacity
-              style={styles.chatMenuItem}
-              onPress={async () => {
-                setChatMenu(null);
-                Alert.alert("Muted", `You will no longer receive notifications from ${chatMenu?.item?.name}.`);
-              }}
-            >
-              <Feather name="bell-off" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
-              <Text style={[styles.chatMenuText, { color: isDark ? "#fff" : "#111" }]}>Mute</Text>
-            </TouchableOpacity>
+            {/* Mute / Unmute */}
+            {chatMenu?.item?.type === "group" && (() => {
+              const isMuted = mutedGroups.includes(chatMenu?.item?.chatId);
+              return (
+                <TouchableOpacity
+                  style={styles.chatMenuItem}
+                  onPress={() => {
+                    setPendingMuteItem(chatMenu.item); // capture before clearing menu
+                    setChatMenu(null);
+                    setMuteModalVisible(true);
+                  }}
+                >
+                  <Feather name={isMuted ? "bell" : "bell-off"} size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
+                  <Text style={[styles.chatMenuText, { color: isDark ? "#fff" : "#111" }]}>{isMuted ? "Unmute" : "Mute"}</Text>
+                </TouchableOpacity>
+              );
+            })()}
 
             {/* Report */}
             <TouchableOpacity
@@ -631,11 +652,19 @@ export default function ChatListScreen({ navigation }) {
                 const item = chatMenu?.item;
                 setChatMenu(null);
                 try {
-                  const { data: auth } = await supabase.auth.getUser();
-                  await supabase.from("reports").insert({
-                    reported_by: auth?.user?.id || null,
-                    reason: item?.type === "group" ? `Group chat: ${item?.name}` : `DM with: ${item?.name}`,
-                    chat_id: item?.chatId || null,
+                  const convLabel = item?.type === "group"
+                    ? `Group: ${item?.name}`
+                    : `DM with ${item?.name}`;
+                  await supabase.functions.invoke("send-report", {
+                    body: {
+                      type: "conversation",
+                      reported_by_id: currentUserId || null,
+                      reported_by_username: myUsername || null,
+                      context: {
+                        chat_id: item?.chatId || null,
+                        conversation_label: convLabel,
+                      },
+                    },
                   });
                 } catch {}
                 Alert.alert("Reported", "Thanks, we'll review this conversation.");
@@ -724,12 +753,65 @@ export default function ChatListScreen({ navigation }) {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Mute / Unmute group modal */}
+      <Modal visible={muteModalVisible} transparent animationType="fade" onRequestClose={() => setMuteModalVisible(false)}>
+        <View style={styles.muteOverlay}>
+          <View style={[styles.muteCard, { backgroundColor: isDark ? "#1e2530" : "#fff" }]}>
+            {(() => {
+              const groupId = pendingMuteItem?.chatId ?? null;
+              const groupName = pendingMuteItem?.name ?? "this group";
+              const isMuted = mutedGroups.includes(groupId);
+              return (
+                <>
+                  <Text style={[styles.muteTitle, { color: isDark ? "#fff" : "#111" }]}>
+                    {isMuted ? "Unmute group?" : "Mute group?"}
+                  </Text>
+                  <Text style={[styles.muteBody, { color: isDark ? "#aaa" : "#555" }]}>
+                    {isMuted
+                      ? `You will start receiving notifications from ${groupName} again.`
+                      : `You will no longer receive notifications from ${groupName}.`}
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+                    <TouchableOpacity
+                      style={[styles.muteBtn, { flex: 1, backgroundColor: "#3D8BFF" }]}
+                      onPress={async () => {
+                        setMuteModalVisible(false);
+                        if (!currentUserId || !groupId) return;
+                        const next = isMuted
+                          ? mutedGroups.filter((id) => id !== groupId)
+                          : [...new Set([...mutedGroups, groupId])];
+                        setMutedGroups(next);
+                        await supabase.from("profiles").update({ muted_groups: next }).eq("id", currentUserId);
+                      }}
+                    >
+                      <Text style={styles.muteBtnText}>{isMuted ? "Unmute" : "Mute"}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.muteBtn, { flex: 1, backgroundColor: isDark ? "#444" : "#d0d7e2" }]}
+                      onPress={() => setMuteModalVisible(false)}
+                    >
+                      <Text style={[styles.muteBtnText, { color: isDark ? "#fff" : "#333" }]}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              );
+            })()}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  muteOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", paddingHorizontal: 32 },
+  muteCard: { width: "100%", borderRadius: 16, padding: 24, elevation: 6 },
+  muteTitle: { fontFamily: "PoppinsBold", fontSize: 17, marginBottom: 8 },
+  muteBody: { fontFamily: "Poppins", fontSize: 13, lineHeight: 20 },
+  muteBtn: { height: 42, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  muteBtnText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#fff" },
   headerWrap: {
     flexDirection: "row",
     alignItems: "center",

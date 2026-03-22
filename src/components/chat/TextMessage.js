@@ -17,7 +17,7 @@ import { useAlbaLanguage } from "../../theme/LanguageContext";
 import { translateText } from "../../utils/translate";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 
-export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick, failed = false, onRetry }) {
+export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick, failed = false, onRetry, pendingReview = false }) {
   const { theme, isDark } = useAlbaTheme();
   const { language, t } = useAlbaLanguage();
 
@@ -150,6 +150,7 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
               styles.bubble,
               isMe ? styles.bubbleMe : styles.bubbleOther,
               !isMe ? { backgroundColor: otherBubbleBg } : null, // ✅ override only for "other" on dark
+              pendingReview && isMe ? { backgroundColor: isDark ? "#363C47" : "#C8D0DA" } : null,
             ]}
           >
             {!isMe && senderName ? (
@@ -164,6 +165,9 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
               {translated && translatedText ? translatedText : text}
             </Text>
           </View>
+          {pendingReview && isMe && (
+            <Text style={styles.pendingReviewLabel}>Under review by admins</Text>
+          )}
           <View style={styles.timeLine}>
             <Text style={styles.time}>{time}</Text>
             {!isMe && (
@@ -351,6 +355,13 @@ const styles = StyleSheet.create({
     color: "#E05252",
     fontFamily: "Poppins",
     marginTop: 3,
+  },
+  pendingReviewLabel: {
+    fontSize: 11,
+    color: "#A2AAB4",
+    fontFamily: "Poppins",
+    marginTop: 3,
+    alignSelf: "flex-end",
   },
 
   menuBackdrop: {

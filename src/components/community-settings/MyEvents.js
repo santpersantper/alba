@@ -189,8 +189,20 @@ export default function MyEvents({ navigation }) {
             theme={theme}
             isDark={isDark}
             t={t}
-            onPressChat={() => {
-              // keep your existing behavior (if you later want: navigate by group_id)
+            onPressChat={async () => {
+              const { data: authData } = await supabase.auth.getUser();
+              const uid = authData?.user?.id;
+              if (uid) {
+                const { data: verCheck } = await supabase
+                  .from("profiles")
+                  .select("is_verified")
+                  .eq("id", uid)
+                  .maybeSingle();
+                if (!verCheck?.is_verified) {
+                  navigation?.navigate?.("PreFaceRecognition");
+                  return;
+                }
+              }
               navigation?.navigate?.("GroupChat", {
                 groupName: row.title || "Group",
                 members: [],

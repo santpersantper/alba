@@ -24,6 +24,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { getDeviceId } from "../lib/deviceId";
 
 const { height } = Dimensions.get("window");
 
@@ -39,34 +40,37 @@ export default function SignUpScreen({ navigation }) {
   const { t } = useAlbaLanguage();
   const { theme, isDark } = useAlbaTheme();
 
-  // fields
+  // ── form fields ──────────────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [age, setAge] = useState("");
 
-  const [submitting, setSubmitting] = useState(false);
+  // ── verification step: "form" → "verify" ─────────────────────────────────
+  const [step, setStep] = useState("form");
+  const [otp, setOtp] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [verifyingCode, setVerifyingCode] = useState(false);
+
+  const deviceIdRef = useRef(null);
 
   const [alertConfig, setAlertConfig] = useState(null);
   const showAlert = (title, message) => setAlertConfig({ title, message });
 
-  // live validation
+  // ── live validation ───────────────────────────────────────────────────────
   const [emailValid, setEmailValid] = useState(null);
+  const [emailErrorReason, setEmailErrorReason] = useState(null); // 'taken' | 'disposable' | null
   const [usernameValid, setUsernameValid] = useState(null);
   const [emailChecking, setEmailChecking] = useState(false);
   const [usernameChecking, setUsernameChecking] = useState(false);
 
-  // debouncing
   const emailTimerRef = useRef(null);
   const usernameTimerRef = useRef(null);
 
-  // pickers
   const [showAgePicker, setShowAgePicker] = useState(false);
 
-  // city detected silently from device location
   const detectedCityRef = useRef(null);
-
   const scrollRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
@@ -87,6 +91,11 @@ export default function SignUpScreen({ navigation }) {
     <Image source={require("../../assets/icon.png")} style={styles.logo} />
   );
 
+  // Load device ID once on mount
+  useEffect(() => {
+    getDeviceId().then((id) => { deviceIdRef.current = id; });
+  }, []);
+
   useEffect(() => {
     return () => {
       if (emailTimerRef.current) clearTimeout(emailTimerRef.current);
@@ -94,7 +103,7 @@ export default function SignUpScreen({ navigation }) {
     };
   }, []);
 
-  // Silently detect city on mount — no UI shown, no error if it fails
+  // Silently detect city on mount
   useEffect(() => {
     (async () => {
       try {
@@ -112,38 +121,31 @@ export default function SignUpScreen({ navigation }) {
         const json = await res.json();
         detectedCityRef.current = json.features?.[0]?.properties?.name || json.features?.[0]?.properties?.place_formatted || null;
       } catch {
-        // Silent — city will be null if detection fails
+        // Silent
       }
     })();
   }, []);
 
+  // ── uniqueness checks ─────────────────────────────────────────────────────
+
   const checkUsernameUnique = async (value) => {
     const trimmed = value.trim();
-
     if (!trimmed || trimmed.length < 3) {
       setUsernameValid(false);
       setUsernameChecking(false);
       return false;
     }
-
     try {
       const { data: existingUser, error } = await supabase
         .from("profiles")
-        .select("id, username")
+        .select("id")
         .eq("username", trimmed)
         .maybeSingle();
-
-      if (error) {
-        console.warn("SignUp username check error:", error);
-        setUsernameValid(false);
-        return false;
-      }
-
+      if (error) { setUsernameValid(false); return false; }
       const available = !existingUser;
       setUsernameValid(available);
       return available;
-    } catch (e) {
-      console.warn("SignUp username check error (outer):", e);
+    } catch {
       setUsernameValid(false);
       return false;
     } finally {
@@ -153,32 +155,39 @@ export default function SignUpScreen({ navigation }) {
 
   const checkEmailUnique = async (value) => {
     const trimmed = value.trim();
-
     if (!trimmed || !emailRegex.test(trimmed)) {
       setEmailValid(false);
+      setEmailErrorReason(null);
       setEmailChecking(false);
       return false;
     }
-
     try {
-      const { data: existingEmail, error } = await supabase
-        .from("profiles")
-        .select("id, email")
-        .eq("email", trimmed)
-        .maybeSingle();
+      const domain = trimmed.split("@")[1];
 
-      if (error) {
-        console.warn("SignUp email check error:", error);
+      // Disposable email check
+      const { data: dispData } = await supabase.functions.invoke("check-signup-eligibility", {
+        body: { email_domain: domain },
+      });
+      if (!dispData?.allowed) {
         setEmailValid(false);
+        setEmailErrorReason("disposable");
         return false;
       }
 
+      // Uniqueness check
+      const { data: existingEmail, error } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("email", trimmed)
+        .maybeSingle();
+      if (error) { setEmailValid(false); setEmailErrorReason(null); return false; }
       const available = !existingEmail;
       setEmailValid(available);
+      setEmailErrorReason(available ? null : "taken");
       return available;
-    } catch (e) {
-      console.warn("SignUp email check error (outer):", e);
+    } catch {
       setEmailValid(false);
+      setEmailErrorReason(null);
       return false;
     } finally {
       setEmailChecking(false);
@@ -188,42 +197,25 @@ export default function SignUpScreen({ navigation }) {
   const handleEmailChange = (value) => {
     setEmail(value);
     setEmailValid(null);
-
+    setEmailErrorReason(null);
     if (emailTimerRef.current) clearTimeout(emailTimerRef.current);
-    if (!value.trim()) {
-      setEmailChecking(false);
-      return;
-    }
-
+    if (!value.trim()) { setEmailChecking(false); return; }
     setEmailChecking(true);
-    emailTimerRef.current = setTimeout(() => {
-      checkEmailUnique(value);
-    }, 500);
+    emailTimerRef.current = setTimeout(() => { checkEmailUnique(value); }, 500);
   };
 
   const handleUsernameChange = (value) => {
-    const cleaned = value.replace(/[^a-zA-Z0-9]/g, "");
-    const trimmed = cleaned.slice(0, 25);
-
-    setUsername(trimmed);
+    const cleaned = value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 25);
+    setUsername(cleaned);
     setUsernameValid(null);
-
     if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
-    if (!trimmed) {
-      setUsernameChecking(false);
-      return;
-    }
-    if (trimmed.length < 3) {
-      setUsernameChecking(false);
-      setUsernameValid(false);
-      return;
-    }
-
+    if (!cleaned) { setUsernameChecking(false); return; }
+    if (cleaned.length < 3) { setUsernameChecking(false); setUsernameValid(false); return; }
     setUsernameChecking(true);
-    usernameTimerRef.current = setTimeout(() => {
-      checkUsernameUnique(trimmed);
-    }, 500);
+    usernameTimerRef.current = setTimeout(() => { checkUsernameUnique(cleaned); }, 500);
   };
+
+  // ── form validation ───────────────────────────────────────────────────────
 
   const validate = async () => {
     if (!name.trim() || !username.trim() || !email.trim() || !password.trim()) {
@@ -234,102 +226,199 @@ export default function SignUpScreen({ navigation }) {
       showAlert(t("signup_missing_age_title"), t("signup_missing_age_body"));
       return false;
     }
-
-    const nameParts = name.trim().split(/\s+/);
-    if (nameParts.length < 2) {
+    if (name.trim().split(/\s+/).length < 2) {
       showAlert(t("signup_invalid_name_title"), t("signup_invalid_name_body"));
       return false;
     }
-
     if (username.length < 3) {
       showAlert(t("signup_username_short_title"), t("signup_username_short_body"));
       return false;
     }
-
     if (!emailRegex.test(email.trim())) {
       showAlert(t("signup_invalid_email_title"), t("signup_invalid_email_body"));
       return false;
     }
-
     if (password.length < 6) {
       showAlert(t("signup_weak_password_title"), t("signup_weak_password_body"));
       return false;
     }
-
     setEmailChecking(true);
     setUsernameChecking(true);
     const [emailOk, userOk] = await Promise.all([
       checkEmailUnique(email),
       checkUsernameUnique(username),
     ]);
-
     if (!userOk) {
       showAlert(t("signup_username_unavailable_title"), t("signup_username_unavailable_body"));
       return false;
     }
     if (!emailOk) {
-      showAlert(t("signup_email_unavailable_title"), t("signup_email_unavailable_body"));
+      if (emailErrorReason === "disposable") {
+        showAlert("Disposable email not allowed", "Please use a real, permanent email address. Temporary or disposable email services are not accepted.");
+      } else {
+        showAlert(t("signup_email_unavailable_title"), t("signup_email_unavailable_body"));
+      }
       return false;
     }
-
     return true;
   };
 
-  const handleSignUp = async () => {
-    if (submitting) return;
+  // ── Step 1: send verification code ───────────────────────────────────────
 
+  const handleProceed = async () => {
+    if (sendingCode) return;
     if (emailChecking || usernameChecking) {
       showAlert(t("signup_wait_checks_title"), t("signup_wait_checks_body"));
       return;
     }
-
     const ok = await validate();
     if (!ok) return;
 
-    setSubmitting(true);
+    setSendingCode(true);
     try {
-      const { data: signUp, error: signUpErr } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: { data: { name: name.trim(), username: username.trim() } },
-      });
-      if (signUpErr) throw signUpErr;
-
-      const user = signUp.user;
-      if (!user?.id) throw new Error(t("signup_failed_generic"));
-
-      const profile = {
-        id: user.id,
-        username: username.trim(),
-        name: name.trim(),
-        age: age ? Number(age) : null,
-        gender: null,
-        city: detectedCityRef.current || null,
-        visible_to_all: true,
-        preferences: {
-          music: "",
-          spotify: "",
-          movies: "",
-          letterboxd: "",
-          books: "",
-          goodreads: "",
+      const { data, error } = await supabase.functions.invoke("send-verification-code", {
+        body: {
+          action: "send",
+          email: email.trim().toLowerCase(),
+          device_id: deviceIdRef.current,
         },
-      };
+      });
 
-      const { error: upsertErr } = await supabase
-        .from("profiles")
-        .upsert(profile, { onConflict: "id" });
+      if (error) throw error;
 
-      if (upsertErr) throw upsertErr;
+      if (data?.error === "device_banned") {
+        showAlert(t("signup_device_banned_title"), t("signup_device_banned_body"));
+        return;
+      }
+      if (data?.error === "device_limit") {
+        showAlert(t("signup_device_limit_title"), t("signup_device_limit_body"));
+        return;
+      }
+      if (data?.error === "ip_limit") {
+        showAlert(t("signup_ip_limit_title"), t("signup_ip_limit_body"));
+        return;
+      }
+      if (data?.error === "disposable_email") {
+        showAlert(t("signup_disposable_email_title"), t("signup_disposable_email_body"));
+        return;
+      }
+      if (data?.error === "rate_limit") {
+        showAlert(
+          t("signup_code_ratelimit_title"),
+          `${t("signup_code_ratelimit_body")} ${data.wait}s.`
+        );
+        return;
+      }
+      if (data?.error) throw new Error(data.error);
 
-      // Auth state change in AppNavigator handles navigation to MainNavigator automatically.
+      setStep("verify");
+      setOtp("");
     } catch (e) {
-      console.error("SIGNUP/PROFILE ERROR:", e);
       showAlert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
     } finally {
-      setSubmitting(false);
+      setSendingCode(false);
     }
   };
+
+  // ── Step 2: verify code + create account ─────────────────────────────────
+
+  const doSignUp = async (signupIp = null) => {
+    const { data: signUp, error: signUpErr } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { name: name.trim(), username: username.trim() } },
+    });
+    if (signUpErr) throw signUpErr;
+
+    const user = signUp.user;
+    if (!user?.id) throw new Error(t("signup_failed_generic"));
+
+    const { error: upsertErr } = await supabase
+      .from("profiles")
+      .upsert(
+        {
+          id: user.id,
+          username: username.trim(),
+          name: name.trim(),
+          age: age ? Number(age) : null,
+          gender: null,
+          city: detectedCityRef.current || null,
+          device_id: deviceIdRef.current || null,
+          signup_ip: signupIp || null,
+          visible_to_all: true,
+          preferences: {
+            music: "", spotify: "", movies: "",
+            letterboxd: "", books: "", goodreads: "",
+          },
+        },
+        { onConflict: "id" }
+      );
+    if (upsertErr) throw upsertErr;
+  };
+
+  const handleVerifyAndSignUp = async () => {
+    if (verifyingCode) return;
+    if (otp.length < 6) {
+      showAlert(t("signup_code_invalid_title"), t("signup_code_enter_6_digits"));
+      return;
+    }
+
+    setVerifyingCode(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-verification-code", {
+        body: { action: "verify", email: email.trim().toLowerCase(), code: otp },
+      });
+
+      if (error) throw error;
+
+      if (!data?.ok) {
+        const reason = data?.reason;
+        const msg =
+          reason === "expired"
+            ? t("signup_code_expired_body")
+            : t("signup_code_invalid_body");
+        showAlert(t("signup_code_invalid_title"), msg);
+        return;
+      }
+
+      await doSignUp(data?.signup_ip ?? null);
+      // Auth state change in AppNavigator handles navigation automatically.
+    } catch (e) {
+      showAlert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
+    } finally {
+      setVerifyingCode(false);
+    }
+  };
+
+  const handleResend = async () => {
+    if (sendingCode) return;
+    setSendingCode(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-verification-code", {
+        body: {
+          action: "send",
+          email: email.trim().toLowerCase(),
+          device_id: deviceIdRef.current,
+        },
+      });
+      if (error) throw error;
+      if (data?.error === "rate_limit") {
+        showAlert(
+          t("signup_code_ratelimit_title"),
+          `${t("signup_code_ratelimit_body")} ${data.wait}s.`
+        );
+        return;
+      }
+      if (data?.error) throw new Error(data.error);
+      showAlert(t("signup_code_resent_title"), t("signup_code_resent_body"));
+    } catch (e) {
+      showAlert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
+    } finally {
+      setSendingCode(false);
+    }
+  };
+
+  // ── helpers ───────────────────────────────────────────────────────────────
 
   const renderValidationIcon = (valid) => {
     if (valid === null) return null;
@@ -337,17 +426,20 @@ export default function SignUpScreen({ navigation }) {
       <Feather
         name={valid ? "check" : "x"}
         size={18}
-        color={valid ? accent : '#FF3B30'}
+        color={valid ? accent : "#FF3B30"}
         style={styles.validationIcon}
       />
     );
   };
 
+  const formDisabled = step === "verify";
+
+  // ── render ────────────────────────────────────────────────────────────────
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: bg }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
@@ -358,119 +450,189 @@ export default function SignUpScreen({ navigation }) {
         keyboardDismissMode="on-drag"
       >
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={styles.page}>
-          <Logo />
+          <View style={styles.page}>
+            <Logo />
 
-          {/* Name */}
-          <View style={[styles.inputContainer, borderStyle]}>
-            <TextInput
-              style={[styles.inputField, { color: accent }]}
-              placeholder={t("signup_name_placeholder")}
-              placeholderTextColor={placeholder}
-              value={name}
-              onChangeText={setName}
-              returnKeyType="next"
-            />
-          </View>
+            {/* Name */}
+            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+              <TextInput
+                style={[styles.inputField, { color: accent }]}
+                placeholder={t("signup_name_placeholder")}
+                placeholderTextColor={placeholder}
+                value={name}
+                onChangeText={setName}
+                returnKeyType="next"
+                editable={!formDisabled}
+                maxLength={60}
+              />
+            </View>
 
-          {/* Email */}
-          <View style={[styles.inputContainer, borderStyle]}>
-            <TextInput
-              style={[styles.inputField, { color: accent }]}
-              placeholder={t("signup_email_placeholder")}
-              placeholderTextColor={placeholder}
-              value={email}
-              onChangeText={handleEmailChange}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              returnKeyType="next"
-            />
-            {emailChecking ? (
-              <ActivityIndicator size="small" color={accent} />
-            ) : (
-              renderValidationIcon(emailValid)
-            )}
-          </View>
+            {/* Email */}
+            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+              <TextInput
+                style={[styles.inputField, { color: accent }]}
+                placeholder={t("signup_email_placeholder")}
+                placeholderTextColor={placeholder}
+                value={email}
+                onChangeText={handleEmailChange}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                returnKeyType="next"
+                editable={!formDisabled}
+              />
+              {!formDisabled && (
+                emailChecking
+                  ? <ActivityIndicator size="small" color={accent} />
+                  : renderValidationIcon(emailValid)
+              )}
+            </View>
 
-          {/* Username */}
-          <View style={[styles.inputContainer, borderStyle]}>
-            <TextInput
-              style={[styles.inputField, { color: accent }]}
-              placeholder={t("signup_username_placeholder")}
-              placeholderTextColor={placeholder}
-              value={username}
-              onChangeText={handleUsernameChange}
-              autoCapitalize="none"
-              returnKeyType="next"
-            />
-            {usernameChecking ? (
-              <ActivityIndicator size="small" color={accent} />
-            ) : (
-              renderValidationIcon(usernameValid)
-            )}
-          </View>
+            {/* Username */}
+            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+              <TextInput
+                style={[styles.inputField, { color: accent }]}
+                placeholder={t("signup_username_placeholder")}
+                placeholderTextColor={placeholder}
+                value={username}
+                onChangeText={handleUsernameChange}
+                autoCapitalize="none"
+                returnKeyType="next"
+                editable={!formDisabled}
+              />
+              {!formDisabled && (
+                usernameChecking
+                  ? <ActivityIndicator size="small" color={accent} />
+                  : renderValidationIcon(usernameValid)
+              )}
+            </View>
 
-          {/* Password */}
-          <View style={[styles.inputContainer, borderStyle]}>
-            <TextInput
-              style={[styles.inputField, { color: accent }]}
-              placeholder={t("signup_password_placeholder")}
-              placeholderTextColor={placeholder}
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-              returnKeyType="next"
-            />
-          </View>
+            {/* Password */}
+            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+              <TextInput
+                style={[styles.inputField, { color: accent }]}
+                placeholder={t("signup_password_placeholder")}
+                placeholderTextColor={placeholder}
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+                returnKeyType="next"
+                editable={!formDisabled}
+              />
+            </View>
 
-          {/* Age */}
-          <TouchableOpacity
-            style={[styles.inputContainer, borderStyle]}
-            onPress={() => setShowAgePicker(true)}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.inputField, { color: accent, opacity: age ? 1 : 0.8 }]}>
-              {age || t("signup_age_placeholder")}
-            </Text>
-            <Feather name="chevron-down" size={18} color={accent} />
-          </TouchableOpacity>
-
-          {/* Button */}
-          <TouchableOpacity
-            style={[
-              styles.nextBtn,
-              isDark
-                ? { backgroundColor: theme.gray, borderWidth: 1, borderColor: "#FFFFFF" }
-                : { backgroundColor: "#00A9FF" },
-              (submitting || emailValid === false || usernameValid === false) && { opacity: 0.7 },
-            ]}
-            onPress={handleSignUp}
-            disabled={submitting || emailValid === false || usernameValid === false}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={[styles.btnText, { color: "#FFFFFF" }]}>
-                {t("signup_button_label")}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          {/* Back to login */}
-          <Text style={{ marginTop: 24, color: accent, fontFamily: "Poppins" }}>
-            {t("signup_have_account_prefix")}{" "}
-            <Text
-              style={[styles.linkText, { color: accent }]}
-              onPress={() => navigation.goBack()}
+            {/* Age */}
+            <TouchableOpacity
+              style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}
+              onPress={() => !formDisabled && setShowAgePicker(true)}
+              activeOpacity={formDisabled ? 1 : 0.8}
             >
-              {t("login_button_label")}
+              <Text style={[styles.inputField, { color: accent, opacity: age ? 1 : 0.8 }]}>
+                {age || t("signup_age_placeholder")}
+              </Text>
+              {!formDisabled && <Feather name="chevron-down" size={18} color={accent} />}
+            </TouchableOpacity>
+
+            {/* ── Step: form → show "Proceed" button ───────────────────── */}
+            {step === "form" ? (
+              <TouchableOpacity
+                style={[
+                  styles.nextBtn,
+                  isDark
+                    ? { backgroundColor: theme.gray, borderWidth: 1, borderColor: "#FFFFFF" }
+                    : { backgroundColor: "#00A9FF" },
+                  (sendingCode || emailValid === false || usernameValid === false) && { opacity: 0.7 },
+                ]}
+                onPress={handleProceed}
+                disabled={sendingCode || emailValid === false || usernameValid === false}
+              >
+                {sendingCode ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={[styles.btnText, { color: "#FFFFFF" }]}>
+                    {t("signup_button_label")}
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+            ) : (
+              /* ── Step: verify → show OTP input + "Sign Up" button ─────── */
+              <View style={{ width: "100%", alignItems: "center", marginTop: 32 }}>
+                <Text style={[styles.codeSentText, { color: accent }]}>
+                  {t("signup_code_sent_prefix")} {email}.
+                </Text>
+
+                <View style={[styles.inputContainer, borderStyle, { marginBottom: 0, width: "100%" }]}>
+                  <TextInput
+                    style={[
+                      styles.inputField,
+                      { color: accent, letterSpacing: 14, textAlign: "center", fontSize: 22 },
+                    ]}
+                    placeholder={t("signup_code_placeholder")}
+                    placeholderTextColor={placeholder}
+                    value={otp}
+                    onChangeText={(v) => setOtp(v.replace(/[^0-9]/g, "").slice(0, 6))}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    autoFocus
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.nextBtn,
+                    isDark
+                      ? { backgroundColor: theme.gray, borderWidth: 1, borderColor: "#FFFFFF" }
+                      : { backgroundColor: "#00A9FF" },
+                    (verifyingCode || otp.length < 6) && { opacity: 0.7 },
+                  ]}
+                  onPress={handleVerifyAndSignUp}
+                  disabled={verifyingCode || otp.length < 6}
+                >
+                  {verifyingCode ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.btnText, { color: "#FFFFFF" }]}>
+                      {t("signup_complete_label")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleResend}
+                  disabled={sendingCode}
+                  style={styles.resendBtn}
+                >
+                  <Text style={[styles.resendText, { color: accent, opacity: sendingCode ? 0.4 : 0.75 }]}>
+                    {sendingCode ? t("signup_code_sending") : t("signup_code_resend")}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => { setStep("form"); setOtp(""); }}
+                  style={styles.editBtn}
+                >
+                  <Text style={[styles.resendText, { color: accent, opacity: 0.5 }]}>
+                    ← {t("signup_code_edit_details")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Back to login */}
+            <Text style={{ marginTop: 24, color: accent, fontFamily: "Poppins" }}>
+              {t("signup_have_account_prefix")}{" "}
+              <Text
+                style={[styles.linkText, { color: accent }]}
+                onPress={() => navigation.goBack()}
+              >
+                {t("login_button_label")}
+              </Text>
             </Text>
-          </Text>
-        </View>
+          </View>
         </TouchableWithoutFeedback>
       </ScrollView>
 
-      {/* Alba-native alert modal */}
+      {/* Alert modal */}
       <Modal
         visible={!!alertConfig}
         transparent
@@ -500,12 +662,7 @@ export default function SignUpScreen({ navigation }) {
         onRequestClose={() => setShowAgePicker(false)}
       >
         <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.pickerCard,
-              { backgroundColor: isDark ? theme.gray : "#fff" },
-            ]}
-          >
+          <View style={[styles.pickerCard, { backgroundColor: isDark ? theme.gray : "#fff" }]}>
             <Text style={[styles.pickerTitle, { color: isDark ? "#FFFFFF" : "#111" }]}>
               {t("signup_age_picker_title")}
             </Text>
@@ -561,6 +718,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  fieldDisabled: {
+    opacity: 0.45,
+  },
   inputField: {
     flex: 1,
     fontFamily: "Poppins",
@@ -580,6 +740,23 @@ const styles = StyleSheet.create({
   btnText: {
     fontFamily: "Poppins",
     fontSize: 16,
+  },
+  codeSentText: {
+    fontFamily: "Poppins",
+    fontSize: 13,
+    textAlign: "center",
+    marginBottom: 16,
+    lineHeight: 20,
+  },
+  resendBtn: {
+    marginTop: 18,
+  },
+  editBtn: {
+    marginTop: 10,
+  },
+  resendText: {
+    fontFamily: "Poppins",
+    fontSize: 13,
   },
   modalOverlay: {
     flex: 1,

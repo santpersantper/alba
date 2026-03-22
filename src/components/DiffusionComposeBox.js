@@ -114,6 +114,7 @@ export default function DiffusionComposeBox({
   myUsername,
   prefs,
   navigation,
+  onMessageSent, // () => void — called after a message is sent so parent can uncheck toggle
 }) {
   const { isDark } = useAlbaTheme();
   const { isPlatformPaySupported, confirmPlatformPayPayment } = usePlatformPay();
@@ -368,7 +369,7 @@ export default function DiffusionComposeBox({
       }
 
       // 4. Insert diffusion_message
-      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const { data: msgData, error: msgErr } = await supabase
         .from("diffusion_messages")
         .insert({
@@ -442,6 +443,7 @@ export default function DiffusionComposeBox({
       loadReceipts(msgData.id);
       startExpiryTimer(msgData.expires_at);
       subscribeReceipts(msgData.id);
+      onMessageSent?.(); // uncheck toggle in CommunitySettings
     } catch (e) {
       setSendError(e?.message || "Something went wrong. Please try again.");
       setSenderMode("compose");
@@ -483,7 +485,8 @@ export default function DiffusionComposeBox({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  const hasSenderSection = prefs.premiumDiffusionList;
+  // Show sender section if user paid (can compose) OR has an active message (show stats)
+  const hasSenderSection = prefs.premiumDiffusionList || !!activeMessage;
   const hasRecipientSection =
     !prefs.blockDiffusionMessages && receivedMessages.length > 0;
 

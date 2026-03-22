@@ -1,5 +1,5 @@
 // screens/FaceRecognitionScreen.js
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   SafeAreaView,
   View,
@@ -14,39 +14,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { detectFacesAsync } from "expo-face-detector";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { supabase } from "../lib/supabase";
 import { invalidateAuthCache } from "../components/Post";
 import { useAlbaLanguage } from "../theme/LanguageContext";
-import Constants from "expo-constants";
 
-// Lambda endpoint — read from env so the URL is not baked into the binary.
-// Set EXPO_PUBLIC_LAMBDA_VERIFY_URL in .env.local / EAS Secrets.
-const LAMBDA_VERIFY_URL =
-  process.env.EXPO_PUBLIC_LAMBDA_VERIFY_URL ??
-  Constants?.expoConfig?.extra?.expoPublic?.LAMBDA_VERIFY_URL ??
-  "";
-
-const BACKEND_VERIFY_URLS = LAMBDA_VERIFY_URL ? [LAMBDA_VERIFY_URL] : [];
-
-
-function short(s, n = 220) {
-  if (!s) return "";
-  const str = String(s);
-  return str.length > n ? str.slice(0, n) + "…" : str;
-}
-
-async function fetchWithTimeout(url, options, timeoutMs = 20000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...options, signal: ctrl.signal });
-    return res;
-  } finally {
-    clearTimeout(t);
-  }
-}
+// Minimum displacement (in pixels) the face centre must travel across the
+// rolling 2.5-second window before we consider the user "live".
+const MOTION_THRESHOLD = 18;
+// How often we sample a frame for face detection (ms)
+const POLL_INTERVAL = 350;
 
 export default function FaceRecognitionScreen() {
   const navigation = useNavigation();
@@ -58,25 +37,100 @@ export default function FaceRecognitionScreen() {
   });
 
   const [permission, requestPermission] = useCameraPermissions();
-  const [verifying, setVerifying] = useState(false);
-  const cameraRef = useRef(null);
-  const [alertModal, setAlertModal] = useState(null); // { title, message }
+  const [verifying, setVerifying]       = useState(false);
+  const [motionReady, setMotionReady]   = useState(false);
+  const [faceVisible, setFaceVisible]   = useState(false);
+
+  const cameraRef        = useRef(null);
+  const facePositionsRef = useRef([]); // [{ x, y, timestamp }]
+  const motionReadyRef   = useRef(false);
+  const pollingRef       = useRef(null); // interval id
+
+  const [alertModal, setAlertModal] = useState(null);
   const showModal = (title, message) => setAlertModal({ title, message });
 
   const handleBack = () => navigation.goBack();
 
+  // ── Polling face detection ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!permission?.granted || verifying) return;
+
+    pollingRef.current = setInterval(async () => {
+      if (!cameraRef.current || motionReadyRef.current) return;
+
+      let snapshot;
+      try {
+        snapshot = await cameraRef.current.takePictureAsync({
+          quality: 0.3,
+          skipProcessing: true,
+          shutterSound: false,
+        });
+      } catch {
+        return; // camera not ready yet
+      }
+
+      if (!snapshot?.uri) return;
+
+      let result;
+      try {
+        result = await detectFacesAsync(snapshot.uri, { mode: 1 }); // 1 = fast
+      } catch (e) {
+        console.log("[FaceDetect] detectFacesAsync error:", e?.message);
+        return;
+      }
+
+      const faces = result?.faces ?? [];
+      console.log("[FaceDetect] faces found:", faces.length);
+
+      if (!faces.length) {
+        setFaceVisible(false);
+        return;
+      }
+      setFaceVisible(true);
+
+      const face = faces[0];
+      const cx = face.bounds.origin.x + face.bounds.size.width  / 2;
+      const cy = face.bounds.origin.y + face.bounds.size.height / 2;
+      const now = Date.now();
+
+      facePositionsRef.current = [
+        ...facePositionsRef.current.filter((p) => now - p.timestamp < 2500),
+        { x: cx, y: cy, timestamp: now },
+      ];
+
+      const pts = facePositionsRef.current;
+      if (pts.length < 5) return;
+
+      let maxDist = 0;
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const dx = pts[i].x - pts[j].x;
+          const dy = pts[i].y - pts[j].y;
+          const d  = Math.sqrt(dx * dx + dy * dy);
+          if (d > maxDist) maxDist = d;
+        }
+      }
+
+      console.log("[FaceDetect] maxDist:", maxDist.toFixed(1), "threshold:", MOTION_THRESHOLD);
+
+      if (maxDist >= MOTION_THRESHOLD) {
+        console.log("[FaceDetect] MOTION READY");
+        motionReadyRef.current = true;
+        setMotionReady(true);
+        clearInterval(pollingRef.current);
+      }
+    }, POLL_INTERVAL);
+
+    return () => clearInterval(pollingRef.current);
+  }, [permission?.granted, verifying]);
+
+  // ── Verification flow ─────────────────────────────────────────────────────
   const handleVerify = async () => {
     const runId = `verify_${Date.now()}`;
     const log = (...args) => console.log(`[FaceVerify:${runId}]`, ...args);
 
     if (!cameraRef.current) {
       showModal("Error", "Camera not ready yet.");
-      return;
-    }
-
-    if (BACKEND_VERIFY_URLS.length === 0) {
-      log("LAMBDA_VERIFY_URL is not configured — skipping network call");
-      showModal("Error", "Verification service is not configured. Please contact support.");
       return;
     }
 
@@ -90,10 +144,7 @@ export default function FaceRecognitionScreen() {
       if (error) throw error;
 
       const user = data?.user;
-      log("User:", { id: user?.id, email: user?.email });
-
       if (!user?.id) {
-        log("No user id → navigate Start");
         navigation.navigate("Start");
         return;
       }
@@ -109,8 +160,6 @@ export default function FaceRecognitionScreen() {
       if (profileErr) throw profileErr;
 
       const avatarUrl = profileRow?.avatar_url;
-      log("avatar_url:", avatarUrl);
-
       if (!avatarUrl) {
         showModal(
           "Profile photo missing",
@@ -121,13 +170,9 @@ export default function FaceRecognitionScreen() {
 
       // 3) download avatar + base64
       log("Step 3: download avatar");
-      const fileName = `avatar_${user.id}_${Date.now()}.jpg`;
-      const localPath = `${FileSystem.cacheDirectory}${fileName}`;
-
+      const localPath = `${FileSystem.cacheDirectory}avatar_${user.id}_${Date.now()}.jpg`;
       const downloadRes = await FileSystem.downloadAsync(avatarUrl, localPath);
-      log("Downloaded avatar to:", downloadRes?.uri);
 
-      // Resize profile image to max 800px — Rekognition doesn't need full resolution
       const resizedProfile = await ImageManipulator.manipulateAsync(
         downloadRes.uri,
         [{ resize: { width: 800 } }],
@@ -136,124 +181,73 @@ export default function FaceRecognitionScreen() {
       const profileBase64 = resizedProfile.base64;
       log("profileBase64 length:", profileBase64?.length);
 
-      // 4) take selfie
-      log("Step 4: takePictureAsync()");
-      const photo = await cameraRef.current.takePictureAsync({
+      // 4) two selfie frames ~1 s apart — server uses pose diff for liveness
+      log("Step 4a: takePictureAsync() frame 1");
+      const photo1 = await cameraRef.current.takePictureAsync({
+        quality: 0.8,
+        skipProcessing: true,
+      });
+      if (!photo1?.uri) throw new Error("Could not capture photo");
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      log("Step 4b: takePictureAsync() frame 2");
+      const photo2 = await cameraRef.current.takePictureAsync({
         quality: 0.8,
         skipProcessing: true,
       });
 
-      if (!photo?.uri) throw new Error("Could not capture photo");
+      const [resizedSelfie1, resizedSelfie2] = await Promise.all([
+        ImageManipulator.manipulateAsync(
+          photo1.uri,
+          [{ resize: { width: 800 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        ),
+        photo2?.uri
+          ? ImageManipulator.manipulateAsync(
+              photo2.uri,
+              [{ resize: { width: 800 } }],
+              { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+            )
+          : Promise.resolve(null),
+      ]);
 
-      // Resize selfie to max 800px before sending
-      const resizedSelfie = await ImageManipulator.manipulateAsync(
-        photo.uri,
-        [{ resize: { width: 800 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      const selfieBase64  = resizedSelfie1.base64;
+      const selfie2Base64 = resizedSelfie2?.base64 ?? undefined;
+      log("selfie1:", selfieBase64?.length, "selfie2:", selfie2Base64?.length ?? 0);
+
+      // 5) send to verify-face edge function
+      log("Step 5: supabase.functions.invoke verify-face");
+      const { data: verifyData, error: verifyErr } = await supabase.functions.invoke(
+        "verify-face",
+        { body: { selfieBase64, selfie2Base64, profileBase64 } }
       );
-      const selfieBase64 = resizedSelfie.base64;
-      log("selfieBase64 length:", selfieBase64?.length);
+      if (verifyErr) throw new Error(`Verification failed: ${verifyErr.message}`);
 
-      // Quick size sanity (very rough)
-      const approxBytes = (profileBase64.length + selfieBase64.length) * 0.75;
-      log("Approx payload bytes (both images):", approxBytes);
+      log("verifyData:", JSON.stringify(verifyData));
 
-      // 5) send to Lambda
-      log("Step 5: POST");
-            const payload = JSON.stringify({
-        userId: user.id,
-        selfieBase64,
-        profileBase64,
-      });
-
-      let res = null;
-      let lastErr = null;
-
-      for (const url of BACKEND_VERIFY_URLS) {
-        const t0 = Date.now();
-        log("Trying URL:", url);
-
-        try {
-          res = await fetchWithTimeout(
-            url,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: payload,
-            },
-            60000 // ✅ give it 60s for cold start + Rekognition
-          );
-
-          log("URL finished in ms:", Date.now() - t0);
-          log("HTTP status:", res.status, "ok:", res.ok);
-
-          const text = await res.text().catch(() => "");
-          log("Raw response text:", short(text, 500));
-
-          if (!res.ok) {
-            let parsed;
-            try { parsed = JSON.parse(text); } catch {}
-            if (parsed?.message?.toLowerCase().includes("invalid parameters")) {
-              throw new Error("PROFILE_NO_FACE");
-            }
-            throw new Error(`HTTP ${res.status}: ${short(text, 500)}`);
-          }
-
-
-          // success
-          let json;
-          try {
-            json = text ? JSON.parse(text) : {};
-          } catch {
-            throw new Error("Backend returned non-JSON response");
-          }
-
-          log("Parsed JSON:", json);
-          // ✅ reuse existing logic below by setting jsonVar
-          var jsonVar = json; // eslint-disable-line no-var
-          break;
-        } catch (e) {
-          lastErr = e;
-          log("URL error:", e?.message || e);
-        }
-      }
-
-      if (!res) {
-        throw lastErr || new Error("No response from backend");
-      }
-
-      if (typeof jsonVar === "undefined") {
-        throw lastErr || new Error("Backend did not return valid JSON");
-      }
-
-      const json = jsonVar;
-
-            if (!json?.faceDetected) {
-        showModal(t("avatar_invalid_title"), t("avatar_invalid_message"));
+      if (!verifyData?.faceDetected) {
+        const reason = verifyData?.reason;
+        let message = "No face was detected in your selfie. Please make sure your face is clearly visible and try again.";
+        if (reason === "low_sharpness")    message = "Your selfie was too blurry. Please hold your phone steady and try again.";
+        if (reason === "bad_lighting")     message = "Lighting conditions weren't suitable. Try in a well-lit area and avoid glare.";
+        if (reason === "eyes_closed")      message = "Your eyes appear closed in the photo. Please keep your eyes open and try again.";
+        if (reason === "multiple_faces")   message = "Multiple faces were detected. Please make sure you're the only person in frame.";
+        if (reason === "no_liveness")      message = "We couldn't confirm you're live. Please move your head slightly and try again.";
+        showModal("Verification failed", message);
         return;
       }
-
-      if (!json?.match) {
+      if (!verifyData?.match) {
         showModal(
           "Verification failed",
           "We couldn't match your face with your profile picture. Please try again."
         );
         return;
       }
-
-
-      // 6) Mark verified via Edge Function (service-role key server-side).
-      // We never write is_verified directly from the client — RLS blocks it.
-      log("Step 6: supabase.functions.invoke verify-face");
-      const { data: verifyData, error: verifyErr } = await supabase.functions.invoke(
-        "verify-face",
-        { body: { userId: user.id } }
-      );
-      if (verifyErr) throw new Error(`Verification failed: ${verifyErr.message}`);
       if (!verifyData?.ok) throw new Error("Verification failed. Please try again.");
 
       log("SUCCESS → reset to Community");
-      invalidateAuthCache(); // force Post.js to re-fetch isVerified on next render
+      invalidateAuthCache();
       navigation.reset({ index: 0, routes: [{ name: "Community" }] });
     } catch (e) {
       console.log("[FaceVerify] FULL ERROR:", e);
@@ -267,17 +261,30 @@ export default function FaceRecognitionScreen() {
       }
     } finally {
       setVerifying(false);
+      // Reset motion state so a retry requires fresh movement
+      motionReadyRef.current = false;
+      setMotionReady(false);
+      facePositionsRef.current = [];
     }
   };
+
+  // ── Render helpers ────────────────────────────────────────────────────────
+  const motionStatus = verifying
+    ? null
+    : motionReady
+    ? "Ready — tap to verify"
+    : faceVisible
+    ? "Move your head slightly…"
+    : "Position your face in the circle";
+
+  const btnDisabled = verifying || !motionReady;
 
   if (!fontsLoaded) return null;
 
   if (!permission) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.centered}>
-          <ActivityIndicator />
-        </View>
+        <View style={styles.centered}><ActivityIndicator /></View>
       </SafeAreaView>
     );
   }
@@ -311,14 +318,34 @@ export default function FaceRecognitionScreen() {
         <Text style={styles.body}>{t("verification_face_body")}</Text>
 
         <View style={styles.cameraFrame}>
-          <CameraView ref={cameraRef} style={styles.camera} facing="front" />
-          <View style={styles.overlayCircle} />
+          <CameraView
+            ref={cameraRef}
+            style={styles.camera}
+            facing="front"
+          />
+          <View style={[
+            styles.overlayCircle,
+            motionReady && styles.overlayCircleReady,
+          ]} />
         </View>
 
+        {/* Motion liveness status */}
+        {motionStatus ? (
+          <View style={styles.statusRow}>
+            <View style={[
+              styles.statusDot,
+              motionReady ? styles.dotReady : faceVisible ? styles.dotActive : styles.dotIdle,
+            ]} />
+            <Text style={[styles.statusText, motionReady && styles.statusTextReady]}>
+              {motionStatus}
+            </Text>
+          </View>
+        ) : null}
+
         <TouchableOpacity
-          style={[styles.primaryBtn, verifying && { opacity: 0.6 }]}
+          style={[styles.primaryBtn, btnDisabled && styles.primaryBtnDisabled]}
           onPress={handleVerify}
-          disabled={verifying}
+          disabled={btnDisabled}
         >
           {verifying ? (
             <ActivityIndicator color="#FFFFFF" />
@@ -358,44 +385,55 @@ const styles = StyleSheet.create({
   headerRow: { paddingTop: 16, paddingHorizontal: 16 },
   content: { flex: 1, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 24 },
   title: { fontFamily: "PoppinsBold", fontSize: 24, marginBottom: 8, color: "#111111" },
-  body: { fontFamily: "Poppins", fontSize: 14, color: "#444444", lineHeight: 20, marginBottom: 16 },
+  body:  { fontFamily: "Poppins", fontSize: 14, color: "#444444", lineHeight: 20, marginBottom: 16 },
   cameraFrame: {
     flex: 1,
     borderRadius: 24,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "#E0E0E0",
-    marginBottom: 16,
+    marginBottom: 10,
     alignItems: "center",
     justifyContent: "center",
   },
   camera: { ...StyleSheet.absoluteFillObject },
-  overlayCircle: { width: 200, height: 200, borderRadius: 100, borderWidth: 2, borderColor: "#FFFFFF" },
-  primaryBtn: { borderRadius: 999, backgroundColor: "#4BA8FF", paddingVertical: 12, alignItems: "center" },
+  overlayCircle: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.7)",
+  },
+  overlayCircleReady: {
+    borderColor: "#4BFF9F",
+    borderWidth: 3,
+  },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+    gap: 8,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dotIdle:   { backgroundColor: "#CCCCCC" },
+  dotActive: { backgroundColor: "#4BA8FF" },
+  dotReady:  { backgroundColor: "#4BFF9F" },
+  statusText:      { fontFamily: "Poppins", fontSize: 13, color: "#666666" },
+  statusTextReady: { color: "#2AA86A", fontFamily: "PoppinsBold" },
+  primaryBtn:         { borderRadius: 999, backgroundColor: "#4BA8FF", paddingVertical: 12, alignItems: "center" },
+  primaryBtnDisabled: { backgroundColor: "#B0CEEF" },
   primaryText: { fontFamily: "PoppinsBold", fontSize: 15, color: "#FFFFFF" },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   permissionText: { fontFamily: "Poppins", fontSize: 14, textAlign: "center", color: "#444444", marginBottom: 12 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalCard: {
-    width: "80%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    padding: 24,
-    alignItems: "center",
-    elevation: 4,
-  },
-  modalTitle: { fontFamily: "PoppinsBold", fontSize: 16, color: "#111111", marginBottom: 8 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)", alignItems: "center", justifyContent: "center" },
+  modalCard: { width: "80%", backgroundColor: "#FFFFFF", borderRadius: 18, padding: 24, alignItems: "center", elevation: 4 },
+  modalTitle:   { fontFamily: "PoppinsBold", fontSize: 16, color: "#111111", marginBottom: 8 },
   modalMessage: { fontFamily: "Poppins", fontSize: 14, color: "#444444", textAlign: "center", lineHeight: 20, marginBottom: 20 },
-  modalBtn: {
-    backgroundColor: "#4BA8FF",
-    borderRadius: 999,
-    paddingHorizontal: 32,
-    paddingVertical: 10,
-  },
+  modalBtn:     { backgroundColor: "#4BA8FF", borderRadius: 999, paddingHorizontal: 32, paddingVertical: 10 },
   modalBtnText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#FFFFFF" },
 });

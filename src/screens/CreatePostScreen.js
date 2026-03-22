@@ -31,7 +31,7 @@ const POST_TYPES = [
   { key: "ad",          label: "Ad",           icon: "speaker"   },
   { key: "article",     label: "Article",      icon: "file-text" },
   { key: "profilePost", label: "Profile Post", icon: "user"      },
-  { key: "product",     label: "Product",      icon: "package"   },
+
   { key: "feedPost",    label: "Feed Video",   icon: "video"     },
 ];
 
@@ -116,7 +116,7 @@ export default function CreatePost() {
 
   const [eventState, setEventState] = useState({
     enableGroupChat: true, allowTicketing: false, tickets: [],
-    allowSubgroups: false, allowInvites: false,
+    allowSubgroups: true, allowInvites: true,
   });
   // Ref mirrors eventState so handleSubmit always reads the latest value
   // even if a concurrent re-render (e.g. language context loading) caused
@@ -149,6 +149,7 @@ export default function CreatePost() {
   const [locationSuggestions, setLocationSuggestions] = useState([]);
   const locationDebounceRef = useRef(null);
   const userCoordsRef = useRef(null);
+  const locationSessionToken = useRef(null);
 
   // Silently pre-fetch last-known position so proximity biasing works immediately
   useEffect(() => {
@@ -330,11 +331,11 @@ export default function CreatePost() {
   /* ── reset ── */
   const resetForm = () => {
     setTitle(""); setDesc(""); setMedia([]); setPostType("event");
-    setEventState({ enableGroupChat: true, allowTicketing: false, tickets: [], allowSubgroups: false, allowInvites: false });
+    setEventState({ enableGroupChat: true, allowTicketing: false, tickets: [], allowSubgroups: true, allowInvites: true });
     setAdState({ targetInterested: true, iap: false, products: [] });
     setSelectedDate(null); setSelectedTime(null);
     setSelectedEndDate(null); setSelectedEndTime(null);
-    setLocationText(""); setLocationSuggestions([]);
+    setLocationText(""); setLocationSuggestions([]); locationSessionToken.current = null;
     setAdNotes(""); setThumbnailUri(null); setFeedTags([]);
   };
 
@@ -474,7 +475,9 @@ export default function CreatePost() {
             try {
               const { data: embedData } = await supabase.functions.invoke("embed-text", { body: { text: caption } });
               if (embedData?.embedding) await supabase.from("feed_videos").update({ caption_embedding: embedData.embedding }).eq("id", feedRow.id);
-            } catch {}
+            } catch (e) {
+              console.warn("[CreatePost] embed-text failed for feed video:", e);
+            }
           })();
         }
 
@@ -608,7 +611,9 @@ export default function CreatePost() {
           try {
             const { data: embedData } = await supabase.functions.invoke("embed-text", { body: { text: textToEmbed } });
             if (embedData?.embedding) await supabase.from("posts").update({ caption_embedding: embedData.embedding }).eq("id", postId);
-          } catch {}
+          } catch (e) {
+            console.warn("[CreatePost] embed-text failed for post:", e);
+          }
         })();
       }
 
@@ -620,9 +625,14 @@ export default function CreatePost() {
       }
 
       if (postType === "event") {
+        const eventTimestamp = selectedDate && selectedTime
+          ? new Date(`${selectedDate}T${selectedTime}`).toISOString()
+          : null;
         const { error: evErr } = await supabase.from("events").insert({
           title, post_id: postId, ticket_holders: [], attendees_info: [],
           created_at: new Date().toISOString(),
+          organizers: [username],
+          timestamp: eventTimestamp,
         });
         if (evErr) throw evErr;
       }
@@ -661,35 +671,32 @@ export default function CreatePost() {
     if (!text || text.trim().length < 2) { setLocationSuggestions([]); return; }
     locationDebounceRef.current = setTimeout(async () => {
       try {
-        const token = Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
+        const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN ?? Constants.expoConfig?.extra?.expoPublic?.MAPBOX_PUBLIC_TOKEN ?? "";
         if (!token) return;
+        if (!locationSessionToken.current) {
+          locationSessionToken.current = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+          });
+        }
         const q = encodeURIComponent(text.trim());
         const coords = userCoordsRef.current;
-        const proximityParam = coords
-          ? `&proximity=${coords.longitude},${coords.latitude}`
-          : "";
-        // Use Mapbox Search v6 (replaces deprecated v5 mapbox.places endpoint)
+        const proximityParam = coords ? `&proximity=${coords.longitude},${coords.latitude}` : "";
         const res = await fetch(
-          `https://api.mapbox.com/search/geocode/v6/forward` +
-          `?q=${q}&types=poi,address,neighborhood,locality${proximityParam}&limit=8&access_token=${token}`
+          `https://api.mapbox.com/search/searchbox/v1/suggest` +
+          `?q=${q}&session_token=${locationSessionToken.current}&types=poi,street,address,place,locality,neighborhood${proximityParam}&limit=8&access_token=${token}`
         );
         const json = await res.json();
-        // Normalize v6 features to the shape the rendering code expects (v5-compatible)
-        const normalized = Array.isArray(json.features)
-          ? json.features.map((f) => {
-              const ctx = f.properties?.context ?? {};
-              return {
-                id: f.id,
-                text: f.properties?.name ?? "",
-                place_name: f.properties?.place_formatted ?? f.properties?.name ?? "",
-                center: f.geometry?.coordinates,
-                context: Object.entries(ctx).map(([key, val]) => ({
-                  id: `${key}.${val?.mapbox_id ?? key}`,
-                  text: val?.name ?? "",
-                })),
-              };
-            })
-          : [];
+        const normalized = (json.suggestions || []).map((s) => ({
+          id: s.mapbox_id,
+          text: s.name ?? "",
+          place_name: s.place_formatted ?? s.name ?? "",
+          mapbox_id: s.mapbox_id,
+          context: Object.entries(s.context ?? {}).map(([key, val]) => ({
+            id: `${key}.${val?.mapbox_id ?? key}`,
+            text: val?.name ?? "",
+          })),
+        }));
         setLocationSuggestions(normalized);
       } catch { setLocationSuggestions([]); }
     }, 350);
@@ -767,6 +774,7 @@ export default function CreatePost() {
               value={title}
               onChangeText={setTitle}
               style={[cs.input, { color: theme.text }]}
+              maxLength={120}
             />
           </View>
 
@@ -781,6 +789,7 @@ export default function CreatePost() {
               style={[cs.input, { color: theme.text, height: 90 }]}
               multiline
               textAlignVertical="top"
+              maxLength={1000}
             />
           </View>
 
@@ -800,7 +809,7 @@ export default function CreatePost() {
               <Text style={[cs.sectionLabel, { color: subtle, marginTop: 16 }]}>
                 {isEvent ? "Start date & time *" : "Start date & time"}
               </Text>
-              <View style={cs.dateTimeContainer}>
+              <View style={[cs.dateTimeContainer, (showDatePicker || showTimePicker) && { zIndex: 40 }]}>
                 <View style={cs.dateTimeRow}>
                   <TouchableOpacity
                     style={[cs.filterChip, { borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
@@ -839,7 +848,7 @@ export default function CreatePost() {
               </View>
 
               <Text style={[cs.sectionLabel, { color: subtle, marginTop: 12 }]}>End date & time (optional)</Text>
-              <View style={cs.dateTimeContainer}>
+              <View style={[cs.dateTimeContainer, (showEndDatePicker || showEndTimePicker) && { zIndex: 40 }]}>
                 <View style={cs.dateTimeRow}>
                   <TouchableOpacity
                     style={[cs.filterChip, { borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
@@ -883,7 +892,7 @@ export default function CreatePost() {
           <Text style={[cs.sectionLabel, { color: subtle, marginTop: 16 }]}>
             {isEvent ? "Location *" : "Location"}
           </Text>
-          <View style={{ position: "relative", zIndex: 10 }}>
+          <View style={{ position: "relative", zIndex: 5 }}>
             <View style={[cs.inputWrap, { borderColor: theme.border, backgroundColor: inputBg }]}>
               <Feather name="map-pin" size={15} color="#2F91FF" style={{ marginRight: 8 }} />
               <TextInput
@@ -907,7 +916,7 @@ export default function CreatePost() {
                     <TouchableOpacity
                       key={s.id}
                       style={cs.suggestionItem}
-                      onPress={() => { setLocationText(primaryName); setLocationSuggestions([]); }}
+                      onPress={() => { setLocationText(primaryName); setLocationSuggestions([]); locationSessionToken.current = null; }}
                     >
                       <Feather name="map-pin" size={13} color="#2F91FF" style={{ marginRight: 8 }} />
                       <View style={{ flex: 1 }}>
@@ -1087,7 +1096,7 @@ const cs = StyleSheet.create({
   filterChip:        { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10 },
   filterText:        { fontFamily: "Poppins", fontSize: 13 },
   filterClear:       { fontSize: 15, marginLeft: 4, fontFamily: "Poppins" },
-  pickerDropdown:    { position: "absolute", top: "100%", left: 0, right: 0, paddingTop: 4, borderRadius: 12, borderWidth: 1, overflow: "hidden" },
+  pickerDropdown:    { position: "absolute", top: "100%", left: 0, right: 0, paddingTop: 4, borderRadius: 12, borderWidth: 1, overflow: "hidden", zIndex: 50, elevation: 5, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
 
   // Location suggestions
   suggestionsBox:  { position: "absolute", top: "100%", left: 0, right: 0, borderWidth: 1, borderRadius: 12, overflow: "hidden", zIndex: 50, elevation: 5, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },

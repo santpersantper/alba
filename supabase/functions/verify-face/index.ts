@@ -3,24 +3,23 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const authHeader = req.headers.get("Authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) {
-      return new Response(
-        JSON.stringify({ error: "Authentication required." }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // 1) Validate JWT
+    const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "").trim();
+    if (!token) return json({ error: "Authentication required." }, 401);
 
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -29,43 +28,44 @@ serve(async (req) => {
     );
 
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Invalid or expired session." }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (authError || !user) return json({ error: "Invalid or expired session." }, 401);
+
+    // 2) Parse body
+    const { selfieBase64, selfie2Base64, profileBase64, detectOnly } = await req.json();
+    if (!selfieBase64) return json({ error: "selfieBase64 is required." }, 400);
+    if (!detectOnly && !profileBase64) return json({ error: "profileBase64 is required." }, 400);
+
+    // 3) Call Lambda — URL stored as Supabase secret, never in the client bundle
+    const lambdaUrl = Deno.env.get("LAMBDA_VERIFY_URL");
+    if (!lambdaUrl) return json({ error: "Verification service not configured." }, 503);
+
+    const lambdaRes = await fetch(lambdaUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // detectOnly: pass same image as both sides — we only need faceDetected
+      body: JSON.stringify({
+        userId: user.id,
+        selfieBase64,
+        selfie2Base64: detectOnly ? undefined : (selfie2Base64 ?? undefined),
+        profileBase64: detectOnly ? selfieBase64 : profileBase64,
+      }),
+      signal: AbortSignal.timeout(65000),
+    });
+
+    if (!lambdaRes.ok) {
+      console.error("Lambda error:", lambdaRes.status, await lambdaRes.text());
+      return json({ error: "Verification service error." }, 502);
     }
 
-    const body = await req.json();
-    const { userId } = body;
+    const lambdaData = await lambdaRes.json();
 
-    if (!userId || userId !== user.id) {
-      return new Response(
-        JSON.stringify({ error: "userId does not match authenticated session." }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // 4) detectOnly — just return whether a face was found
+    if (detectOnly) return json({ faceDetected: !!lambdaData.faceDetected });
 
-    const { data: profile, error: profileErr } = await supabaseAdmin
-      .from("profiles")
-      .select("id, is_verified")
-      .eq("id", user.id)
-      .maybeSingle();
+    if (!lambdaData.faceDetected) return json({ faceDetected: false, match: false, reason: lambdaData.reason ?? null });
+    if (!lambdaData.match) return json({ faceDetected: true, match: false, reason: lambdaData.reason ?? null });
 
-    if (profileErr) throw profileErr;
-    if (!profile) {
-      return new Response(
-        JSON.stringify({ error: "Profile not found." }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    if (profile.is_verified) {
-      return new Response(
-        JSON.stringify({ ok: true, alreadyVerified: true }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
+    // 5) Face matched — set is_verified server-side
     const { error: updateErr } = await supabaseAdmin
       .from("profiles")
       .update({ is_verified: true, verified_at: new Date().toISOString() })
@@ -73,15 +73,9 @@ serve(async (req) => {
 
     if (updateErr) throw updateErr;
 
-    return new Response(
-      JSON.stringify({ ok: true }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ ok: true, faceDetected: true, match: true });
   } catch (err) {
     console.error("verify-face error:", err);
-    return new Response(
-      JSON.stringify({ error: (err as Error).message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return json({ error: (err as Error).message }, 500);
   }
 });

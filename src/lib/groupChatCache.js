@@ -100,7 +100,7 @@ export async function fetchGroupMessagesRows(chatId, limit = 200) {
   try {
     const { data, error } = await supabase
       .from("messages")
-      .select("id, chat_id, is_group, sender_id, sender_username, content, media_reference, sent_date, sent_time, post_id, group_id")
+      .select("id, chat_id, is_group, sender_id, sender_username, content, media_reference, sent_date, sent_time, post_id, group_id, pending_review")
       .eq("chat_id", chatId)
       .order("sent_date", { ascending: true })
       .order("sent_time", { ascending: true })
@@ -137,6 +137,7 @@ export function mapMessageRowToItem(row, myUserId = null) {
     senderUsername: row.sender_username || null,
     minuteKey: makeMinuteKey(row.sent_date, row.sent_time),
     time: (row.sent_time || "").slice(0, 5),
+    pendingReview: !!row.pending_review,
   };
 
   if (row.group_id) return { ...base, type: "invite", groupId: row.group_id };

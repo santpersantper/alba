@@ -39,11 +39,22 @@ const normKey = (s) =>
     .toLowerCase()
     .replace(/\s+/g, "");
 
-const fieldIsName = (f) => normKey(f) === "name";
-const fieldIsAge = (f) => normKey(f) === "age";
+const fieldIsName = (f) => { const k = normKey(f); return k === "name" || k === "nome"; };
+const fieldIsAge = (f) => { const k = normKey(f); return k === "age" || k === "età" || k === "eta"; };
 const fieldIsGender = (f) => {
   const k = normKey(f);
   return k === "gender" || k === "sex";
+};
+
+// Returns the pre-fill value from the user's profile for a given required info field name
+const profileValueForField = (f, profile) => {
+  if (!profile) return "";
+  const k = normKey(f);
+  if (k === "name" || k === "nome") return String(profile.name || "");
+  if (k === "age" || k === "età" || k === "eta") return profile.age != null ? String(profile.age) : "";
+  if (k === "email" || k === "mail") return String(profile.email || "");
+  if (k === "username" || k === "nomeutente") return String(profile.username || "");
+  return "";
 };
 
 const looksLikeUuid = (s) =>
@@ -72,6 +83,7 @@ export default function BuyModal({ visible, onClose, postId }) {
 
   // auth context
   const [myUsername, setMyUsername] = useState(null);
+  const [myProfile, setMyProfile] = useState(null);
 
   const LOG = (...args) => console.log("[BuyModal]", ...args);
   const WARN = (...args) => console.warn("[BuyModal]", ...args);
@@ -97,12 +109,13 @@ export default function BuyModal({ visible, onClose, postId }) {
 
         const { data: prof } = await supabase
           .from(PROFILES_TABLE)
-          .select("username")
+          .select("username, name, age, email")
           .eq("id", uid)
           .maybeSingle();
 
         if (!alive) return;
         setMyUsername(prof?.username || data?.user?.user_metadata?.username || null);
+        setMyProfile(prof || null);
       } catch (e) {}
     })();
     return () => {
@@ -119,6 +132,23 @@ export default function BuyModal({ visible, onClose, postId }) {
     const fetchData = async () => {
       try {
         setLoading(true);
+
+        // Also (re-)fetch buyer's profile to ensure auto-fill has fresh data
+        let buyerProfile = myProfile;
+        const { data: authData } = await supabase.auth.getUser();
+        const buyerUid = authData?.user?.id;
+        if (buyerUid) {
+          const { data: freshProf } = await supabase
+            .from(PROFILES_TABLE)
+            .select("username, name, age, email")
+            .eq("id", buyerUid)
+            .maybeSingle();
+          if (freshProf) {
+            buyerProfile = freshProf;
+            setMyUsername(freshProf.username || null);
+            setMyProfile(freshProf);
+          }
+        }
 
         LOG("OPEN fetch post", {
           postId,
@@ -185,14 +215,32 @@ export default function BuyModal({ visible, onClose, postId }) {
           return acc;
         }, {});
 
+        // Pre-fill "for me" extra fields from the buyer's profile
+        const makePrefilledDetails = (typeIndex) => {
+          const details = {};
+          const rInfo = [...(rawReqInfo[typeIndex] ?? []), ...(reqInfo ?? [])];
+          const seen = new Set();
+          const extraFields = rInfo.filter((f) => {
+            const k = normKey(f);
+            if (BASIC_KEYS.has(k) || seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+          extraFields.forEach((f) => {
+            const v = profileValueForField(f, buyerProfile);
+            if (v) details[`ME__${f}`] = v;
+          });
+          return details;
+        };
+
         setItems(
-          pTypes.map(() => ({
+          pTypes.map((_, idx) => ({
             checked: false,
             quantity: "",
             toggles: { ...baseToggleState },
             forMeOnly: true,
             forMeUnit1: false,
-            details: {},
+            details: makePrefilledDetails(idx),
             selectedOptions: [],
           }))
         );
@@ -932,6 +980,14 @@ export default function BuyModal({ visible, onClose, postId }) {
       if (ticketsToInsert.length) {
         const { error: tErr } = await supabase.from("tickets").insert(ticketsToInsert);
         if (tErr) throw tErr;
+      }
+
+      // Remove newly confirmed ticket holders from events.unconfirmed (fire-and-forget)
+      if (additions.length > 0) {
+        supabase.rpc("remove_from_unconfirmed", {
+          p_post_id: postId,
+          p_usernames: additions,
+        }).catch(() => {});
       }
 
       showFeedback("Success", "Tickets reserved.", () => { setFeedback(null); onClose?.(); });

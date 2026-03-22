@@ -110,7 +110,6 @@ function FeedItem({
   const [showFullCaption, setShowFullCaption] = useState(false);
   const [isLongCaption, setIsLongCaption] = useState(false);
   const [hasMeasuredCaption, setHasMeasuredCaption] = useState(false);
-  const [videoKey, setVideoKey] = useState(0);
   const prevFocused = React.useRef(isScreenFocused);
 
   React.useEffect(() => {
@@ -119,18 +118,10 @@ function FeedItem({
     const justRegainedFocus = !prevFocused.current && isScreenFocused;
     prevFocused.current = isScreenFocused;
 
-    // On iOS the native VideoView surface detaches during navigation.
-    // Force a remount (via key) when the screen comes back into focus so
-    // the surface reconnects to the player and the black frame goes away.
-    if (justRegainedFocus && isActive) {
-      setVideoKey((k) => k + 1);
-      return; // the remount triggers a fresh play via the next effect run
-    }
-
     try {
       if (isScreenFocused && isActive && !pausedByHold) {
         player.play();
-      } else {
+      } else if (!justRegainedFocus) {
         player.pause();
       }
     } catch (e) {
@@ -204,7 +195,6 @@ function FeedItem({
       {...pressableHandlers}
     >
       <VideoView
-        key={videoKey}
         pointerEvents="none"
         style={StyleSheet.absoluteFill}
         contentFit="cover"
@@ -237,7 +227,15 @@ function FeedItem({
               <View style={styles.avatarDot} />
             </TouchableOpacity>
             <View style={styles.textBlock}>
-              <Text style={styles.usernameText}>@{item.username}</Text>
+              <TouchableOpacity
+                onPress={(e) => {
+                  stop(e);
+                  onAvatarPress && onAvatarPress();
+                }}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+              >
+                <Text style={styles.usernameText}>@{item.username}</Text>
+              </TouchableOpacity>
               {captionContent}
             </View>
           </View>
@@ -570,8 +568,10 @@ export default function FeedScreen() {
           const cached = await readCachedFirstFeedVideoOverride();
           if (!isActive || !cached?.cachedVideo) return;
 
+          let wasEmpty = false;
           setData((prev) => {
             if (Array.isArray(prev) && prev.length) return prev;
+            wasEmpty = true;
             return [
               {
                 id: String(cached.id),
@@ -584,7 +584,9 @@ export default function FeedScreen() {
             ];
           });
 
-          setCurrentIndex(0);
+          // Only reset to index 0 on the very first load (data was empty).
+          // On subsequent focus-regains the user may have scrolled — don't reset.
+          if (wasEmpty) setCurrentIndex(0);
           setLoading(false);
         } catch (e) {}
       })();

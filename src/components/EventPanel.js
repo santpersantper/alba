@@ -41,8 +41,8 @@ export default function EventPanel({ onState }) {
   ]);
 
   const [sameRequiredInfo, setSameRequiredInfo] = useState(false);
-  const [allowSubgroups, setAllowSubgroups] = useState(false);
-  const [allowInvites, setAllowInvites] = useState(false);
+  const [allowSubgroups, setAllowSubgroups] = useState(true);
+  const [allowInvites, setAllowInvites] = useState(true);
 
   const updateTicket = (id, patch) =>
     setTickets((ts) => ts.map((tk) => (tk.id === id ? { ...tk, ...patch } : tk)));

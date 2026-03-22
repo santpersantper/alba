@@ -506,6 +506,7 @@ export default function Post(props) {
 
   const [shareVisible, setShareVisible] = useState(false);
   const [buyVisible, setBuyVisible] = useState(false);
+  const [joinPendingModal, setJoinPendingModal] = useState(false);
 
   // Translation
   const [translated, setTranslated] = useState(false);
@@ -539,7 +540,20 @@ export default function Post(props) {
           !_adViewsTracked.has(effectivePostId)
         ) {
           _adViewsTracked.add(effectivePostId);
-          supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" }).then(() => {}).catch(() => {});
+          supabase.from("ad_views")
+            .insert({ post_id: effectivePostId, viewer_id: auth.uid })
+            .then(({ error: viewErr }) => {
+              if (!viewErr) {
+                supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" })
+                  .then(({ error }) => { if (error) console.warn("[Post] increment views error:", error.message); else console.log("[Post] view tracked:", effectivePostId); })
+                  .catch((e) => console.warn("[Post] increment views catch:", e?.message));
+              } else if (viewErr.code === "23505") {
+                console.log("[Post] view already counted:", effectivePostId);
+              } else {
+                console.warn("[Post] ad_views insert error:", viewErr.message);
+              }
+            })
+            .catch((e) => console.warn("[Post] ad_views insert catch:", e?.message));
         }
       } catch {
         if (mounted) {
@@ -588,14 +602,20 @@ export default function Post(props) {
   /* ---------- JOIN GROUP + EVENT UNCONFIRMED ---------- */
   const joinGroupAndOpenChat = async () => {
     try {
-      if (!isVerified) {
-        navigation.navigate("PreFaceRecognition");
-        return;
-      }
-
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth?.user?.id;
       if (!uid) throw new Error("Not authenticated");
+
+      // Fresh verification check — don't rely on cached state
+      const { data: verCheck } = await supabase
+        .from("profiles")
+        .select("is_verified")
+        .eq("id", uid)
+        .maybeSingle();
+      if (!verCheck?.is_verified) {
+        navigation.navigate("PreFaceRecognition");
+        return;
+      }
 
       let myUname = authUsername;
       if (!myUname) {
@@ -652,10 +672,14 @@ export default function Post(props) {
         // If group requires approval, add to pending instead of members
         if (groupRow.require_approval) {
           if (!alreadyPending) {
-            const nextPending = [...currentPending, myUname];
-            await supabase.from("groups").update({ pending_members: nextPending }).eq("id", groupRow.id);
+            const { error: pendingErr } = await supabase.rpc("request_to_join_group", {
+              p_group_id: groupRow.id,
+              p_username: myUname,
+            });
+            if (pendingErr) console.warn("[Post] request_to_join_group error:", pendingErr.message);
+            else console.log("[Post] join request sent:", myUname, "→", groupRow.id);
           }
-          Alert.alert("Request sent", "The group admin will review your request to join.");
+          setJoinPendingModal(true);
           return;
         }
 
@@ -675,23 +699,24 @@ export default function Post(props) {
           }
         }
 
-        // 3) add to events.unconfirmed (by post_id)
+        // 3) add to events.unconfirmed only if user doesn't already have a ticket
         if (effectivePostId) {
           try {
-            const { data: ev, error: evErr } = await supabase
+            const { data: evRow } = await supabase
               .from("events")
-              .select("id, unconfirmed")
+              .select("ticket_holders")
               .eq("post_id", effectivePostId)
               .maybeSingle();
-
-            if (!evErr && ev?.id) {
-              const currentU = Array.isArray(ev.unconfirmed) ? ev.unconfirmed : [];
-              const nextU = uniqCI([...currentU, myUname]);
-              const { error: upU } = await supabase
-                .from("events")
-                .update({ unconfirmed: nextU })
-                .eq("id", ev.id);
-              if (upU) throw upU;
+            const holders = Array.isArray(evRow?.ticket_holders) ? evRow.ticket_holders : [];
+            const alreadyHasTicket = holders.some(
+              (h) => String(h).toLowerCase() === myUname.toLowerCase()
+            );
+            if (!alreadyHasTicket) {
+              const { error: upU } = await supabase.rpc("add_to_unconfirmed", {
+                p_post_id: effectivePostId,
+                p_username: myUname,
+              });
+              if (upU) console.warn("[Post join] add_to_unconfirmed error:", upU.message);
             }
           } catch (e) {
             console.warn("[Post join] events.unconfirmed update failed:", e?.message || e);
@@ -856,15 +881,25 @@ export default function Post(props) {
           // Track contact for ad posts
           const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
           if (postTypeStr === "ad" && effectivePostId) {
-            supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" }).then(() => {}).catch(() => {});
+            supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" })
+              .then(({ error }) => { if (error) console.warn("[Post] increment contacts error:", error.message); else console.log("[Post] contact tracked:", effectivePostId); })
+              .catch((e) => console.warn("[Post] increment contacts catch:", e?.message));
             supabase.auth.getUser().then(({ data: authData }) => {
               const cid = authData?.user?.id;
-              if (!cid) return;
-              supabase.from("ad_contacts").upsert(
-                { post_id: effectivePostId, contacter_id: cid },
-                { onConflict: "post_id,contacter_id" }
-              ).catch(() => {});
-            }).catch(() => {});
+              if (!cid) { console.warn("[Post] contact upsert skipped — no user id"); return; }
+              supabase.from("profiles").select("username, avatar_url").eq("id", cid).maybeSingle()
+                .then(({ data: prof }) => {
+                  supabase.from("ad_contacts").insert({
+                    post_id: effectivePostId,
+                    contacter_id: cid,
+                    contacter_username: prof?.username || null,
+                    contacter_avatar: prof?.avatar_url || null,
+                  }).then(({ error }) => {
+                    if (error && error.code !== "23505") console.warn("[Post] ad_contacts insert error:", error.message);
+                    else console.log("[Post] ad_contacts insert ok");
+                  }).catch((e) => console.warn("[Post] ad_contacts insert catch:", e?.message));
+                }).catch((e) => console.warn("[Post] profiles fetch catch:", e?.message));
+            }).catch((e) => console.warn("[Post] getUser catch:", e?.message));
           }
           if (onPressMessage) onPressMessage();
           else goToDm();
@@ -1090,6 +1125,25 @@ export default function Post(props) {
       />
       <BuyModal visible={buyVisible} onClose={() => setBuyVisible(false)} postId={effectivePostId} />
 
+      {joinPendingModal && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setJoinPendingModal(false)}>
+          <View style={styles.menuBackdrop}>
+            <ThemedView style={[styles.menuCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff", padding: 24, margin: 32, borderRadius: 16 }]}>
+              <ThemedText style={{ fontWeight: "700", fontSize: 16, marginBottom: 8 }}>Approval required</ThemedText>
+              <ThemedText style={{ fontSize: 14, marginBottom: 20, lineHeight: 20 }}>
+                Joining this group requires admin approval. Your request has been sent.
+              </ThemedText>
+              <TouchableOpacity
+                style={{ backgroundColor: "#3D8BFF", borderRadius: 10, paddingVertical: 12, alignItems: "center" }}
+                onPress={() => setJoinPendingModal(false)}
+              >
+                <ThemedText style={{ color: "#fff", fontWeight: "700" }}>OK</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </View>
+        </Modal>
+      )}
+
       {menuOpen && (
         <View style={styles.menuRoot}>
           <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)} />
@@ -1196,7 +1250,7 @@ export default function Post(props) {
                   setReportSuccessOpen(true);
                 }}
               >
-                {reportSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.reportCardBtnText}>{t("confirm_yes") || "Send"}</Text>}
+                {reportSending ? <ActivityIndicator color="#fff" /> : <Text style={styles.reportCardBtnText}>{t("confirm_yes") || "OK"}</Text>}
               </TouchableOpacity>
             </View>
           </View>

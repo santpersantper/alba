@@ -20,9 +20,10 @@ async function sendExpoPush(
       },
       body: JSON.stringify(chunk),
     });
+    const respBody = await resp.text();
+    console.log("[send-push] Expo response:", resp.status, respBody);
     if (!resp.ok) {
-      const body = await resp.text();
-      console.error("[send-push] Expo push error:", resp.status, body);
+      console.error("[send-push] Expo push error:", resp.status, respBody);
     }
   }
 }
@@ -48,9 +49,8 @@ Deno.serve(async (req) => {
       const record = body.record;
       const isGroup: boolean = !!record.is_group;
 
-      // Each message has exactly ONE row inserted by the sender (sender_is_me=true).
-      // Only process sender rows — the "recipient copy" does not exist.
-      if (record.sender_is_me !== true) {
+      // Ignore rows without a sender_id (system rows, etc.)
+      if (!record.sender_id) {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }
 
@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
       const { data: senderProfile } = await supabaseAdmin
         .from("profiles")
         .select("name")
-        .eq("username", senderUsername)
+        .eq("id", record.sender_id)
         .maybeSingle();
       const senderFirstName: string =
         (senderProfile?.name as string | null)?.split(" ")[0]?.trim() || senderUsername;
@@ -80,8 +80,22 @@ Deno.serve(async (req) => {
       else msgBody = truncate(msgBody);
 
       if (!isGroup) {
-        // DM: for DMs, record.chat = recipient's user ID (peer profile id)
-        const recipientId: string = record.chat;
+        // DM: look up the recipient from chat_threads
+        // chat_threads has one row per participant; find the row that belongs to
+        // the other person (profile_id != sender_id) for this chat_id.
+        const { data: thread } = await supabaseAdmin
+          .from("chat_threads")
+          .select("owner_id")
+          .eq("chat_id", record.chat_id)
+          .neq("owner_id", record.sender_id)
+          .maybeSingle();
+
+        const recipientId: string | null = thread?.owner_id ?? null;
+        console.log("[send-push] DM chat_id:", record.chat_id, "sender:", record.sender_id, "recipientId:", recipientId);
+        if (!recipientId) {
+          console.log("[send-push] no recipient found in chat_threads, returning early");
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
 
         const { data: profile } = await supabaseAdmin
           .from("profiles")
@@ -89,6 +103,7 @@ Deno.serve(async (req) => {
           .eq("id", recipientId)
           .maybeSingle();
 
+        console.log("[send-push] recipient push_token:", profile?.push_token, "notif_prefs:", JSON.stringify(profile?.notif_prefs));
         if (profile?.push_token) {
           const prefs = (profile.notif_prefs || {}) as Record<string, boolean>;
           if (prefs.chat !== false) {
@@ -96,13 +111,13 @@ Deno.serve(async (req) => {
               to: profile.push_token,
               title: senderFirstName,
               body: msgBody,
-              data: { type: "dm", chat: record.chat },
+              data: { type: "dm", chat: record.chat_id, sender_username: senderUsername },
             });
           }
         }
       } else {
-        // Group: record.chat = group ID. Notify all members except the sender.
-        const groupId: string = record.chat;
+        // Group: notify all members except the sender
+        const groupId: string = record.chat_id;
 
         const { data: group } = await supabaseAdmin
           .from("groups")
@@ -111,26 +126,27 @@ Deno.serve(async (req) => {
           .maybeSingle();
 
         const memberUsernames: string[] = (group?.members || []).filter(
-          (u: string) => u !== senderName
+          (u: string) => u !== senderUsername
         );
 
         if (memberUsernames.length > 0) {
           const { data: profiles } = await supabaseAdmin
             .from("profiles")
-            .select("push_token, notif_prefs")
+            .select("push_token, notif_prefs, muted_groups")
             .in("username", memberUsernames);
 
           for (const p of profiles ?? []) {
             if (!p.push_token) continue;
             const prefs = (p.notif_prefs || {}) as Record<string, boolean>;
-            if (prefs.groups !== false) {
-              toSend.push({
-                to: p.push_token,
-                title: senderFirstName,
-                body: msgBody,
-                data: { type: "group_message", chat: record.chat },
-              });
-            }
+            if (prefs.groups === false) continue;
+            const mutedGroups: string[] = p.muted_groups ?? [];
+            if (mutedGroups.includes(groupId)) continue;
+            toSend.push({
+              to: p.push_token,
+              title: senderFirstName,
+              body: msgBody,
+              data: { type: "group_message", chat: record.chat_id },
+            });
           }
         }
       }

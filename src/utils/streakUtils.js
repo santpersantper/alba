@@ -10,74 +10,73 @@ export function dateNDaysAgo(n) {
 }
 
 /**
- * Evaluate whether today's goal was met and return the prefs update.
+ * Evaluate whether yesterday's goal was met and update the streak count.
+ * Uses COMPLETED-day data (yesterday), not today's in-progress data.
  * No-op if today was already evaluated (lastStreakUpdate === today).
  */
-export function evaluateStreak(usageData, prefs) {
+export function evaluateStreak(dailyHistory, prefs) {
   const todayKey = new Date().toISOString().slice(0, 10);
   if (prefs.lastStreakUpdate === todayKey) return null;
 
-  const todayName = DAY_NAMES[new Date().getDay()];
-  const todayMinutes = usageData?.today?.totalMinutes ?? 0;
-  const dailyMaxMinutes = prefs.screenTimeGoalDailyMaxMinutes ?? 180;
-  const goalMet = todayMinutes <= dailyMaxMinutes;
+  const yesterdayKey = dateNDaysAgo(1);
+  const yesterdayEntry = (dailyHistory || []).find((e) => e.date === yesterdayKey);
 
-  const newStreakDays = { ...(prefs.streakDays ?? {}), [todayName]: goalMet };
-  const newStreakCount = goalMet ? (prefs.currentStreakCount ?? 0) + 1 : 0;
+  // No data for yesterday = first day of tracking or gap; don't penalize
+  if (!yesterdayEntry) {
+    return { lastStreakUpdate: todayKey };
+  }
+
+  const dailyMaxMinutes = prefs.screenTimeGoalDailyMaxMinutes ?? 180;
+  const goalMetYesterday = yesterdayEntry.minutes <= dailyMaxMinutes;
+  const newStreakCount = goalMetYesterday ? (prefs.currentStreakCount ?? 0) + 1 : 0;
 
   return {
-    streakDays: newStreakDays,
     currentStreakCount: newStreakCount,
     lastStreakUpdate: todayKey,
   };
 }
 
-const EMPTY_STREAK_DAYS = {
-  Mon: false, Tue: false, Wed: false, Thu: false,
-  Fri: false, Sat: false, Sun: false,
-};
-
 /**
- * Detect a Monday week-boundary and return prefs updates:
- *   - saves lastWeekTotalMinutes and lastWeekDailyTotals
- *   - resets streakDays / currentStreakCount
- *   - auto-reduces screenTimeGoalDailyMaxMinutes by the reduction % (if goal was auto-set)
+ * Check if 7 days have elapsed since the last weekly rollover (or since trackingStartDate).
+ * If so, auto-reduce the daily goal by the user's weekly reduction % and return prefs updates.
  */
-export function evaluateWeekRollover(weekMinutes, currentDailyTotals, prefs) {
-  if (new Date().getDay() !== 1) return null;
+export function evaluateWeekRollover(dailyHistory, prefs) {
+  if (!prefs.trackingStartDate) return null;
 
-  const lastUpdate = prefs.lastStreakUpdate;
-  if (!lastUpdate) return null;
+  const todayKey = new Date().toISOString().slice(0, 10);
+  if (prefs.lastWeeklyRolloverDate === todayKey) return null;
 
-  const getMondayOf = (dateStr) => {
-    const d = new Date(dateStr);
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return d.toDateString();
-  };
+  const lastRollover = prefs.lastWeeklyRolloverDate ?? prefs.trackingStartDate;
+  const lastDate = new Date(lastRollover + "T12:00:00");
+  const today = new Date(todayKey + "T12:00:00");
+  const daysSince = Math.round((today - lastDate) / 86400000);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-  if (getMondayOf(lastUpdate) === getMondayOf(todayStr)) return null;
+  if (daysSince < 7) return null;
 
   const reductionPct = prefs.screenTimeGoalReductionPercent ?? 10;
-  const autoReducedGoal =
-    prefs.goalAutoSet && prefs.screenTimeGoalDailyMaxMinutes
-      ? Math.max(15, Math.round(prefs.screenTimeGoalDailyMaxMinutes * (1 - reductionPct / 100)))
-      : null;
+  const currentGoal = prefs.screenTimeGoalDailyMaxMinutes ?? 180;
+  const newGoal = Math.max(15, Math.round(currentGoal * (1 - reductionPct / 100)));
+
+  // Sum last 7 days from dailyHistory
+  let lastWeekTotal = 0;
+  for (let i = 7; i >= 1; i--) {
+    const d = dateNDaysAgo(i);
+    const entry = (dailyHistory || []).find((e) => e.date === d);
+    if (entry) lastWeekTotal += entry.minutes ?? 0;
+  }
 
   return {
-    lastWeekTotalMinutes: weekMinutes ?? 0,
-    lastWeekDailyTotals: currentDailyTotals ?? {},
-    streakDays: { ...EMPTY_STREAK_DAYS },
-    currentStreakCount: 0,
-    ...(autoReducedGoal !== null ? { screenTimeGoalDailyMaxMinutes: autoReducedGoal } : {}),
+    screenTimeGoalDailyMaxMinutes: newGoal,
+    lastWeekTotalMinutes: lastWeekTotal,
+    prevWeekTotalMinutes: prefs.lastWeekTotalMinutes ?? 0,
+    lastWeeklyRolloverDate: todayKey,
   };
 }
 
 /**
  * Merge usageData into the stored dailyHistory array.
- * Updates today from live data; fills past days of the current week if not yet set.
+ * Updates today from live per-app sum; fills past days from dailyTotals.
  * Prunes entries older than 14 days.
- * Returns the updated history array (does NOT mutate input).
  */
 export function mergeDailyHistory(currentHistory, usageData) {
   const historyMap = {};
@@ -85,12 +84,14 @@ export function mergeDailyHistory(currentHistory, usageData) {
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
-  // Always overwrite today from live data
-  if (usageData?.today?.totalMinutes !== undefined) {
-    historyMap[todayStr] = usageData.today.totalMinutes;
+  // Overwrite today with live per-app sum
+  const todayAppsTotal = Object.values(usageData?.today?.apps ?? {})
+    .reduce((sum, app) => sum + (app?.minutes ?? 0), 0);
+  if (usageData?.today) {
+    historyMap[todayStr] = todayAppsTotal;
   }
 
-  // Fill past days of this week from dailyTotals (only if entry absent — historical data wins)
+  // Fill past days from dailyTotals (only if not already stored)
   for (let i = 1; i <= 6; i++) {
     const d = new Date();
     d.setDate(d.getDate() - i);
@@ -112,8 +113,6 @@ export function mergeDailyHistory(currentHistory, usageData) {
 /**
  * Build an array of the last 7 calendar days (oldest first) from dailyHistory.
  * Each entry: { date, dayName, minutes, metGoal, isToday }
- * minutes is null if no data exists for that day.
- * metGoal is null if dailyGoal is null or minutes is null.
  */
 export function getLastSevenDays(dailyHistory, dailyGoal) {
   const historyMap = {};
@@ -126,40 +125,27 @@ export function getLastSevenDays(dailyHistory, dailyGoal) {
     const dateStr = d.toISOString().slice(0, 10);
     const dayName = DAY_NAMES[d.getDay()];
     const minutes = historyMap[dateStr] ?? null;
-    const metGoal =
-      minutes !== null && dailyGoal !== null ? minutes <= dailyGoal : null;
+    const metGoal = minutes !== null && dailyGoal != null ? minutes <= dailyGoal : null;
     days.push({ date: dateStr, dayName, minutes, metGoal, isToday: i === 0 });
   }
   return days;
 }
 
 /**
- * Determine the background color scheme.
- * Priority: green > red > white > yellow
- *
- * green  — streak > 2 days AND meeting goal today
- * red    — exceeding goal today
- * white  — missed goal yesterday but meeting it today
- * yellow — everything else (observation period, not enough streak, etc.)
+ * Determine the background color scheme:
+ * yellow — first day of tracking, or no goal/start date
+ * red    — over daily goal today
+ * green  — below or at daily goal today
  */
-export function computeStreakBackground({
-  streakCount,
-  todayMinutes,
-  dailyGoal,
-  metYesterday,
-  firstWeekComplete,
-}) {
-  if (!firstWeekComplete || dailyGoal == null) return "yellow";
-  const metToday = todayMinutes <= dailyGoal;
-  if (streakCount > 2 && metToday) return "green";
-  if (!metToday) return "red";
-  if (!metYesterday && metToday) return "white";
-  return "yellow";
+export function computeStreakBackground({ todayMinutes, dailyGoal, trackingStartDate }) {
+  if (!trackingStartDate || dailyGoal == null) return "yellow";
+  const isFirstDay = trackingStartDate === new Date().toISOString().slice(0, 10);
+  if (isFirstDay) return "yellow";
+  return todayMinutes <= dailyGoal ? "green" : "red";
 }
 
 /**
  * Format a minute count into a human-readable string.
- * 0 → "0 min" | 34 → "34 min" | 60 → "1h" | 62 → "1h 2 min"
  */
 export function formatMinutes(totalMinutes) {
   if (totalMinutes == null) return "—";

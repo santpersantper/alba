@@ -79,7 +79,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Premium features
-  const { prefs, updatePrefs } = useUserPreferences();
+  const { prefs, updatePrefs, reload } = useUserPreferences();
   const [premiumModal, setPremiumModal] = useState(null); // { featureName, description, price, endpoint } | null
   const [cityQuery, setCityQuery] = useState("");
   const [cityResults, setCityResults] = useState([]);
@@ -101,6 +101,8 @@ export default function CommunitySettingsScreen({ navigation }) {
   });
   const toggleSection = (key) =>
     setSectionsOpen((p) => ({ ...p, [key]: !p[key] }));
+
+  const [showNotifTimeDropdown, setShowNotifTimeDropdown] = useState(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -142,8 +144,9 @@ export default function CommunitySettingsScreen({ navigation }) {
   useFocusEffect(
     useCallback(() => {
       loadSettings();
+      reload();
       return undefined;
-    }, [loadSettings])
+    }, [loadSettings, reload])
   );
 
   useEffect(() => {
@@ -379,7 +382,7 @@ export default function CommunitySettingsScreen({ navigation }) {
     setPremiumModal({
       featureName: "Traveler Mode",
       description: "Access Community in any city worldwide.",
-      price: "€4.99/month",
+      price: "€5.00/week",
       endpoint: "/create-payment-intent/premium-traveler",
     });
   };
@@ -864,6 +867,62 @@ export default function CommunitySettingsScreen({ navigation }) {
                 />
               </View>
             ))}
+
+            {/* ── Screen time notification time ── */}
+            {(() => {
+              const notifHour = prefs.screenTimeNotifHour ?? 8;
+              const notifMinute = prefs.screenTimeNotifMinute ?? 0;
+              const timeOptions = [
+                { hour: 6, minute: 0 }, { hour: 6, minute: 30 },
+                { hour: 7, minute: 0 }, { hour: 7, minute: 30 },
+                { hour: 8, minute: 0 }, { hour: 8, minute: 30 },
+                { hour: 9, minute: 0 }, { hour: 9, minute: 30 },
+                { hour: 10, minute: 0 },
+              ];
+              const label12 = (h, m) => {
+                const ampm = h < 12 ? "AM" : "PM";
+                const h12 = h % 12 === 0 ? 12 : h % 12;
+                return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+              };
+              return (
+                <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }}>
+                  <View style={styles.rowBetween}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={[styles.rowTitle, { color: textColor }]}>{t("notif_screentime_time_label")}</Text>
+                      <Text style={[styles.rowSub, { color: secondaryText }]}>{t("notif_screentime_time_sub")}</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setShowNotifTimeDropdown(p => !p)}
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={[styles.rowSub, { color: accent, fontFamily: "PoppinsBold", marginRight: 4 }]}>{label12(notifHour, notifMinute)}</Text>
+                      <Feather name={showNotifTimeDropdown ? "chevron-up" : "chevron-down"} size={14} color={accent} />
+                    </TouchableOpacity>
+                  </View>
+                  {showNotifTimeDropdown && (
+                    <View style={{ paddingBottom: 4 }}>
+                      {timeOptions.map((opt) => {
+                        const selected = opt.hour === notifHour && opt.minute === notifMinute;
+                        return (
+                          <TouchableOpacity
+                            key={`${opt.hour}:${opt.minute}`}
+                            style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+                            onPress={() => {
+                              updatePrefs({ screenTimeNotifHour: opt.hour, screenTimeNotifMinute: opt.minute, scheduledMorningNotifId: null, scheduledWeeklyNotifId: null });
+                              setShowNotifTimeDropdown(false);
+                            }}
+                          >
+                            <Text style={[styles.rowSub, { color: selected ? accent : textColor, fontFamily: selected ? "PoppinsBold" : "Poppins" }]}>{label12(opt.hour, opt.minute)}</Text>
+                            {selected && <Feather name="check" size={14} color={accent} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
           </View>)}
         </>
       );

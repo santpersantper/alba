@@ -80,6 +80,7 @@ export default function InviteMessage({
   const [shareVisible, setShareVisible] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [approvalModalVisible, setApprovalModalVisible] = useState(false);
 
   useEffect(() => {
     if (!preview) return;
@@ -199,10 +200,35 @@ export default function InviteMessage({
     // groups.members (rpc + fallback)
     const { data: gRow, error: gErr } = await supabase
       .from("groups")
-      .select("id, members")
+      .select("id, members, require_approval, pending_members")
       .eq("id", groupId)
       .maybeSingle();
     if (gErr || !gRow?.id) throw gErr || new Error("Group not found");
+
+    const alreadyMember = (Array.isArray(gRow.members) ? gRow.members : [])
+      .some((m) => String(m).toLowerCase() === String(myUsername).toLowerCase());
+
+    // If group requires approval and user is not already a member, add to pending
+    if (gRow.require_approval && !alreadyMember) {
+      const currentPending = Array.isArray(gRow.pending_members) ? gRow.pending_members : [];
+      const alreadyPending = currentPending.some(
+        (m) => String(m).toLowerCase() === String(myUsername).toLowerCase()
+      );
+      if (!alreadyPending) {
+        const { error: pendingErr } = await supabase.rpc("request_to_join_group", {
+          p_group_id: groupId,
+          p_username: myUsername,
+        });
+        if (pendingErr) {
+          console.warn("[InviteMessage] request_to_join_group error:", pendingErr.message, pendingErr.code);
+        } else {
+          console.log("[InviteMessage] join request sent for:", myUsername, "→ group:", groupId);
+        }
+      } else {
+        console.log("[InviteMessage] already pending:", myUsername);
+      }
+      return { requiresApproval: true };
+    }
 
     const { error: addErr } = await supabase.rpc("add_member_to_group", {
       gid: groupId,
@@ -246,8 +272,28 @@ export default function InviteMessage({
 
   const handleJoin = async () => {
     if (!groupId) return;
+
+    // Fresh verification check before joining
+    const { data: authData } = await supabase.auth.getUser();
+    const uid = authData?.user?.id;
+    if (uid) {
+      const { data: verCheck } = await supabase
+        .from("profiles")
+        .select("is_verified")
+        .eq("id", uid)
+        .maybeSingle();
+      if (!verCheck?.is_verified) {
+        navigation.navigate("PreFaceRecognition");
+        return;
+      }
+    }
+
     try {
-      await persistJoin();
+      const result = await persistJoin();
+      if (result?.requiresApproval) {
+        setApprovalModalVisible(true);
+        return;
+      }
     } catch (e) {
       console.warn("[InviteMessage] join error:", e);
       // don’t block navigation; still allow opening chat
@@ -355,6 +401,25 @@ export default function InviteMessage({
           <TouchableOpacity style={[styles.menuItem, { marginTop: 4 }]} onPress={() => setMenuVisible(false)}>
             <Text style={[styles.menuText, { color: "#6B7280" }]}>Cancel</Text>
           </TouchableOpacity>
+        </View>
+      </Modal>
+
+      <Modal visible={approvalModalVisible} transparent animationType="fade" onRequestClose={() => setApprovalModalVisible(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Joining this group requires admin approval</Text>
+            <Text style={[styles.confirmTitle, { fontSize: 13, fontWeight: "400", marginTop: 4, marginBottom: 8 }]}>
+              Your request has been sent. You'll be able to join once an admin approves it.
+            </Text>
+            <View style={styles.confirmRow}>
+              <TouchableOpacity
+                style={[styles.confirmBtn, { backgroundColor: "#3D8BFF" }]}
+                onPress={() => setApprovalModalVisible(false)}
+              >
+                <Text style={styles.confirmBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 

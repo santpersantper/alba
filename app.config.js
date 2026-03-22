@@ -20,11 +20,11 @@ export default {
     slug: "Alba",
     version: "1.0.0",
     orientation: "portrait",
-    icon: "./assets/big_icon.png",
+    icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     splash: {
-      image: "./assets/splash-icon.png",
+      image: "./assets/big_icon.png",
       resizeMode: "contain",
       backgroundColor: "#ffffff",
     },

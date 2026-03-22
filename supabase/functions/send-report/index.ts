@@ -22,6 +22,30 @@ function nowParts(): { sent_date: string; sent_time: string } {
   };
 }
 
+async function getOrCreateDmChatId(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  userAId: string,
+  userBId: string
+): Promise<string> {
+  const { data: existing } = await supabaseAdmin
+    .from("chat_threads")
+    .select("chat_id")
+    .eq("owner_id", userAId)
+    .eq("peer_profile_id", userBId)
+    .eq("is_group", false)
+    .maybeSingle();
+  if (existing) return existing.chat_id;
+  const chatId = crypto.randomUUID();
+  const rows = userAId === userBId
+    ? [{ owner_id: userAId, chat_id: chatId, peer_profile_id: userBId, is_group: false }]
+    : [
+        { owner_id: userAId, chat_id: chatId, peer_profile_id: userBId, is_group: false },
+        { owner_id: userBId, chat_id: chatId, peer_profile_id: userAId, is_group: false },
+      ];
+  await supabaseAdmin.from("chat_threads").insert(rows);
+  return chatId;
+}
+
 async function sendResendEmail(
   resendKey: string,
   from: string,
@@ -68,6 +92,8 @@ Deno.serve(async (req) => {
     const adminEmail = Deno.env.get("ADMIN_EMAIL");
     const resendKey  = Deno.env.get("RESEND_API_KEY");
     const emailFrom  = Deno.env.get("EMAIL_FROM") ?? "Alba <noreply@yourdomain.com>";
+
+    let conversationTranscript = "";
 
     // Supabase admin client — bypasses RLS so we can read profiles/auth
     const supabaseAdmin = createClient(
@@ -118,6 +144,7 @@ Deno.serve(async (req) => {
       // ── 2. Send DM from alba_mod to poster ─────────────────────────────────
       if (modId && posterProfileId) {
         const { sent_date, sent_time } = nowParts();
+        const dmChatId = await getOrCreateDmChatId(supabaseAdmin, modId, posterProfileId);
 
         const reasonText = (reason || "").trim();
         const noticeText =
@@ -127,16 +154,14 @@ Deno.serve(async (req) => {
 
         // Message 1: text notice
         const { error: e1 } = await supabaseAdmin.from("messages").insert({
-          owner_id:        modId,
-          chat:            posterProfileId,
+          sender_id:       modId,
+          chat_id:         dmChatId,
           is_group:        false,
           sender_username: "alba_mod",
-          sender_is_me:    true,
           content:         noticeText,
           media_reference: null,
           post_id:         null,
           group_id:        null,
-          is_read:         true,
           sent_date,
           sent_time,
         });
@@ -153,16 +178,14 @@ Deno.serve(async (req) => {
             : "";
 
           const { error: e2 } = await supabaseAdmin.from("messages").insert({
-            owner_id:        modId,
-            chat:            posterProfileId,
+            sender_id:       modId,
+            chat_id:         dmChatId,
             is_group:        false,
             sender_username: "alba_mod",
-            sender_is_me:    true,
             content:         videoContent,
             media_reference: null,
             post_id:         targetId,
             group_id:        null,
-            is_read:         true,
             sent_date,
             sent_time,
           });
@@ -207,17 +230,16 @@ Deno.serve(async (req) => {
           `${reporterTag} reported the group "${groupName}".` +
           ((reason || "").trim() ? `\n\nReason: ${reason.trim()}` : "");
 
+        const selfChatId = await getOrCreateDmChatId(supabaseAdmin, modId, modId);
         const { error: eDm } = await supabaseAdmin.from("messages").insert({
-          owner_id:        modId,
-          chat:            modId,
+          sender_id:       modId,
+          chat_id:         selfChatId,
           is_group:        false,
           sender_username: "alba_mod",
-          sender_is_me:    true,
           content:         noticeText,
           media_reference: null,
           post_id:         null,
           group_id:        groupId,
-          is_read:         false,
           sent_date,
           sent_time,
         });
@@ -254,17 +276,16 @@ Deno.serve(async (req) => {
             ((reason || "").trim() ? `\n\nReport: ${reason.trim()}` : "");
 
           for (const adminProf of adminProfiles ?? []) {
+            const adminChatId = await getOrCreateDmChatId(supabaseAdmin, modId, adminProf.id);
             const { error: eA } = await supabaseAdmin.from("messages").insert({
-              owner_id:        modId,
-              chat:            adminProf.id,
+              sender_id:       modId,
+              chat_id:         adminChatId,
               is_group:        false,
               sender_username: "alba_mod",
-              sender_is_me:    true,
               content:         noticeText,
               media_reference: null,
               post_id:         null,
               group_id:        null,
-              is_read:         true,
               sent_date,
               sent_time,
             });
@@ -273,7 +294,85 @@ Deno.serve(async (req) => {
           console.log(`[send-report] group admins notified: ${adminUsernames.join(", ")}`);
         }
       }
-    }
+    } else if (type === "dm_message") {
+      // Email-only report — sender is kept anonymous, no DM sent
+      // Email is handled in the admin section below
+
+    } else if (type === "group_message") {
+      // ── Notify group admins with message details ───────────────────────────
+      const groupId      = context?.group_id ?? null;
+      const groupNameCtx = context?.group_name ?? "the group";
+      const msgContent   = context?.message_content ?? "—";
+      const msgSender    = context?.message_sender_username ?? "unknown";
+
+      if (modId && groupId) {
+        const { data: groupRow2 } = await supabaseAdmin
+          .from("groups")
+          .select("group_admin")
+          .eq("id", groupId)
+          .maybeSingle();
+
+        const adminUsernames2: string[] = Array.isArray(groupRow2?.group_admin)
+          ? groupRow2.group_admin
+          : [];
+
+        if (adminUsernames2.length) {
+          const { data: adminProfiles2 } = await supabaseAdmin
+            .from("profiles")
+            .select("id")
+            .in("username", adminUsernames2);
+
+          const { sent_date, sent_time } = nowParts();
+          const noticeText2 =
+            `A message in "${groupNameCtx}" was reported.\n\n` +
+            `Sender: @${msgSender}\n` +
+            `Content: ${msgContent}\n\n` +
+            ((reason || "").trim() ? `Report reason: ${reason.trim()}` : "(no reason provided)");
+
+          for (const adminProf of adminProfiles2 ?? []) {
+            const adminChatId = await getOrCreateDmChatId(supabaseAdmin, modId, adminProf.id);
+            const { error: eGM } = await supabaseAdmin.from("messages").insert({
+              sender_id:       modId,
+              chat_id:         adminChatId,
+              is_group:        false,
+              sender_username: "alba_mod",
+              content:         noticeText2,
+              media_reference: null,
+              post_id:         null,
+              group_id:        null,
+              sent_date,
+              sent_time,
+            });
+            if (eGM) console.error("[send-report] group_message DM error:", eGM.message);
+          }
+          console.log(`[send-report] group_message admins notified: ${adminUsernames2.join(", ")}`);
+        }
+      }
+
+    } else if (type === "conversation") {
+      // ── Report a DM or group conversation from the chat list ────────────────
+      // Fetch last 5 messages (newest first, then reversed for reading order)
+      const chatId = context?.chat_id ?? null;
+      if (chatId) {
+        const { data: msgs } = await supabaseAdmin
+          .from("messages")
+          .select("sender_username, content, media_reference, post_id, sent_date, sent_time")
+          .eq("chat_id", chatId)
+          .order("sent_date", { ascending: false })
+          .order("sent_time", { ascending: false })
+          .limit(5);
+
+        const reversed = (msgs || []).reverse();
+        conversationTranscript = reversed.map((m: Record<string, unknown>) => {
+          let content = (m.content as string) || null;
+          if (!content) {
+            if (m.post_id) content = "[shared post]";
+            else if (m.media_reference) content = "[media]";
+            else content = "[message]";
+          }
+          return `- @${m.sender_username || "unknown"}: ${content}`;
+        }).join("\n") || "(no messages found)";
+      }
 
     // ── Admin email (all types) ──────────────────────────────────────────────
     if (adminEmail && resendKey) {
@@ -329,6 +428,95 @@ Deno.serve(async (req) => {
             <tr><td style="padding:6px 0;color:#666;">Chat ID</td><td style="font-size:12px;color:#888;">${context?.chat_id ?? "—"}</td></tr>
             <tr><td style="padding:6px 0;color:#666;">Reason</td><td>${reason || "<em>No reason provided</em>"}</td></tr>
           </table>`;
+      } else if (type === "dm_message") {
+        const msgContent   = context?.message_content ?? "—";
+        const msgTime      = context?.message_sent_at ?? "—";
+        const receiverUser = context?.receiver_username ?? "—";
+        subject  = `[Alba Report] Direct message reported`;
+        bodyHtml = `
+          <h2 style="margin-bottom:6px;">Direct Message Report</h2>
+          <p style="color:#888;font-size:12px;margin-bottom:12px;">Sender identity is withheld from this notification.</p>
+          <table style="border-collapse:collapse;width:100%;">
+            <tr><td style="padding:6px 0;color:#666;width:160px;">Receiver</td><td><strong>@${receiverUser}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Date / Time</td><td>${msgTime}</td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Message content</td><td>${msgContent.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Report reason</td><td>${reason || "<em>No reason provided</em>"}</td></tr>
+          </table>
+          <h3 style="margin-top:24px;margin-bottom:8px;">Find sender (Supabase SQL editor):</h3>
+          <pre style="background:#f0f4ff;padding:16px;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;line-height:1.6;">-- Find the sender of this message
+SELECT m.sender_id, m.sender_username, m.content, m.sent_at
+FROM messages m
+JOIN chat_threads ct ON ct.chat_id = m.chat_id
+WHERE ct.owner_id = (SELECT id FROM profiles WHERE username = '${receiverUser.replace(/'/g, "''")}')
+  AND m.content ILIKE '%${msgContent.slice(0, 40).replace(/'/g, "''").replace(/</g, "").replace(/>/g, "")}%'
+ORDER BY m.sent_at DESC LIMIT 5;
+
+-- Terminate (replace USER_ID after identifying sender above):
+UPDATE profiles SET account_terminated = true, ban_reason = 'Violation of Terms of Service' WHERE id = 'USER_ID';
+UPDATE auth.users SET banned_until = 'infinity' WHERE id = 'USER_ID';
+INSERT INTO banned_devices (device_id) SELECT device_id FROM profiles WHERE id = 'USER_ID' AND device_id IS NOT NULL ON CONFLICT DO NOTHING;</pre>`;
+
+      } else if (type === "group_message") {
+        subject  = `[Alba Report] Group message: ${context?.group_name ?? "unknown"}`;
+        bodyHtml = `
+          <h2 style="margin-bottom:6px;">Group Message Report</h2>
+          <table style="border-collapse:collapse;width:100%;">
+            <tr><td style="padding:6px 0;color:#666;width:160px;">Group</td><td><strong>${context?.group_name ?? "—"}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Message sender</td><td><strong>@${context?.message_sender_username ?? "—"}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Message content</td><td>${(context?.message_content ?? "—").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Reported by</td><td><strong>${reporter}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Reason</td><td>${reason || "<em>No reason provided</em>"}</td></tr>
+          </table>
+          <h3 style="margin-top:24px;margin-bottom:8px;">Terminate sender (Supabase SQL editor):</h3>
+          <pre style="background:#f0f4ff;padding:16px;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;line-height:1.6;">-- Confirm sender profile
+SELECT id FROM profiles WHERE username = '${(context?.message_sender_username ?? "").replace(/'/g, "''")}';
+
+-- Terminate (replace USER_ID):
+UPDATE profiles SET account_terminated = true, ban_reason = 'Violation of Terms of Service' WHERE id = 'USER_ID';
+UPDATE auth.users SET banned_until = 'infinity' WHERE id = 'USER_ID';
+INSERT INTO banned_devices (device_id) SELECT device_id FROM profiles WHERE id = 'USER_ID' AND device_id IS NOT NULL ON CONFLICT DO NOTHING;</pre>`;
+
+      } else if (type === "conversation") {
+        const chatId = context?.chat_id ?? "—";
+        const convLabel = context?.conversation_label ?? chatId;
+        subject  = `[Alba Report] Conversation reported: ${convLabel}`;
+        bodyHtml = `
+          <h2 style="color:#d23b3b;margin-bottom:6px;">Conversation Reported</h2>
+          <table style="border-collapse:collapse;width:100%;margin-bottom:20px;">
+            <tr><td style="padding:6px 0;color:#666;width:160px;">Reported by</td><td><strong>${reporter}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Reporter ID</td><td style="font-size:12px;color:#888;">${reported_by_id ?? "—"}</td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Conversation</td><td><strong>${convLabel}</strong></td></tr>
+            <tr><td style="padding:6px 0;color:#666;">Chat ID</td><td style="font-size:12px;color:#888;">${chatId}</td></tr>
+          </table>
+          <h3 style="margin-bottom:8px;">Last 5 messages:</h3>
+          <pre style="background:#f8f8f8;padding:16px;border-radius:8px;font-family:monospace;font-size:13px;white-space:pre-wrap;line-height:1.6;">${conversationTranscript}</pre>
+          <h3 style="margin-top:24px;margin-bottom:8px;">Admin sanctions (paste into Supabase SQL editor):</h3>
+          <pre style="background:#f0f4ff;padding:16px;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap;line-height:1.6;">-- Step 1: find all participants in this chat
+SELECT DISTINCT sender_id, sender_username
+FROM messages WHERE chat_id = '${chatId}';
+
+-- Step 2a: 8-hour ban (replace USER_ID)
+UPDATE profiles
+SET banned_until = NOW() + INTERVAL '8 hours',
+    ban_reason   = 'Violation of Terms of Service'
+WHERE id = 'USER_ID';
+
+-- Step 2b: 1-week ban (replace USER_ID)
+UPDATE profiles
+SET banned_until = NOW() + INTERVAL '1 week',
+    ban_reason   = 'Violation of Terms of Service'
+WHERE id = 'USER_ID';
+
+-- Step 2c: Permanent account termination (replace USER_ID)
+UPDATE profiles
+SET account_terminated = TRUE,
+    ban_reason         = 'Account terminated for repeated or severe violation of Terms of Service'
+WHERE id = 'USER_ID';
+-- Also ban in Supabase Auth (prevents re-login):
+UPDATE auth.users SET banned_until = 'infinity' WHERE id = 'USER_ID';
+
+-- Lift a ban early (replace USER_ID)
+UPDATE profiles SET banned_until = NULL, ban_reason = NULL WHERE id = 'USER_ID';</pre>`;
       } else {
         bodyHtml = `
           <h2 style="margin-bottom:6px;">Report</h2>
