@@ -43,6 +43,17 @@ export default {
         ],
         // Suppress App Store encryption export compliance warning
         ITSAppUsesNonExemptEncryption: false,
+        // Privacy purpose strings — must clearly explain usage with examples
+        NSPhotoLibraryUsageDescription:
+          "Alba uses your photo library to let you share photos and videos in chats, set your profile picture, and post content to your feed. For example, you can select a photo from your library to use as your profile picture or attach it to a message.",
+        NSPhotoLibraryAddUsageDescription:
+          "Alba saves photos and videos to your library when you download content shared in the app.",
+        NSCameraUsageDescription:
+          "Alba uses your camera to let you take photos and videos to share in chats or post to your feed. For example, you can take a selfie to set as your profile picture or record a short video to share with your community.",
+        NSMicrophoneUsageDescription:
+          "Alba uses your microphone to record audio when you create video posts or send voice messages in chats.",
+        NSLocationWhenInUseUsageDescription:
+          "Alba uses your location to detect your city during sign-up so your profile shows the right region, and to suggest nearby events and communities. For example, when you create an account, Alba reads your approximate location to pre-fill your city field. Your precise location is never stored or shared with other users.",
       },
       // FamilyControls + App Group entitlements — auto-written to ios/Alba/Alba.entitlements
       // by `npx expo prebuild`. No manual Xcode entitlements step needed for the main target.
@@ -50,6 +61,7 @@ export default {
         "com.apple.developer.family-controls": true,
         "com.apple.security.application-groups": ["group.com.alba.app.screentime"],
         "com.apple.developer.in-app-payments": ["merchant.com.alba.app"],
+        "com.apple.developer.applesignin": ["Default"],
       },
     },
     android: {
@@ -108,6 +120,7 @@ export default {
           return c;
         });
       },
+      "expo-apple-authentication",
       "expo-image",
       "expo-system-ui",
       "expo-font",

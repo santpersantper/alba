@@ -25,9 +25,9 @@ import FamilyControls
 import DeviceActivity
 import UIKit
 
-private let kAppGroup    = "group.com.alba.app.screentime"
-private let kUsageKey    = "alba_usage_data"
+private let kAppGroup     = "group.com.alba.app.screentime"
 private let kSelectionKey = "alba_family_activity_selection"
+private let kUsageKey     = "alba_usage_data"
 
 @objc(AlbaScreenTimeModule)
 class AlbaScreenTimeModule: NSObject {
@@ -172,42 +172,68 @@ class AlbaScreenTimeModule: NSObject {
 
   // MARK: - Usage data
 
-  /// Reads usage JSON written by AlbaDeviceActivityExtension from shared UserDefaults.
+  /// Reads usage JSON written by AlbaDeviceActivityExtension (monitor extension) to UserDefaults.
+  /// Note: the monitor extension only updates data at interval start/end (midnight & 23:59),
+  /// so today.totalMinutes reflects yesterday's final count until the day's interval ends.
+  /// Per-app data is only available via presentUsageReport (native modal).
   @objc func getUsageData(
     _ resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
-    guard
-      let defaults = UserDefaults(suiteName: kAppGroup),
-      let json     = defaults.string(forKey: kUsageKey)
-    else {
-      // Nothing recorded yet — return zeroed structure
-      let empty: [String: Any] = [
-        "lastUpdated": ISO8601DateFormatter().string(from: Date()),
-        "today":    ["totalMinutes": 0, "apps": [:]],
-        "thisWeek": ["totalMinutes": 0, "apps": [:]],
-        "dailyTotals": ["Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0,
-                        "Fri": 0, "Sat": 0, "Sun": 0]
-      ]
-      if let data = try? JSONSerialization.data(withJSONObject: empty),
-         let str  = String(data: data, encoding: .utf8) {
-        resolve(str)
-      } else {
-        resolve("{}")
-      }
+    if let json = UserDefaults(suiteName: kAppGroup)?.string(forKey: kUsageKey),
+       !json.isEmpty {
+      resolve(json)
       return
     }
-    resolve(json)
+    // Nothing recorded yet — return zeroed structure
+    let empty: [String: Any] = [
+      "lastUpdated": ISO8601DateFormatter().string(from: Date()),
+      "today":    ["totalMinutes": 0, "apps": [:]] as [String: Any],
+      "thisWeek": ["totalMinutes": 0, "apps": [:]] as [String: Any],
+      "dailyTotals": ["Mon": 0, "Tue": 0, "Wed": 0, "Thu": 0,
+                      "Fri": 0, "Sat": 0, "Sun": 0]
+    ]
+    if let data = try? JSONSerialization.data(withJSONObject: empty),
+       let str  = String(data: data, encoding: .utf8) {
+      resolve(str)
+    } else {
+      resolve("{}")
+    }
   }
 
-  // MARK: - Report (per-app data via AlbaDeviceActivityReport extension)
+  // MARK: - Style config (read by AlbaDeviceActivityReport extension to style its view)
 
-  /// Presents a hidden DeviceActivityReport view to trigger the
-  /// AlbaDeviceActivityReport extension, waits for it to write per-app usage
-  /// to shared UserDefaults, then resolves with the updated JSON.
-  /// This is the primary method for getting fresh data; the 60-second polling
-  /// loop in useScreenTime.js calls this instead of getUsageData() directly.
+  /// Writes a JSON string of style/goal/streak data to shared UserDefaults so the
+  /// DeviceActivityReport extension can read it when rendering AlbaReportView.
+  /// The extension sandbox blocks all writes, but allows reads from the app group.
+  @objc func setReportStyle(
+    _ styleJSON: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    guard let defaults = UserDefaults(suiteName: kAppGroup) else {
+      reject("NO_DEFAULTS", "Could not access app group UserDefaults", nil)
+      return
+    }
+    defaults.set(styleJSON, forKey: "alba_report_style")
+    resolve(["success": true])
+  }
+
+  // MARK: - Report
+
+  /// Returns the current usage JSON from UserDefaults (written by the monitor extension).
+  /// Per-app breakdown requires the native modal — call presentUsageReport() for that.
   @objc func refreshReport(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    getUsageData(resolve, rejecter: reject)
+  }
+
+  /// Presents the AlbaDeviceActivityReport extension as a full-screen native modal.
+  /// The extension renders per-app usage data in SwiftUI (AlbaReportView).
+  /// Resolves immediately; the modal stays up until the user taps Done.
+  @objc func presentUsageReport(
     _ resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
@@ -216,25 +242,23 @@ class AlbaScreenTimeModule: NSObject {
       let data      = defaults.data(forKey: kSelectionKey),
       let selection = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)
     else {
-      // No selection stored yet — return whatever is already in UserDefaults
-      getUsageData(resolve, rejecter: reject)
+      reject("NO_SELECTION", "No app selection found. Call requestAuthorization first.", nil)
       return
     }
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self, let topVC = self.topViewController() else {
-        self?.getUsageData(resolve, rejecter: reject)
+        reject("NO_VIEW", "No active view controller", nil)
         return
       }
-
       if #available(iOS 16.0, *) {
-        let reportVC = AlbaReportViewController(selection: selection) { [weak self] in
-          // Extension has written data — read and resolve
-          self?.getUsageData(resolve, rejecter: reject)
-        }
-        topVC.present(reportVC, animated: false)
+        let reportVC = AlbaReportViewController(selection: selection) {}
+        let navVC = UINavigationController(rootViewController: reportVC)
+        navVC.modalPresentationStyle = .fullScreen
+        topVC.present(navVC, animated: true)
+        resolve(["success": true])
       } else {
-        self.getUsageData(resolve, rejecter: reject)
+        reject("IOS_VERSION", "iOS 16+ required", nil)
       }
     }
   }

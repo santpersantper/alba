@@ -28,6 +28,8 @@ const DEFAULT_PREFS = {
   screenTimeNotifMinute: 0,
   scheduledMorningNotifId: null,
   scheduledWeeklyNotifId: null,
+  iOSMindfulNotifIds: [],
+  screenTimeRemindersCount: 3,
   lastMorningScheduleHour: null,
   lastMorningScheduleMinute: null,
   lastWeeklyScheduleHour: null,

@@ -35,7 +35,7 @@ import { saveNotifPrefs } from "../lib/notifications";
 import PremiumPurchaseModal from "../components/PremiumPurchaseModal";
 import OnboardingOverlay from "../components/OnboardingOverlay";
 
-const TABS = ["General", "Events", "Ads", "Privacy"];
+const TABS_KEYS = ["general", "events", "ads", "privacy"];
 
 export default function CommunitySettingsScreen({ navigation }) {
   const [fontsLoaded] = useFonts({
@@ -45,12 +45,19 @@ export default function CommunitySettingsScreen({ navigation }) {
   const { theme, mode, setMode, isDark } = useAlbaTheme();
   const { language, setLanguage, t } = useAlbaLanguage();
 
+  const TABS = [
+    t("settings_tab_general") || "General",
+    t("settings_tab_events") || "Events",
+    t("settings_tab_ads") || "Ads",
+    t("settings_tab_privacy") || "Privacy",
+  ];
+
   const modeRef = useRef(mode);
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
 
-  const [activeTab, setActiveTab] = useState("General");
+  const [activeTab, setActiveTab] = useState("general");
 
   const [userId, setUserId] = useState(null);
   const [showNews, setShowNews] = useState(true);
@@ -103,6 +110,7 @@ export default function CommunitySettingsScreen({ navigation }) {
     setSectionsOpen((p) => ({ ...p, [key]: !p[key] }));
 
   const [showNotifTimeDropdown, setShowNotifTimeDropdown] = useState(false);
+  const [showRemindersCountDropdown, setShowRemindersCountDropdown] = useState(false);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -493,7 +501,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   );
 
   const renderTabContent = () => {
-    if (activeTab === "General") {
+    if (activeTab === "general") {
       return (
         <>
           {/* ── Profile ── */}
@@ -868,6 +876,61 @@ export default function CommunitySettingsScreen({ navigation }) {
               </View>
             ))}
 
+            {/* ── Screen time intraday reminders count picker ── */}
+            {(() => {
+              const count = prefs.screenTimeRemindersCount ?? 3;
+              const countOptions = [
+                { value: 0, label: "Off" },
+                { value: 1, label: "1×" },
+                { value: 2, label: "2×" },
+                { value: 3, label: "3×" },
+              ];
+              return (
+                <View style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }}>
+                  <View style={styles.rowBetween}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={[styles.rowTitle, { color: textColor }]}>Screen Time reminders</Text>
+                      <Text style={[styles.rowSub, { color: secondaryText }]}>
+                        {Platform.OS === "ios"
+                          ? "Daily mindfulness nudges to keep your screen time streak going"
+                          : "Alerts at 50%, 90% and 99% of your daily screen time goal"}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setShowRemindersCountDropdown(p => !p)}
+                      style={{ flexDirection: "row", alignItems: "center" }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={[styles.rowSub, { color: accent, fontFamily: "PoppinsBold", marginRight: 4 }]}>
+                        {count === 0 ? "Off" : `${count}×`}
+                      </Text>
+                      <Feather name={showRemindersCountDropdown ? "chevron-up" : "chevron-down"} size={14} color={accent} />
+                    </TouchableOpacity>
+                  </View>
+                  {showRemindersCountDropdown && (
+                    <View style={{ paddingBottom: 4 }}>
+                      {countOptions.map((opt) => {
+                        const selected = opt.value === count;
+                        return (
+                          <TouchableOpacity
+                            key={opt.value}
+                            style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+                            onPress={() => {
+                              updatePrefs({ screenTimeRemindersCount: opt.value });
+                              setShowRemindersCountDropdown(false);
+                            }}
+                          >
+                            <Text style={[styles.rowSub, { color: selected ? accent : textColor, fontFamily: selected ? "PoppinsBold" : "Poppins" }]}>{opt.label}</Text>
+                            {selected && <Feather name="check" size={14} color={accent} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
+
             {/* ── Screen time notification time ── */}
             {(() => {
               const notifHour = prefs.screenTimeNotifHour ?? 8;
@@ -928,7 +991,7 @@ export default function CommunitySettingsScreen({ navigation }) {
       );
     }
 
-    if (activeTab === "Events") {
+    if (activeTab === "events") {
       return (
         <>
           <MyEvents navigation={navigation} />
@@ -937,7 +1000,7 @@ export default function CommunitySettingsScreen({ navigation }) {
       );
     }
 
-    if (activeTab === "Ads") {
+    if (activeTab === "ads") {
       return (
         <>
           <MyAds navigation={navigation} />
@@ -946,7 +1009,7 @@ export default function CommunitySettingsScreen({ navigation }) {
       );
     }
 
-    if (activeTab === "Privacy") {
+    if (activeTab === "privacy") {
       return (
         <>
           {/* ── Visibility & messaging ── */}
@@ -982,9 +1045,9 @@ export default function CommunitySettingsScreen({ navigation }) {
             </View>
             <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
               <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={[styles.rowTitle, { color: textColor }]}>Block Diffusion Messages</Text>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("settings_block_diffusion") || "Block Diffusion Messages"}</Text>
                 <Text style={[styles.rowSub, { color: secondaryText }]}>
-                  You won't receive broadcast messages from other users
+                  {t("settings_block_diffusion_sub") || "You won't receive broadcast messages from other users"}
                 </Text>
               </View>
               <Switch
@@ -1053,13 +1116,14 @@ export default function CommunitySettingsScreen({ navigation }) {
 
       {/* Tab bar */}
       <ThemedView variant="gray" style={styles.tabBar}>
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab;
+        {TABS.map((tab, idx) => {
+          const tabKey = TABS_KEYS[idx];
+          const isActive = activeTab === tabKey;
           return (
             <TouchableOpacity
-              key={tab}
+              key={tabKey}
               style={[styles.tabItem, isActive && styles.tabItemActive]}
-              onPress={() => setActiveTab(tab)}
+              onPress={() => setActiveTab(tabKey)}
               activeOpacity={0.7}
             >
               <ThemedText style={[styles.tabLabel, { color: isActive ? "#00A9FF" : (isDark ? "#aaa" : "#6F7D95") }]}>

@@ -838,7 +838,7 @@ export default function EventSettingsScreen() {
             }
           >
             {/* Change title/description */}
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>Change title</Text>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>{t("event_change_title") || "Change title"}</Text>
             <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <TextInput
                 value={draftTitle}
@@ -849,7 +849,7 @@ export default function EventSettingsScreen() {
               />
             </View>
 
-            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>Change description</Text>
+            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>{t("event_change_description") || "Change description"}</Text>
             <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <TextInput
                 value={draftDesc}
@@ -1007,12 +1007,12 @@ export default function EventSettingsScreen() {
               >
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.toggleLabel, { color: theme.text }]}>
-                    {ticketsPaused ? "Resume ticket selling" : "Pause ticket selling"}
+                    {ticketsPaused ? (t("event_resume_tickets") || "Resume ticket selling") : (t("event_pause_tickets") || "Pause ticket selling")}
                   </Text>
                   <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
                     {ticketsPaused
-                      ? "Ticket button will reappear on the post"
-                      : "Ticket button will be hidden from the post"}
+                      ? (t("event_ticket_resume_sub") || "Ticket button will reappear on the post")
+                      : (t("event_ticket_pause_sub") || "Ticket button will be hidden from the post")}
                   </Text>
                 </View>
                 <View style={[styles.toggleTrack, { backgroundColor: ticketsPaused ? (theme.border || "#ccc") : "#3D8BFF" }]}>
@@ -1033,9 +1033,9 @@ export default function EventSettingsScreen() {
                 activeOpacity={0.9}
               >
                 <Feather name="camera" size={16} color="#fff" />
-                <Text style={styles.scanBtnText}>Scan ticket QR</Text>
+                <Text style={styles.scanBtnText}>{t("event_scan_qr") || "Scan ticket QR"}</Text>
                 <View style={{ flex: 1 }} />
-                <Text style={styles.scanMetaText}>{scannedCount} scanned</Text>
+                <Text style={styles.scanMetaText}>{(t("event_scan_scanned") || "{n} scanned").replace("{n}", scannedCount)}</Text>
               </TouchableOpacity>
             </View>
 
@@ -1125,7 +1125,7 @@ export default function EventSettingsScreen() {
         <View style={styles.scanOverlay}>
           <View style={[styles.scanCard, { backgroundColor: isDark ? "#10131a" : "#fff" }]}>
             <View style={styles.scanHeader}>
-              <Text style={[styles.scanTitle, { color: isDark ? "#fff" : "#111" }]}>Scan ticket</Text>
+              <Text style={[styles.scanTitle, { color: isDark ? "#fff" : "#111" }]}>{t("event_scan_title") || "Scan ticket"}</Text>
               <TouchableOpacity onPress={closeScanner} hitSlop={10}>
                 <Feather name="x" size={22} color={isDark ? "#fff" : "#111"} />
               </TouchableOpacity>
@@ -1143,13 +1143,13 @@ export default function EventSettingsScreen() {
               {scanBusy && (
                 <View style={styles.scanBusy}>
                   <ActivityIndicator color="#fff" />
-                  <Text style={styles.scanBusyText}>Validating…</Text>
+                  <Text style={styles.scanBusyText}>{t("event_scan_validating") || "Validating…"}</Text>
                 </View>
               )}
             </View>
 
             <Text style={[styles.scanHint, { color: isDark ? "#cfd6e6" : "#4a5568" }]}>
-              Point the camera at the QR code.
+              {t("event_scan_hint") || "Point the camera at the QR code."}
             </Text>
 
             {!!lastScanValue && (

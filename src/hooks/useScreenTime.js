@@ -64,7 +64,6 @@ export function useScreenTime() {
       console.log("[ScreenTime] raw:", typeof raw === "string" ? raw.slice(0, 300) : JSON.stringify(raw)?.slice(0, 300));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;
       console.log("[ScreenTime] today.apps:", JSON.stringify(data?.today?.apps));
-      console.log("[ScreenTime] _debug:", JSON.stringify(data?._debug));
       setUsageData(data);
     } catch (e) {
       console.error("[ScreenTime] refreshUsageData ERROR:", e?.message, e);
@@ -122,6 +121,31 @@ export function useScreenTime() {
     }
   }, []);
 
+  // ── Present native per-app usage report modal ─────────────────────────────
+  // The DeviceActivityReport extension sandbox blocks all file writes, so per-app
+  // data cannot be extracted as JSON. This presents it as a native SwiftUI modal instead.
+  const presentReport = useCallback(async () => {
+    if (!IS_NATIVE_AVAILABLE) return;
+    try {
+      await AlbaScreenTimeModule.presentUsageReport();
+    } catch (e) {
+      console.error("[ScreenTime] presentReport ERROR:", e?.message);
+    }
+  }, []);
+
+  // ── Write style/goal/streak config for the native report view ────────────
+  // The extension sandbox blocks writes but allows reads from the app group,
+  // so the main app writes this JSON and the extension reads it in makeConfiguration.
+  const setReportStyle = useCallback(async (styleData) => {
+    if (!IS_NATIVE_AVAILABLE) return;
+    if (typeof AlbaScreenTimeModule.setReportStyle !== "function") return; // not yet in this build
+    try {
+      await AlbaScreenTimeModule.setReportStyle(JSON.stringify(styleData));
+    } catch (e) {
+      console.error("[ScreenTime] setReportStyle ERROR:", e?.message);
+    }
+  }, []);
+
   // ── Re-open FamilyActivityPicker to change tracked apps ───────────────────
   const requestAppSelection = useCallback(async () => {
     if (!IS_NATIVE_AVAILABLE) return true; // no-op on mock path
@@ -133,6 +157,28 @@ export function useScreenTime() {
       console.log("[ScreenTime] requestAppSelection ERROR:", e?.code, e?.message);
       setError(e?.message ?? "App selection failed");
       return false;
+    }
+  }, []);
+
+  // ── Android: get all user-visible installed apps ──────────────────────────
+  const getInstalledApps = useCallback(async () => {
+    if (!IS_NATIVE_AVAILABLE) return [];
+    try {
+      const raw = await AlbaScreenTimeModule.getInstalledApps();
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch (e) {
+      console.error("[ScreenTime] getInstalledApps ERROR:", e?.message);
+      return [];
+    }
+  }, []);
+
+  // ── Android: save selected package names to SharedPreferences ─────────────
+  const setTrackedApps = useCallback(async (packages) => {
+    if (!IS_NATIVE_AVAILABLE) return;
+    try {
+      await AlbaScreenTimeModule.setTrackedApps(packages);
+    } catch (e) {
+      console.error("[ScreenTime] setTrackedApps ERROR:", e?.message);
     }
   }, []);
 
@@ -229,6 +275,10 @@ export function useScreenTime() {
     usageData,
     requestAuthorization,
     requestAppSelection,
+    getInstalledApps,
+    setTrackedApps,
+    presentReport,
+    setReportStyle,
     startMonitoring,
     stopMonitoring,
     refreshUsageData,

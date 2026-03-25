@@ -114,7 +114,7 @@ export function mergeDailyHistory(currentHistory, usageData) {
  * Build an array of the last 7 calendar days (oldest first) from dailyHistory.
  * Each entry: { date, dayName, minutes, metGoal, isToday }
  */
-export function getLastSevenDays(dailyHistory, dailyGoal) {
+export function getLastSevenDays(dailyHistory, dailyGoal, displayDayNames = DAY_NAMES) {
   const historyMap = {};
   (dailyHistory || []).forEach((e) => { historyMap[e.date] = e.minutes; });
 
@@ -123,7 +123,7 @@ export function getLastSevenDays(dailyHistory, dailyGoal) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     const dateStr = d.toISOString().slice(0, 10);
-    const dayName = DAY_NAMES[d.getDay()];
+    const dayName = displayDayNames[d.getDay()];
     const minutes = historyMap[dateStr] ?? null;
     const metGoal = minutes !== null && dailyGoal != null ? minutes <= dailyGoal : null;
     days.push({ date: dateStr, dayName, minutes, metGoal, isToday: i === 0 });

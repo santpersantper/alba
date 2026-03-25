@@ -96,7 +96,7 @@ export default function EventPanel({ onState }) {
 
       {allowTicketing && (
         <>
-          <CheckboxRow label="+18 only event" checked={isAgeRestricted} onToggle={() => setIsAgeRestricted((v) => !v)} style={{ marginTop: 10 }} theme={theme} isDark={isDark} />
+          <CheckboxRow label={t("event_age_restricted") || "+18 only event"} checked={isAgeRestricted} onToggle={() => setIsAgeRestricted((v) => !v)} style={{ marginTop: 10 }} theme={theme} isDark={isDark} />
 
           {tickets.map((ticket, idx) => {
             const ticketPlaceholder = idx === 0 ? t("event_ticket_general") : idx === 1 ? t("event_ticket_vip") : t("event_ticket_name");

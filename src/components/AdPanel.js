@@ -104,7 +104,7 @@ export default function AdPanel({ onState }) {
 
       {/* Ad categories — determines who sees this ad */}
       <Text style={[styles.sectionLabel, { color: isDark ? "#8C96A5" : "#888", marginTop: 14, marginBottom: 8 }]}>
-        Ad categories
+        {t("ad_categories") || "Ad categories"}
       </Text>
       <View style={styles.labelsWrap}>
         {AD_CATEGORIES.map((cat) => {

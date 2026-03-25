@@ -222,10 +222,6 @@ export default function SignUpScreen({ navigation }) {
       showAlert(t("signup_missing_info_title"), t("signup_missing_info_body"));
       return false;
     }
-    if (!age) {
-      showAlert(t("signup_missing_age_title"), t("signup_missing_age_body"));
-      return false;
-    }
     if (name.trim().split(/\s+/).length < 2) {
       showAlert(t("signup_invalid_name_title"), t("signup_invalid_name_body"));
       return false;
@@ -527,7 +523,7 @@ export default function SignUpScreen({ navigation }) {
               activeOpacity={formDisabled ? 1 : 0.8}
             >
               <Text style={[styles.inputField, { color: accent, opacity: age ? 1 : 0.8 }]}>
-                {age || t("signup_age_placeholder")}
+                {age || `${t("signup_age_placeholder")} (optional)`}
               </Text>
               {!formDisabled && <Feather name="chevron-down" size={18} color={accent} />}
             </TouchableOpacity>

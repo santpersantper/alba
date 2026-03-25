@@ -287,13 +287,7 @@ export default function PostMessage({
               style={[
                 styles.card,
                 { backgroundColor: isDark ? theme.gray : "#fff" },
-
-                // ✅ remove border on dark mode
-                isDark
-                  ? { borderWidth: 0, borderColor: "transparent" }
-                  : isMe
-                  ? { borderWidth: 1, borderColor: "#D9E6FF" }
-                  : { borderWidth: 1, borderColor: "#F0F2F5" },
+                { borderWidth: StyleSheet.hairlineWidth, borderColor: isDark ? "#2D3748" : "#E0E4EA" },
               ]}
             >
               {/* Header */}
@@ -375,25 +369,25 @@ export default function PostMessage({
       {/* bottom sheet menu */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuVisible(false)} />
-        <View style={styles.menuCard}>
+        <View style={[styles.menuCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
           <TouchableOpacity style={styles.menuItem} onPress={openReport}>
-            <Text style={styles.menuText}>Report</Text>
+            <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("menu_report") || "Report"}</Text>
           </TouchableOpacity>
 
           {isMe && (
             <TouchableOpacity style={styles.menuItem} onPress={openForward}>
-              <Text style={styles.menuText}>Forward</Text>
+              <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("menu_forward") || "Forward"}</Text>
             </TouchableOpacity>
           )}
 
           {isMe && (
             <TouchableOpacity style={styles.menuItem} onPress={openDeleteConfirm}>
-              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Delete</Text>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>{t("menu_delete") || "Delete"}</Text>
             </TouchableOpacity>
           )}
 
           <TouchableOpacity style={[styles.menuItem, { marginTop: 4 }]} onPress={() => setMenuVisible(false)}>
-            <Text style={[styles.menuText, { color: "#6B7280" }]}>Cancel</Text>
+            <Text style={[styles.menuText, { color: isDark ? "#6B7280" : "#6B7280" }]}>{t("cancel_button") || "Cancel"}</Text>
           </TouchableOpacity>
         </View>
       </Modal>
@@ -401,12 +395,12 @@ export default function PostMessage({
       {/* report modal */}
       <Modal visible={reportVisible} transparent animationType="fade" onRequestClose={() => setReportVisible(false)}>
         <View style={styles.overlay}>
-          <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>{t("report_message_title")}</Text>
+          <View style={[styles.reportCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.reportTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("report_message_title")}</Text>
             <TextInput
-              style={styles.reportInput}
+              style={[styles.reportInput, { color: isDark ? "#E5E7EB" : "#111827", borderColor: isDark ? "#2D3748" : "#E5E7EB" }]}
               placeholder={t("report_group_placeholder")}
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
               value={reportText}
               onChangeText={setReportText}
               multiline
@@ -430,18 +424,18 @@ export default function PostMessage({
       {/* delete confirm */}
       <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => setConfirmVisible(false)}>
         <View style={styles.overlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Are you sure you want to delete this message?</Text>
+          <View style={[styles.confirmCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.confirmTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("confirm_delete_message") || "Are you sure you want to delete this message?"}</Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
                 style={[styles.confirmBtn, { backgroundColor: "#3D8BFF", opacity: deleting ? 0.6 : 1 }]}
                 disabled={deleting}
                 onPress={runDelete}
               >
-                {deleting ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmBtnText}>Yes</Text>}
+                {deleting ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmBtnText}>{t("confirm_yes") || "Yes"}</Text>}
               </TouchableOpacity>
               <TouchableOpacity style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]} onPress={() => setConfirmVisible(false)}>
-                <Text style={styles.confirmBtnText}>No</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_no") || "No"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -506,7 +500,6 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 20,
     paddingHorizontal: 16,
-    backgroundColor: "#FFFFFF",
   },
   menuItem: { paddingVertical: 10 },
   menuText: { fontFamily: "Poppins", fontSize: 15 },
@@ -518,7 +511,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 24,
   },
-  reportCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  reportCard: { width: "100%", borderRadius: 14, padding: 16 },
   reportTitle: { fontFamily: "Poppins", fontSize: 16, marginBottom: 10, textAlign: "center" },
   reportInput: {
     borderWidth: 1,
@@ -536,7 +529,7 @@ const styles = StyleSheet.create({
   reportBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
   reportBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
-  confirmCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  confirmCard: { width: "100%", borderRadius: 14, padding: 16 },
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },

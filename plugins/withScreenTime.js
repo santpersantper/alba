@@ -46,7 +46,7 @@ const EXTENSIONS = [
     // Path to provisioning profile relative to project root.
     // EAS only installs the main app's profile; we install extension profiles
     // ourselves (see withDangerousMod step) and reference them by UUID here.
-    profilePath: "certs/AlbaDeviceActivityExtension2.mobileprovision",
+    profilePath: "certs/AlbaDeviceActivityExtension3.mobileprovision",
   },
   {
     name: "AlbaDeviceActivityReport",
@@ -55,10 +55,13 @@ const EXTENSIONS = [
     entitlements:
       "AlbaDeviceActivityReport/AlbaDeviceActivityReport.entitlements",
     infoPlist: "AlbaDeviceActivityReport/Info.plist",
-    profilePath: "certs/AlbaDeviceActivityReport2.mobileprovision",
+    profilePath: "certs/AlbaDeviceActivityReport3.mobileprovision",
     // Uses EXAppExtensionAttributes (ExtensionKit) instead of NSExtension.
     // Must be embedded in Extensions/ not PlugIns/.
     isEXExtension: true,
+    // Poppins fonts bundled directly in the extension (expo-font loads fonts
+    // as JS assets, not native iOS resources, so the extension can't inherit them).
+    fontFiles: ["Poppins-Regular.ttf", "Poppins-Bold.ttf", "Poppins-SemiBold.ttf"],
   },
 ];
 
@@ -214,6 +217,27 @@ module.exports = function withScreenTime(config) {
       }
     }
 
+    // ── Add Poppins font resources to AlbaDeviceActivityReport ───────────────
+    // Guard against duplicates by checking the Resources build phase directly
+    // rather than just PBXFileReference existence. A file can have a reference
+    // but not be in Copy Bundle Resources (e.g. after an incremental prebuild
+    // that created the reference but skipped the phase entry). This check ensures
+    // the font is actually built into the extension bundle.
+    for (const ext of EXTENSIONS) {
+      if (!ext.fontFiles) continue;
+      const extUuid = getTargetUuidByName(proj, ext.name);
+      if (!extUuid) continue;
+      const extGroupKey =
+        proj.findPBXGroupKey({ name: ext.name }) ||
+        proj.findPBXGroupKey({ path: ext.name });
+      if (!extGroupKey) continue;
+      for (const fontFile of ext.fontFiles) {
+        if (!fontInResourcesPhase(proj, fontFile, extUuid)) {
+          addResourceToTarget(proj, fontFile, extGroupKey, extUuid);
+        }
+      }
+    }
+
     // ── Remove auto-created "Copy Files" phases ───────────────────────────────
     // addTarget('app_extension') automatically creates a "Copy Files"
     // PBXCopyFilesBuildPhase (dstSubfolderSpec=13) in the main app target for
@@ -352,6 +376,24 @@ module.exports = function withScreenTime(config) {
         }
       }
 
+      // ── Copy Poppins fonts into AlbaDeviceActivityReport extension ───────────
+      // expo-font loads fonts as JS assets (not native iOS resources), so the
+      // extension bundle cannot inherit them from the main app. Copy the needed
+      // variants from assets/fonts/ so the extension can use Font.custom().
+      const fontSrcDir = path.join(projectRoot, "assets", "fonts");
+      const fontDstDir = path.join(iosRoot, "AlbaDeviceActivityReport");
+      const reportExt = EXTENSIONS.find((e) => e.name === "AlbaDeviceActivityReport");
+      for (const fontFile of reportExt?.fontFiles ?? []) {
+        const src = path.join(fontSrcDir, fontFile);
+        const dst = path.join(fontDstDir, fontFile);
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, dst);
+          process.stderr.write(`[withScreenTime] Copied ${fontFile} to ios/AlbaDeviceActivityReport/\n`);
+        } else {
+          process.stderr.write(`[withScreenTime] WARNING: font not found: assets/fonts/${fontFile}\n`);
+        }
+      }
+
       // ── Patch bridging header for RCTBridgeModule ─────────────────────────
       // AlbaScreenTimeModule.swift uses RCTPromiseResolveBlock / RCTPromiseRejectBlock
       // (ObjC typedefs from <React/RCTBridgeModule.h>). Expo SDK 54 generates
@@ -457,6 +499,12 @@ module.exports = function withScreenTime(config) {
         <key>EXExtensionPointIdentifier</key>
         <string>com.apple.deviceactivityui.report-extension</string>
     </dict>
+    <key>UIAppFonts</key>
+    <array>
+        <string>Poppins-Regular.ttf</string>
+        <string>Poppins-Bold.ttf</string>
+        <string>Poppins-SemiBold.ttf</string>
+    </array>
 </dict>
 </plist>`,
           },
@@ -612,6 +660,34 @@ function fileExists(proj, filename) {
 }
 
 /**
+ * Returns true if a file is already listed in the PBXResourcesBuildPhase of
+ * the given target. Used instead of fileExists() for font resources so that
+ * a PBXFileReference that exists but was never added to Copy Bundle Resources
+ * (e.g. from a failed incremental prebuild) still gets correctly added.
+ */
+function fontInResourcesPhase(proj, filename, targetUuid) {
+  const objects = proj.hash.project.objects;
+  const target = (objects["PBXNativeTarget"] || {})[targetUuid];
+  if (!target) return false;
+  const resourcesPhases = objects["PBXResourcesBuildPhase"] || {};
+  const buildFiles = objects["PBXBuildFile"] || {};
+  const refs = objects["PBXFileReference"] || {};
+  for (const phaseRef of target.buildPhases || []) {
+    const phaseUuid = typeof phaseRef === "object" ? phaseRef.value : phaseRef;
+    const phase = resourcesPhases[phaseUuid];
+    if (!phase) continue;
+    for (const fileRef of phase.files || []) {
+      const bfUuid = typeof fileRef === "object" ? fileRef.value : fileRef;
+      const bf = buildFiles[bfUuid];
+      if (!bf) continue;
+      const ref = refs[bf.fileRef];
+      if (ref && ref.path && String(ref.path).includes(filename)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Low-level alternative to addSourceFile that directly writes the four
  * pbxproj entries needed to compile a file, without touching addPluginFile.
  *
@@ -680,6 +756,77 @@ function addFileToTarget(proj, filename, groupKey, targetUuid) {
         phase.files.push({
           value: buildFileUuid,
           comment: `${filename} in Sources`,
+        });
+      }
+      break;
+    }
+  }
+}
+
+/** Returns the PBXNativeTarget UUID for a target with the given name, or null. */
+function getTargetUuidByName(proj, name) {
+  const targets = proj.hash.project.objects["PBXNativeTarget"] || {};
+  for (const [uuid, t] of Object.entries(targets)) {
+    if (typeof t === "object" && (t.name === name || t.name === `"${name}"`)) {
+      return uuid;
+    }
+  }
+  return null;
+}
+
+/**
+ * Adds a resource file (e.g. .ttf) to a target's PBXResourcesBuildPhase.
+ * Mirrors addFileToTarget but targets the Resources phase instead of Sources.
+ */
+function addResourceToTarget(proj, filename, groupKey, targetUuid) {
+  const fileRef = proj.generateUuid();
+  const buildFileUuid = proj.generateUuid();
+  const objects = proj.hash.project.objects;
+
+  // 1. PBXFileReference
+  const fileRefs = objects["PBXFileReference"] || {};
+  fileRefs[fileRef] = {
+    isa: "PBXFileReference",
+    lastKnownFileType: "file",
+    path: `"${filename}"`,
+    sourceTree: '"<group>"',
+  };
+  fileRefs[`${fileRef}_comment`] = filename;
+  objects["PBXFileReference"] = fileRefs;
+
+  // 2. Add to navigator group
+  const groups = objects["PBXGroup"] || {};
+  if (groups[groupKey] && Array.isArray(groups[groupKey].children)) {
+    groups[groupKey].children.push({ value: fileRef, comment: filename });
+  }
+
+  // 3. PBXBuildFile
+  const buildFiles = objects["PBXBuildFile"] || {};
+  buildFiles[buildFileUuid] = {
+    isa: "PBXBuildFile",
+    fileRef: fileRef,
+    fileRef_comment: filename,
+  };
+  buildFiles[`${buildFileUuid}_comment`] = `${filename} in Resources`;
+  objects["PBXBuildFile"] = buildFiles;
+
+  // 4. Append to the Resources build phase for the target
+  const nativeTargets = objects["PBXNativeTarget"] || {};
+  const target = nativeTargets[targetUuid];
+  if (!target) return;
+
+  const resourcesPhases = objects["PBXResourcesBuildPhase"] || {};
+  for (const phaseRef of target.buildPhases || []) {
+    const phaseUuid = typeof phaseRef === "object" ? phaseRef.value : phaseRef;
+    if (resourcesPhases[phaseUuid]) {
+      const phase = resourcesPhases[phaseUuid];
+      const alreadyListed = (phase.files || []).some(
+        (f) => f.comment && f.comment.includes(filename)
+      );
+      if (!alreadyListed) {
+        phase.files.push({
+          value: buildFileUuid,
+          comment: `${filename} in Resources`,
         });
       }
       break;

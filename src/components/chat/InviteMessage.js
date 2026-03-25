@@ -309,8 +309,8 @@ export default function InviteMessage({
   const alignStyle = isMe ? { alignSelf: "flex-end" } : { alignSelf: "flex-start" };
 
   const cardBg = theme.gray;
-  const cardBorderWidth = isDark ? 0 : 1;
-  const cardBorderColor = isDark ? "transparent" : "#D9E6FF";
+  const cardBorderWidth = StyleSheet.hairlineWidth;
+  const cardBorderColor = isDark ? "#2D3748" : "#D9E6FF";
 
   return (
     <>

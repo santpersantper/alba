@@ -14,9 +14,11 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
 
 export default function LocationMessage({ id, isMe, time, locationData, onDeleted, failed = false, onRetry, isAdmin = false, onKick, senderUsername, groupId }) {
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -105,8 +107,8 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
               styles.card,
               {
                 backgroundColor: cardBg,
-                borderWidth: isDark ? 0 : 1,
-                borderColor: isDark ? "transparent" : "#D9E6FF",
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: isDark ? "#2D3748" : "#E0E4EA",
               },
             ]}
           >
@@ -156,17 +158,17 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
         <View style={[styles.menuCard, { backgroundColor: isDark ? "#0F1720" : "#FFFFFF" }]}>
           <TouchableOpacity style={styles.menuItem} onPress={openMaps}>
             <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>
-              Open on Maps
+              {t("menu_open_maps") || "Open on Maps"}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.menuItem} onPress={openReport}>
-            <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>Report</Text>
+            <Text style={[styles.menuText, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("menu_report") || "Report"}</Text>
           </TouchableOpacity>
 
           {isAdmin && !isMe && onKick && senderUsername && (
             <TouchableOpacity style={styles.menuItem} onPress={handleRemoveFromGroup}>
-              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Remove from group</Text>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>{t("menu_remove_from_group") || "Remove from group"}</Text>
             </TouchableOpacity>
           )}
 
@@ -175,7 +177,7 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
               style={styles.menuItem}
               onPress={openDeleteConfirm}
             >
-              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Delete</Text>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>{t("menu_delete") || "Delete"}</Text>
             </TouchableOpacity>
           )}
 
@@ -183,7 +185,7 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
             style={[styles.menuItem, { marginTop: 4 }]}
             onPress={() => setMenuVisible(false)}
           >
-            <Text style={[styles.menuText, { color: "#6B7280" }]}>Cancel</Text>
+            <Text style={[styles.menuText, { color: "#6B7280" }]}>{t("cancel_button") || "Cancel"}</Text>
           </TouchableOpacity>
         </View>
       </Modal>
@@ -196,29 +198,29 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
         onRequestClose={() => setReportVisible(false)}
       >
         <View style={styles.overlay}>
-          <View style={styles.reportCard}>
-            <Text style={styles.reportTitle}>Report message</Text>
+          <View style={[styles.reportCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.reportTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("report_message_title") || "Report message"}</Text>
             <TextInput
-              style={styles.reportInput}
-              placeholder="Tell us what's wrong..."
-              placeholderTextColor="#9CA3AF"
+              style={[styles.reportInput, { color: isDark ? "#E5E7EB" : "#111827", borderColor: isDark ? "#2D3748" : "#E5E7EB" }]}
+              placeholder={t("report_group_placeholder") || "Tell us what's wrong..."}
+              placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
               value={reportText}
               onChangeText={setReportText}
               multiline
             />
             <View style={styles.reportRow}>
               <TouchableOpacity
-                style={[styles.reportBtn, { backgroundColor: "#b0b6c0" }]}
+                style={[styles.reportBtn, { backgroundColor: isDark ? "#374151" : "#b0b6c0" }]}
                 onPress={() => setReportVisible(false)}
               >
-                <Text style={styles.reportBtnText}>Cancel</Text>
+                <Text style={styles.reportBtnText}>{t("cancel_button") || "Cancel"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.reportBtn, { backgroundColor: "#3D8BFF", opacity: reportText.trim() ? 1 : 0.6 }]}
                 onPress={submitReport}
                 disabled={!reportText.trim()}
               >
-                <Text style={styles.reportBtnText}>Submit</Text>
+                <Text style={styles.reportBtnText}>{t("submit_button") || "Submit"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -233,9 +235,9 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
         onRequestClose={() => setConfirmVisible(false)}
       >
         <View style={styles.overlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>
-              Are you sure you want to delete this message?
+          <View style={[styles.confirmCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.confirmTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>
+              {t("confirm_delete_message") || "Are you sure you want to delete this message?"}
             </Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
@@ -246,14 +248,14 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
                 {deleting ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.confirmBtnText}>Yes</Text>
+                  <Text style={styles.confirmBtnText}>{t("confirm_yes") || "Yes"}</Text>
                 )}
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]}
+                style={[styles.confirmBtn, { backgroundColor: isDark ? "#374151" : "#b0b6c0" }]}
                 onPress={() => setConfirmVisible(false)}
               >
-                <Text style={styles.confirmBtnText}>No</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_no") || "No"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -268,22 +270,22 @@ export default function LocationMessage({ id, isMe, time, locationData, onDelete
         onRequestClose={() => setKickVisible(false)}
       >
         <View style={styles.overlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>
-              Remove {senderUsername} from this group?
+          <View style={[styles.confirmCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.confirmTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>
+              {(t("confirm_remove_user") || "Remove {user} from this group?").replace("{user}", senderUsername)}
             </Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
                 style={[styles.confirmBtn, { backgroundColor: "#EF4444" }]}
                 onPress={() => { setKickVisible(false); onKick?.(senderUsername); }}
               >
-                <Text style={styles.confirmBtnText}>Remove</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_remove") || "Remove"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]}
+                style={[styles.confirmBtn, { backgroundColor: isDark ? "#374151" : "#b0b6c0" }]}
                 onPress={() => setKickVisible(false)}
               >
-                <Text style={styles.confirmBtnText}>Cancel</Text>
+                <Text style={styles.confirmBtnText}>{t("cancel_button") || "Cancel"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -330,13 +332,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 24,
   },
-  confirmCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  confirmCard: { width: "100%", borderRadius: 14, padding: 16 },
   confirmTitle: { fontFamily: "Poppins", fontSize: 16, textAlign: "center", marginBottom: 14 },
   confirmRow: { flexDirection: "row", gap: 10 },
   confirmBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
   confirmBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 
-  reportCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  reportCard: { width: "100%", borderRadius: 14, padding: 16 },
   reportTitle: { fontFamily: "Poppins", fontSize: 16, marginBottom: 10, textAlign: "center" },
   reportInput: {
     borderWidth: 1,

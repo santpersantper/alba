@@ -554,6 +554,95 @@ const STRINGS = {
     community_location_settings_btn: "Go to Settings",
     community_location_instructions_ios: "Go to Settings → Privacy & Security → Location Services → Alba → and select \"While Using the App\".",
     community_location_instructions_android: "Go to Settings → Apps → Alba → Permissions → Location → and select \"Allow only while using the app\".",
+
+    /* ---------- Chat message menus & modals ---------- */
+    menu_forward: "Forward",
+    menu_open_maps: "Open on Maps",
+    menu_remove_from_group: "Remove from group",
+    confirm_delete_message: "Are you sure you want to delete this message?",
+    confirm_delete_message_short: "Delete this message?",
+    confirm_remove_user: "Remove {user} from this group?",
+    confirm_remove: "Remove",
+
+    /* ---------- Community settings ---------- */
+    settings_block_diffusion: "Block Diffusion Messages",
+    settings_block_diffusion_sub: "You won't receive broadcast messages from other users",
+    settings_tab_general: "General",
+    settings_tab_events: "Events",
+    settings_tab_ads: "Ads",
+    settings_tab_privacy: "Privacy",
+
+    /* ---------- Event settings ---------- */
+    event_change_title: "Change title",
+    event_change_description: "Change description",
+    event_pause_tickets: "Pause ticket selling",
+    event_resume_tickets: "Resume ticket selling",
+    event_ticket_pause_sub: "Ticket button will be hidden from the post",
+    event_ticket_resume_sub: "Ticket button will reappear on the post",
+    event_scan_qr: "Scan ticket QR",
+    event_scan_title: "Scan ticket",
+    event_scan_hint: "Point the camera at the QR code.",
+    event_scan_validating: "Validating…",
+    event_scan_scanned: "{n} scanned",
+    event_age_restricted: "+18 only event",
+
+    /* ---------- Ad panel ---------- */
+    ad_categories: "Ad categories",
+    diffusion_section_title: "Diffusion messages",
+
+    /* ---------- Native report section ---------- */
+    native_no_apps: "No app usage recorded yet.",
+    native_apps_label: "Apps",
+
+    /* ---------- Day name abbreviations (histogram) ---------- */
+    day_sun: "Sun", day_mon: "Mon", day_tue: "Tue", day_wed: "Wed",
+    day_thu: "Thu", day_fri: "Fri", day_sat: "Sat",
+
+    /* ---------- Time unit abbreviations (native report) ---------- */
+    time_unit_h: "h",
+    time_unit_m: "m",
+
+    /* ---------- UseTimeScreen UI ---------- */
+    usetime_today: "Today",
+    usetime_this_week: "This week",
+    usetime_notifications: "Notifications",
+    usetime_view_per_app: "View per-app details",
+    usetime_change_apps: "Change Apps",
+    usetime_reset_tracking: "Reset Tracking",
+    usetime_reset_title: "Reset Tracking?",
+    usetime_reset_body: "This will erase all your usage history, streak, and goals. You'll restart the 7-day observation period.",
+    usetime_reset_confirm: "Reset",
+
+    /* ---------- Threshold notifications (Android) ---------- */
+    notif_50pct_title: "📊 50% of daily goal",
+    notif_50pct_body: "You've used {used} — halfway to your {goal} goal.",
+    notif_90pct_title: "⚠️ 90% of daily goal",
+    notif_90pct_body: "Only {remaining} left before your daily limit.",
+    notif_99pct_title: "🚫 Daily limit almost reached",
+    notif_99pct_body: "You've used {used} of your {goal} goal.",
+
+    /* ---------- Morning notifications ---------- */
+    notif_morning_green_1_title: "Keep going strong! 🔥",
+    notif_morning_green_1_body: "Keep your scrolling time below {goal} today to extend your {streak}-day streak.",
+    notif_morning_green_2_title: "Streak on! 💪",
+    notif_morning_green_2_body: "{streak} days and counting. Stay under {goal} today to keep it going.",
+    notif_morning_green_3_title: "You're on a roll!",
+    notif_morning_green_3_body: "Don't break the streak — stay under {goal} of social media today.",
+    notif_morning_reset_1_title: "Time to start again 🌱",
+    notif_morning_reset_1_body: "Spend less than {goal} on social media today to go back to your goal.",
+    notif_morning_reset_2_title: "Fresh start today!",
+    notif_morning_reset_2_body: "A new day, a new chance. Keep it under {goal} today.",
+    notif_morning_reset_3_title: "You've got this 💙",
+    notif_morning_reset_3_body: "Aim for under {goal} today and start rebuilding your streak.",
+
+    /* ---------- Weekly report notification ---------- */
+    notif_weekly_title: "Weekly report 📊",
+    notif_weekly_body_change: "Your social media use was {direction} last week. New goal: {goal} total this week. Keep going!",
+    notif_weekly_body_goal_only: "New goal: {goal} total this week. Keep going!",
+    notif_weekly_body_check: "Check your weekly screen time summary in the Use Time screen.",
+    notif_weekly_body_new_week: "New week, new goal: stay under {goal} total. You can do it!",
+    notif_weekly_direction_up: "up {pct}%",
+    notif_weekly_direction_down: "down {pct}%",
   },
 
   it: {
@@ -1111,6 +1200,95 @@ const STRINGS = {
     community_location_settings_btn: "Vai alle Impostazioni",
     community_location_instructions_ios: "Vai su Impostazioni → Privacy e sicurezza → Localizzazione → Alba → e seleziona \"Mentre uso l'app\".",
     community_location_instructions_android: "Vai su Impostazioni → App → Alba → Autorizzazioni → Posizione → e seleziona \"Consenti solo quando l'app è in uso\".",
+
+    /* ---------- Chat message menus & modals ---------- */
+    menu_forward: "Inoltra",
+    menu_open_maps: "Apri su Maps",
+    menu_remove_from_group: "Rimuovi dal gruppo",
+    confirm_delete_message: "Sei sicuro di voler eliminare questo messaggio?",
+    confirm_delete_message_short: "Eliminare questo messaggio?",
+    confirm_remove_user: "Rimuovere {user} da questo gruppo?",
+    confirm_remove: "Rimuovi",
+
+    /* ---------- Community settings ---------- */
+    settings_block_diffusion: "Blocca messaggi broadcast",
+    settings_block_diffusion_sub: "Non riceverai messaggi broadcast dagli altri utenti",
+    settings_tab_general: "Generale",
+    settings_tab_events: "Eventi",
+    settings_tab_ads: "Annunci",
+    settings_tab_privacy: "Privacy",
+
+    /* ---------- Event settings ---------- */
+    event_change_title: "Cambia titolo",
+    event_change_description: "Cambia descrizione",
+    event_pause_tickets: "Sospendi vendita biglietti",
+    event_resume_tickets: "Riprendi vendita biglietti",
+    event_ticket_pause_sub: "Il pulsante biglietti sarà nascosto dal post",
+    event_ticket_resume_sub: "Il pulsante biglietti riapparirà sul post",
+    event_scan_qr: "Scansiona QR biglietto",
+    event_scan_title: "Scansiona biglietto",
+    event_scan_hint: "Punta la fotocamera sul codice QR.",
+    event_scan_validating: "Convalida…",
+    event_scan_scanned: "{n} scansionati",
+    event_age_restricted: "Evento solo +18",
+
+    /* ---------- Ad panel ---------- */
+    ad_categories: "Categorie annunci",
+    diffusion_section_title: "Messaggi diffusione",
+
+    /* ---------- Native report section ---------- */
+    native_no_apps: "Nessun utilizzo app registrato.",
+    native_apps_label: "App",
+
+    /* ---------- Day name abbreviations (histogram) ---------- */
+    day_sun: "Dom", day_mon: "Lun", day_tue: "Mar", day_wed: "Mer",
+    day_thu: "Gio", day_fri: "Ven", day_sat: "Sab",
+
+    /* ---------- Time unit abbreviations (native report) ---------- */
+    time_unit_h: "h",
+    time_unit_m: "m",
+
+    /* ---------- UseTimeScreen UI ---------- */
+    usetime_today: "Oggi",
+    usetime_this_week: "Questa settimana",
+    usetime_notifications: "Notifiche",
+    usetime_view_per_app: "Dettagli per app",
+    usetime_change_apps: "Cambia app",
+    usetime_reset_tracking: "Ripristina tracciamento",
+    usetime_reset_title: "Ripristinare il tracciamento?",
+    usetime_reset_body: "Verranno cancellati cronologia, streak e obiettivi. Ripartirai dal periodo di osservazione di 7 giorni.",
+    usetime_reset_confirm: "Ripristina",
+
+    /* ---------- Threshold notifications (Android) ---------- */
+    notif_50pct_title: "📊 50% dell'obiettivo giornaliero",
+    notif_50pct_body: "Hai usato {used} — a metà del tuo obiettivo di {goal}.",
+    notif_90pct_title: "⚠️ 90% dell'obiettivo giornaliero",
+    notif_90pct_body: "Ti rimane solo {remaining} prima di raggiungere il limite.",
+    notif_99pct_title: "🚫 Limite giornaliero quasi raggiunto",
+    notif_99pct_body: "Hai usato {used} del tuo obiettivo di {goal}.",
+
+    /* ---------- Morning notifications ---------- */
+    notif_morning_green_1_title: "Continua così! 🔥",
+    notif_morning_green_1_body: "Tieni il tempo di utilizzo sotto {goal} oggi per estendere la tua streak di {streak} giorni.",
+    notif_morning_green_2_title: "Streak attiva! 💪",
+    notif_morning_green_2_body: "{streak} giorni e avanti. Rimani sotto {goal} oggi per continuare.",
+    notif_morning_green_3_title: "Stai andando alla grande!",
+    notif_morning_green_3_body: "Non interrompere la streak — stai sotto {goal} di social media oggi.",
+    notif_morning_reset_1_title: "Tempo di ricominciare 🌱",
+    notif_morning_reset_1_body: "Trascorri meno di {goal} sui social media oggi per tornare al tuo obiettivo.",
+    notif_morning_reset_2_title: "Nuovo inizio oggi!",
+    notif_morning_reset_2_body: "Un nuovo giorno, una nuova possibilità. Resta sotto {goal} oggi.",
+    notif_morning_reset_3_title: "Ce la fai 💙",
+    notif_morning_reset_3_body: "Punta a stare sotto {goal} oggi e ricomincia a costruire la tua streak.",
+
+    /* ---------- Weekly report notification ---------- */
+    notif_weekly_title: "Report settimanale 📊",
+    notif_weekly_body_change: "Il tuo utilizzo dei social è stato {direction} la settimana scorsa. Nuovo obiettivo: {goal} totali questa settimana. Vai avanti!",
+    notif_weekly_body_goal_only: "Nuovo obiettivo: {goal} totali questa settimana. Vai avanti!",
+    notif_weekly_body_check: "Controlla il riepilogo del tempo schermo settimanale nella schermata Usa il tempo.",
+    notif_weekly_body_new_week: "Nuova settimana, nuovo obiettivo: rimani sotto {goal} in totale. Ce la puoi fare!",
+    notif_weekly_direction_up: "su del {pct}%",
+    notif_weekly_direction_down: "giù del {pct}%",
   }
 };
 

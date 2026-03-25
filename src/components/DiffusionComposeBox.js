@@ -49,6 +49,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base-64";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 import {
   PlatformPay,
   usePlatformPay,
@@ -117,6 +118,7 @@ export default function DiffusionComposeBox({
   onMessageSent, // () => void — called after a message is sent so parent can uncheck toggle
 }) {
   const { isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
   const { isPlatformPaySupported, confirmPlatformPayPayment } = usePlatformPay();
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
 
@@ -134,6 +136,9 @@ export default function DiffusionComposeBox({
   // Recipient state
   const [receivedMessages, setReceivedMessages] = useState([]);
   const [myLocation, setMyLocation] = useState(null);
+
+  // Section collapse (entire diffusion block)
+  const [sectionCollapsed, setSectionCollapsed] = useState(false);
 
   const channelRef = useRef(null);
   const expiryTimerRef = useRef(null);
@@ -487,8 +492,14 @@ export default function DiffusionComposeBox({
 
   // Show sender section if user paid (can compose) OR has an active message (show stats)
   const hasSenderSection = prefs.premiumDiffusionList || !!activeMessage;
+
+  // Filter received messages at render time so cards disappear once the 24h window passes,
+  // even if the component has stayed mounted since they were loaded.
+  const activeReceived = receivedMessages.filter(
+    (r) => r.message && new Date(r.message.expires_at).getTime() > Date.now()
+  );
   const hasRecipientSection =
-    !prefs.blockDiffusionMessages && receivedMessages.length > 0;
+    !prefs.blockDiffusionMessages && activeReceived.length > 0;
 
   if (!hasSenderSection && !hasRecipientSection) return null;
 
@@ -500,6 +511,24 @@ export default function DiffusionComposeBox({
 
   return (
     <View>
+      {/* ── SECTION HEADER ── */}
+      <TouchableOpacity
+        style={[styles.sectionHeader, { borderBottomColor: isDark ? "#2D3748" : "#E0E4EA" }]}
+        onPress={() => setSectionCollapsed((c) => !c)}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.sectionHeaderText, { color: isDark ? "#9CA3AF" : "#6B7280" }]}>
+          {t("diffusion_section_title") || "Diffusion messages"}
+        </Text>
+        <Feather
+          name={sectionCollapsed ? "chevron-down" : "chevron-up"}
+          size={18}
+          color={isDark ? "#9CA3AF" : "#6B7280"}
+        />
+      </TouchableOpacity>
+
+      {!sectionCollapsed && (
+      <>
       {/* ── SENDER CARD ── */}
       {hasSenderSection && (
         <View style={styles.senderCard}>
@@ -650,7 +679,7 @@ export default function DiffusionComposeBox({
 
       {/* ── RECIPIENT CARDS ── */}
       {hasRecipientSection &&
-        receivedMessages.map((r) => {
+        activeReceived.map((r) => {
           const msg = r.message;
           if (!msg) return null;
           const dist =
@@ -724,11 +753,26 @@ export default function DiffusionComposeBox({
             </View>
           );
         })}
+      </>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sectionHeaderText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+  },
+
   // Sender card — full width, no border radius
   senderCard: {
     backgroundColor: BLUE,

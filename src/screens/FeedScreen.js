@@ -14,6 +14,7 @@ import {
   Animated,
   AppState,
   RefreshControl,
+  Platform,
 } from "react-native";
 import {
   useNavigation,
@@ -39,6 +40,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { useScreenTime } from "../hooks/useScreenTime";
 
 import {
   readCachedFirstFeedVideoOverride,
@@ -396,6 +398,7 @@ export default function FeedScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useAlbaLanguage();
   const { isDark } = useAlbaTheme();
+  const { presentReport, authorized: screenTimeAuthorized } = useScreenTime();
 
   const listRef = useRef(null);
 

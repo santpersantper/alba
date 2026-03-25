@@ -18,6 +18,7 @@ import { Feather } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../../lib/supabase";
 import { useAlbaTheme } from "../../theme/ThemeContext";
+import { useAlbaLanguage } from "../../theme/LanguageContext";
 
 // In-memory cache: postId → enriched feed_video row
 // Keyed as "postId:username" to detect stale "alba_user" entries and re-fetch
@@ -56,6 +57,7 @@ export default function FeedVideoMessage({
 }) {
   const navigation = useNavigation();
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
 
   const [post, setPost] = useState(null);
   const [isActuallyPost, setIsActuallyPost] = useState(false); // true when postId belongs to posts table
@@ -157,11 +159,7 @@ export default function FeedVideoMessage({
               style={[
                 styles.card,
                 { backgroundColor: isDark ? theme.gray : "#fff" },
-                isDark
-                  ? { borderWidth: 0 }
-                  : isMe
-                  ? { borderWidth: 1, borderColor: "#D9E6FF" }
-                  : { borderWidth: 1, borderColor: "#F0F2F5" },
+                { borderWidth: StyleSheet.hairlineWidth, borderColor: isDark ? "#2D3748" : "#E0E4EA" },
               ]}
             >
               {/* Thumbnail area */}
@@ -245,20 +243,20 @@ export default function FeedVideoMessage({
           activeOpacity={1}
           onPress={() => setMenuVisible(false)}
         />
-        <View style={styles.menuCard}>
+        <View style={[styles.menuCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
           {isMe && (
             <TouchableOpacity
               style={styles.menuItem}
               onPress={() => { setMenuVisible(false); setConfirmVisible(true); }}
             >
-              <Text style={[styles.menuText, { color: "#d23b3b" }]}>Delete</Text>
+              <Text style={[styles.menuText, { color: "#d23b3b" }]}>{t("menu_delete") || "Delete"}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity
             style={[styles.menuItem, { marginTop: 4 }]}
             onPress={() => setMenuVisible(false)}
           >
-            <Text style={[styles.menuText, { color: "#6B7280" }]}>Cancel</Text>
+            <Text style={[styles.menuText, { color: "#6B7280" }]}>{t("cancel_button") || "Cancel"}</Text>
           </TouchableOpacity>
         </View>
       </Modal>
@@ -271,8 +269,8 @@ export default function FeedVideoMessage({
         onRequestClose={() => setConfirmVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Delete this message?</Text>
+          <View style={[styles.confirmCard, { backgroundColor: isDark ? "#1A2030" : "#FFFFFF" }]}>
+            <Text style={[styles.confirmTitle, { color: isDark ? "#E5E7EB" : "#111827" }]}>{t("confirm_delete_message_short") || "Delete this message?"}</Text>
             <View style={styles.confirmRow}>
               <TouchableOpacity
                 style={[styles.confirmBtn, { backgroundColor: "#3D8BFF", opacity: deleting ? 0.6 : 1 }]}
@@ -281,13 +279,13 @@ export default function FeedVideoMessage({
               >
                 {deleting
                   ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.confirmBtnText}>Yes</Text>}
+                  : <Text style={styles.confirmBtnText}>{t("confirm_yes") || "Yes"}</Text>}
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmBtn, { backgroundColor: "#b0b6c0" }]}
+                style={[styles.confirmBtn, { backgroundColor: isDark ? "#374151" : "#b0b6c0" }]}
                 onPress={() => setConfirmVisible(false)}
               >
-                <Text style={styles.confirmBtnText}>No</Text>
+                <Text style={styles.confirmBtnText}>{t("confirm_no") || "No"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -363,7 +361,6 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 20,
     paddingHorizontal: 16,
-    backgroundColor: "#FFFFFF",
   },
   menuItem: { paddingVertical: 10 },
   menuText: { fontFamily: "Poppins", fontSize: 15 },
@@ -375,7 +372,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 24,
   },
-  confirmCard: { width: "100%", borderRadius: 14, padding: 16, backgroundColor: "#FFFFFF" },
+  confirmCard: { width: "100%", borderRadius: 14, padding: 16 },
   confirmTitle: {
     fontFamily: "Poppins",
     fontSize: 16,

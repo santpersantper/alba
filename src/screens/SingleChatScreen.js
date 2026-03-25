@@ -1067,8 +1067,9 @@ export default function SingleChatScreen({ navigation, route }) {
                   style={[
                     styles.composer,
                     {
-                      backgroundColor: theme.background,
-                      borderTopColor: isDark ? "#333" : "#EFF2F5",
+                      backgroundColor: theme.gray,
+                      borderTopWidth: StyleSheet.hairlineWidth,
+                      borderTopColor: isDark ? "#2D3748" : "#E0E4EA",
                       paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
                     },
                   ]}
@@ -1108,7 +1109,7 @@ export default function SingleChatScreen({ navigation, route }) {
                       </TouchableOpacity>
                     </View>
                   ) : (
-                    <View style={[styles.inputWrap, { backgroundColor: isDark ? "#2B2B2B" : "#F4F6F9" }]}>
+                    <View style={styles.inputWrap}>
                       <TextInput
                         style={[
                           styles.input,
@@ -1335,7 +1336,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderTopWidth: 1,
     gap: 10,
   },
   composerLeft: { flexDirection: "row", gap: 10 },

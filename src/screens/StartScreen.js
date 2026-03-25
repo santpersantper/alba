@@ -15,13 +15,15 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Feather } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { supabase } from '../lib/supabase';
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import { getDeviceId } from '../lib/deviceId';
 
 // Required for expo-web-browser to close the auth session on redirect
@@ -42,6 +44,7 @@ export default function StartScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
 
   // ── New device verification state ─────────────────────────────────────────
   const [deviceOtpVisible, setDeviceOtpVisible] = useState(false);
@@ -287,6 +290,45 @@ export default function StartScreen({ navigation }) {
     }
   };
 
+  // ── Apple sign-in ─────────────────────────────────────────────────────────
+
+  const handleAppleSignIn = async () => {
+    setAppleLoading(true);
+    try {
+      // Generate a random nonce, pass the SHA-256 hash to Apple,
+      // and the raw value to Supabase so it can verify the JWT.
+      const rawNonce = Array.from(Crypto.getRandomValues(new Uint8Array(32)))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      const hashedNonce = await Crypto.digestStringAsync(
+        Crypto.CryptoDigestAlgorithm.SHA256,
+        rawNonce
+      );
+
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+        nonce: hashedNonce,
+      });
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+        nonce: rawNonce,
+      });
+      if (error) throw error;
+      // Auth state change in AppNavigator handles navigation automatically.
+    } catch (e) {
+      if (e.code !== 'ERR_REQUEST_CANCELED') {
+        showAlert('Apple sign in failed', e.message || 'Please try again.');
+      }
+    } finally {
+      setAppleLoading(false);
+    }
+  };
+
   const onSignUpPress = async () => {
     setSignUpCheckLoading(true);
     try {
@@ -405,13 +447,36 @@ export default function StartScreen({ navigation }) {
             <ActivityIndicator color={accent} size="small" />
           ) : (
             <>
-              <Text style={[styles.googleG, { color: accent }]}>G</Text>
+              <Text style={[styles.socialIcon, styles.googleG, { color: accent }]}>G</Text>
               <Text style={[styles.googleBtnText, { color: accent }]}>
                 continue with google
               </Text>
             </>
           )}
         </TouchableOpacity>
+
+        {Platform.OS === 'ios' && (
+          <TouchableOpacity
+            onPress={handleAppleSignIn}
+            disabled={appleLoading}
+            style={[
+              styles.googleBtn,
+              isDark ? { borderColor: '#FFFFFF' } : { borderColor: '#00A9FF' },
+              { opacity: appleLoading ? 0.7 : 1 },
+            ]}
+          >
+            {appleLoading ? (
+              <ActivityIndicator color={accent} size="small" />
+            ) : (
+              <>
+                <Ionicons name="logo-apple" size={18} color={accent} style={styles.socialIcon} />
+                <Text style={[styles.googleBtnText, { color: accent }]}>
+                  continue with apple
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
 
         <Text style={{ marginTop: 24, color: accent, fontFamily: 'Poppins' }}>
           don't have an account?{' '}
@@ -660,9 +725,12 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 28,
     marginTop: 14,
-    gap: 8,
     width: '78%',
     justifyContent: 'center',
+  },
+  socialIcon: {
+    position: 'absolute',
+    left: 16,
   },
   googleG: {
     fontFamily: 'PoppinsBold',
