@@ -499,12 +499,6 @@ module.exports = function withScreenTime(config) {
         <key>EXExtensionPointIdentifier</key>
         <string>com.apple.deviceactivityui.report-extension</string>
     </dict>
-    <key>UIAppFonts</key>
-    <array>
-        <string>Poppins-Regular.ttf</string>
-        <string>Poppins-Bold.ttf</string>
-        <string>Poppins-SemiBold.ttf</string>
-    </array>
 </dict>
 </plist>`,
           },

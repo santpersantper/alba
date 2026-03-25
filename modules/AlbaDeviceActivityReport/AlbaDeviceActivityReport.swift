@@ -173,16 +173,27 @@ struct AlbaReportScene: DeviceActivityReportScene {
   }
 }
 
+// MARK: - Bundle token
+// Bundle.main is unreliable in ExtensionKit extensions. Bundle(for: BundleToken.self)
+// always resolves to the bundle containing this compiled code — unambiguously the
+// AlbaDeviceActivityReport extension bundle.
+private final class BundleToken {}
+
 // MARK: - Poppins font registration
 
-/// Registers Poppins fonts from the extension bundle for use in SwiftUI.
-/// Called once per makeConfiguration invocation; CTFontManager silently
-/// ignores re-registration of already-loaded fonts.
 private func registerPoppins() {
+  let bundle = Bundle(for: BundleToken.self)
   let names = ["Poppins-Regular", "Poppins-Bold", "Poppins-SemiBold"]
   for name in names {
-    guard let url = Bundle.main.url(forResource: name, withExtension: "ttf") else { continue }
-    CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    guard let url = bundle.url(forResource: name, withExtension: "ttf") else {
+      print("[AlbaReport] Font file not found in bundle: \(name).ttf")
+      continue
+    }
+    var error: Unmanaged<CFError>?
+    let registered = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
+    if !registered, let err = error?.takeRetainedValue() {
+      print("[AlbaReport] Failed to register \(name): \(err)")
+    }
   }
 }
 
@@ -243,6 +254,13 @@ private let kBarMaxH: CGFloat = 80
 
 struct AlbaReportView: View {
   let config: AlbaReportConfig
+
+  init(config: AlbaReportConfig) {
+    self.config = config
+    // Belt-and-suspenders: register fonts here too in case the @main init()
+    // call completed before the extension process fully initialised CoreText.
+    registerPoppins()
+  }
 
   var body: some View {
     ZStack {
