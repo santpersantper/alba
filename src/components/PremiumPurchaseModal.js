@@ -96,7 +96,7 @@ export default function PremiumPurchaseModal({
     );
 
     errorListenerRef.current = ExpoIAP.purchaseErrorListener((error) => {
-      if (error.code === "E_USER_CANCELLED") return;
+      if (error.code === "user-cancelled") return;
       setLoading(false);
       showFeedback(
         "Payment failed",
@@ -115,10 +115,13 @@ export default function PremiumPurchaseModal({
     if (loading) return;
     try {
       setLoading(true);
-      await ExpoIAP.requestSubscription({ sku: IAP_PRODUCT_ID });
+      await ExpoIAP.requestPurchase({
+        request: { apple: { sku: IAP_PRODUCT_ID } },
+        type: "subs",
+      });
       // Purchase result is delivered via purchaseUpdatedListener above
     } catch (e) {
-      if (e.code !== "E_USER_CANCELLED") {
+      if (e.code !== "user-cancelled") {
         showFeedback("Error", e.message || "Purchase failed. Please try again.");
       }
       setLoading(false);
@@ -130,7 +133,7 @@ export default function PremiumPurchaseModal({
     if (loading) return;
     try {
       setLoading(true);
-      const history = await ExpoIAP.getPurchaseHistory();
+      const history = await ExpoIAP.getAvailablePurchases();
       const match = history?.find((p) => p.productId === IAP_PRODUCT_ID);
       if (!match) {
         showFeedback(

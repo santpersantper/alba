@@ -121,6 +121,7 @@ export default {
         });
       },
       "expo-apple-authentication",
+      "expo-iap",
       "expo-image",
       "expo-system-ui",
       "expo-font",
