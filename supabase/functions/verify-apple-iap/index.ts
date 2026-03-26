@@ -64,40 +64,57 @@ serve(async (req) => {
       );
     }
 
-    // Find an active subscription for this product
+    // Subscriptions: check latest_receipt_info for an active (non-expired) entry.
+    // Consumables: check receipt.in_app — they have no expires_date_ms.
     const latestInfo: Record<string, string>[] = appleRes.latest_receipt_info ?? [];
+    const inAppInfo: Record<string, string>[] = appleRes.receipt?.in_app ?? [];
+
     const activeSubscription = latestInfo.find(
       (info) =>
         info.product_id === productId &&
         Number(info.expires_date_ms) > Date.now()
     );
 
-    if (!activeSubscription) {
-      return json({ error: "No active subscription found for this receipt." }, 400);
+    const consumablePurchase = inAppInfo.find(
+      (info) => info.product_id === productId
+    );
+
+    if (!activeSubscription && !consumablePurchase) {
+      return json({ error: "No valid purchase found for this receipt." }, 400);
     }
 
-    const expiresAt = new Date(
-      Number(activeSubscription.expires_date_ms)
-    ).toISOString();
+    const expiresAt = activeSubscription
+      ? new Date(Number(activeSubscription.expires_date_ms)).toISOString()
+      : null;
 
-    // Update the user's premium status in Supabase
+    // Update the user's premium record in Supabase (best-effort — client has
+    // already finished the transaction and unlocked locally via onSuccess()).
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
+    const updatePayload: Record<string, unknown> = {
+      last_iap_product_id: productId,
+      last_iap_verified_at: new Date().toISOString(),
+    };
+    if (productId.includes("adfree")) {
+      updatePayload.is_premium_ad_free = true;
+      if (expiresAt) updatePayload.premium_expires_at = expiresAt;
+    } else if (productId.includes("traveler")) {
+      updatePayload.is_premium_traveler = true;
+      if (expiresAt) updatePayload.traveler_expires_at = expiresAt;
+    }
+
     const { error: updateError } = await supabaseAdmin
       .from("profiles")
-      .update({
-        is_premium_ad_free: true,
-        premium_expires_at: expiresAt,
-      })
+      .update(updatePayload)
       .eq("id", userId);
 
     if (updateError) {
       console.error("Failed to update profile:", updateError.message);
-      // Don't fail the request — the client already finished the transaction
+      // Don't fail the request — client already unlocked the feature
     }
 
     return json({ ok: true, expiresAt });

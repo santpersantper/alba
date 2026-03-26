@@ -17,8 +17,12 @@ import * as ExpoIAP from "expo-iap";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { supabase } from "../lib/supabase";
 
-// Product ID must match exactly what was created in App Store Connect
-const IAP_PRODUCT_ID = "com.albaapp.alba.adfree.monthly";
+// Maps Stripe endpoint type → App Store product ID + IAP type
+const IAP_PRODUCTS = {
+  "premium-ad-free":   { id: "com.albaapp.alba.adfree.monthly",      type: "subs"   },
+  "premium-traveler":  { id: "com.albaapp.alba.traveler.weekly",      type: "subs"   },
+  "diffusion-message": { id: "com.albaapp.alba.diffusion.messages",   type: "in-app" },
+};
 
 const mapStripeError = (code) => {
   if (code === "card_declined")
@@ -68,22 +72,25 @@ export default function PremiumPurchaseModal({
         if (!purchase?.transactionReceipt) return;
         try {
           setLoading(true);
-          // Finish the transaction with Apple — required or Apple will re-deliver it
-          await ExpoIAP.finishTransaction({ purchase, isConsumable: false });
-          // Validate server-side and mark premium in Supabase profiles
-          await supabase.functions.invoke("verify-apple-iap", {
-            body: {
-              transactionReceipt: purchase.transactionReceipt,
-              productId: purchase.productId,
-              userId,
-            },
-          });
-          onSuccess();
-          showFeedback(
-            "Success",
-            "Alba Premium activated! Enjoy an ad-free experience.",
-            onClose
+          const iapProduct = Object.values(IAP_PRODUCTS).find(
+            (p) => p.id === purchase.productId
           );
+          const isConsumable = iapProduct?.type === "in-app";
+          // Finish the transaction with Apple first — this is the source of truth.
+          await ExpoIAP.finishTransaction({ purchase, isConsumable });
+          // Update local state immediately so the feature unlocks right away.
+          onSuccess();
+          // Server-side receipt validation is best-effort; don't block on it.
+          supabase.functions
+            .invoke("verify-apple-iap", {
+              body: {
+                transactionReceipt: purchase.transactionReceipt,
+                productId: purchase.productId,
+                userId,
+              },
+            })
+            .catch(() => {}); // non-fatal
+          showFeedback("Success", "Purchase activated!", onClose);
         } catch {
           showFeedback(
             "Error",
@@ -111,13 +118,20 @@ export default function PremiumPurchaseModal({
     };
   }, []);
 
+  const iapKey = paymentEndpoint?.split("/").pop() ?? "";
+  const iapProduct = IAP_PRODUCTS[iapKey];
+
   const handleIOSPurchase = async () => {
     if (loading) return;
+    if (!iapProduct) {
+      showFeedback("Error", "Product not found. Please try again.");
+      return;
+    }
     try {
       setLoading(true);
       await ExpoIAP.requestPurchase({
-        request: { apple: { sku: IAP_PRODUCT_ID } },
-        type: "subs",
+        request: { apple: { sku: iapProduct.id } },
+        type: iapProduct.type === "subs" ? "subs" : "inapp",
       });
       // Purchase result is delivered via purchaseUpdatedListener above
     } catch (e) {
@@ -134,7 +148,7 @@ export default function PremiumPurchaseModal({
     try {
       setLoading(true);
       const history = await ExpoIAP.getAvailablePurchases();
-      const match = history?.find((p) => p.productId === IAP_PRODUCT_ID);
+      const match = history?.find((p) => p.productId === iapProduct?.id);
       if (!match) {
         showFeedback(
           "Nothing to restore",

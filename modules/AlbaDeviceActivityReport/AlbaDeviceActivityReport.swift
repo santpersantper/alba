@@ -95,7 +95,8 @@ struct AlbaReportScene: DeviceActivityReportScene {
   func makeConfiguration(
     representing data: DeviceActivityResults<DeviceActivityData>
   ) async -> AlbaReportConfig {
-    registerPoppins()
+    // UIAppFonts in Info.plist registers Poppins at bundle-load time.
+    // registerPoppins() is also called in AlbaReportView.init() as a fallback.
     var totalSeconds: TimeInterval = 0
     var appsData: [String: Any] = [:]
     var appIndex = 0

@@ -494,6 +494,12 @@ module.exports = function withScreenTime(config) {
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>UIAppFonts</key>
+    <array>
+        <string>Poppins-Regular.ttf</string>
+        <string>Poppins-Bold.ttf</string>
+        <string>Poppins-SemiBold.ttf</string>
+    </array>
     <key>EXAppExtensionAttributes</key>
     <dict>
         <key>EXExtensionPointIdentifier</key>
