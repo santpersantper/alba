@@ -3,11 +3,16 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno&no-check";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY") ?? "", {
-  // @ts-ignore
-  apiVersion: "2023-10-16",
-  httpClient: Stripe.createFetchHttpClient(),
-});
+// Use test key when STRIPE_SECRET_TEST_KEY is set (for sandbox testing).
+// Remove that secret to switch back to the live key.
+const stripe = new Stripe(
+  Deno.env.get("STRIPE_SECRET_TEST_KEY") ?? Deno.env.get("STRIPE_SECRET_KEY") ?? "",
+  {
+    // @ts-ignore
+    apiVersion: "2023-10-16",
+    httpClient: Stripe.createFetchHttpClient(),
+  }
+);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

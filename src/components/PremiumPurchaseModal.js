@@ -129,9 +129,21 @@ export default function PremiumPurchaseModal({
     }
     try {
       setLoading(true);
+      // fetchProducts must be called before requestPurchase — StoreKit requires
+      // the product to be loaded into memory first, otherwise it returns SKU not found.
+      const type = iapProduct.type === "subs" ? "subs" : "in-app";
+      const products = await ExpoIAP.fetchProducts({ skus: [iapProduct.id], type });
+      if (!products || products.length === 0) {
+        showFeedback(
+          "Not available",
+          "This purchase is not available on your account. Make sure you are signed in to the App Store and try again."
+        );
+        setLoading(false);
+        return;
+      }
       await ExpoIAP.requestPurchase({
         request: { apple: { sku: iapProduct.id } },
-        type: iapProduct.type === "subs" ? "subs" : "inapp",
+        type,
       });
       // Purchase result is delivered via purchaseUpdatedListener above
     } catch (e) {
