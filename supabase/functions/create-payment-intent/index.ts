@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import Stripe from "npm:stripe@14.21.0";
+import Stripe from "npm:stripe@13.11.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // Use test key when STRIPE_SECRET_TEST_KEY is set (for sandbox testing).
