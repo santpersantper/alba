@@ -4,7 +4,6 @@
 // Reads per-app usage via DeviceActivityResults, reads JS-written style config
 // from the app group UserDefaults, and renders a styled native UI.
 
-import CoreText
 import DeviceActivity
 import SwiftUI
 
@@ -174,38 +173,18 @@ struct AlbaReportScene: DeviceActivityReportScene {
   }
 }
 
-// MARK: - Bundle token
-// Bundle.main is unreliable in ExtensionKit extensions. Bundle(for: BundleToken.self)
-// always resolves to the bundle containing this compiled code — unambiguously the
-// AlbaDeviceActivityReport extension bundle.
-private final class BundleToken {}
-
-// MARK: - Poppins font registration
-
-private func registerPoppins() {
-  let bundle = Bundle(for: BundleToken.self)
-  let names = ["Poppins-Regular", "Poppins-Bold", "Poppins-SemiBold"]
-  for name in names {
-    guard let url = bundle.url(forResource: name, withExtension: "ttf") else {
-      print("[AlbaReport] Font file not found in bundle: \(name).ttf")
-      continue
-    }
-    var error: Unmanaged<CFError>?
-    let registered = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
-    if !registered, let err = error?.takeRetainedValue() {
-      print("[AlbaReport] Failed to register \(name): \(err)")
-    }
-  }
-}
+// MARK: - System font helpers (SF Pro Rounded)
+// Custom font loading via CTFontManagerRegisterFontsForURL is blocked by the
+// chronod sandbox on real devices. SF Pro Rounded is the closest system match.
 
 private func poppins(_ size: CGFloat) -> Font {
-  Font.custom("Poppins-Regular", size: size)
+  .system(size: size, weight: .regular, design: .rounded)
 }
 private func poppinsBold(_ size: CGFloat) -> Font {
-  Font.custom("Poppins-Bold", size: size)
+  .system(size: size, weight: .bold, design: .rounded)
 }
 private func poppinsSemiBold(_ size: CGFloat) -> Font {
-  Font.custom("Poppins-SemiBold", size: size)
+  .system(size: size, weight: .semibold, design: .rounded)
 }
 
 // MARK: - Color parsing helpers
@@ -258,9 +237,6 @@ struct AlbaReportView: View {
 
   init(config: AlbaReportConfig) {
     self.config = config
-    // Belt-and-suspenders: register fonts here too in case the @main init()
-    // call completed before the extension process fully initialised CoreText.
-    registerPoppins()
   }
 
   var body: some View {
@@ -277,7 +253,7 @@ struct AlbaReportView: View {
 
           // ── Motivational title ──────────────────────────────────────────────
           Text(config.style.motivationalTitle)
-            .font(poppinsBold(28))
+            .font(.system(size: 28, weight: .heavy, design: .rounded))
             .foregroundColor(config.style.textColor)
             .padding(.top, 16)
             .padding(.bottom, 4)
