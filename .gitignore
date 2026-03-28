@@ -50,3 +50,4 @@ google-services.json
 .idea/
 .expo/
 *.ipa
+"scripts/" 
