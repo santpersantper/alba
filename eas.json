@@ -38,6 +38,7 @@
     "production": {
       "credentialsSource": "remote",
       "autoIncrement": true,
+      "prebuildCommand": "cp $GOOGLE_SERVICES_JSON android/app/google-services.json",
       "ios": {
         "image": "macos-sonoma-14.6-xcode-16.1"
       },
