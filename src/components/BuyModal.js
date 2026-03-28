@@ -92,8 +92,10 @@ export default function BuyModal({ visible, onClose, postId }) {
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const [platformPayAvailable, setPlatformPayAvailable] = useState(false);
 
-  // Check once on mount whether Apple Pay / Google Pay is available on this device
+  // Check once on mount whether Apple Pay / Google Pay is available on this device.
+  // TODO: re-enable Android once Google Pay merchant approval is complete.
   useEffect(() => {
+    if (Platform.OS === "android") return;
     isPlatformPaySupported()
       .then(setPlatformPayAvailable)
       .catch(() => {});
@@ -617,10 +619,10 @@ export default function BuyModal({ visible, onClose, postId }) {
       return;
     }
 
+    let ticketSuccess = false;
     try {
       setLoading(true);
 
-      // ✅ define uid here (you used it later but it didn’t exist)
       const { data: auth, error: authErr } = await supabase.auth.getUser();
       const uid = auth?.user?.id || null;
       if (authErr) WARN("auth.getUser error", authErr);
@@ -634,13 +636,99 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (!state.checked) return sum;
         const priceEuros = Number(prices[idx]) || 0;
         const qty = state.forMeOnly ? 1 : parseInt(state.quantity, 10) || 0;
-        // Add selected options extra costs
         const opts = productOptions[idx] || [];
         const optExtra = (state.selectedOptions || []).reduce((s, optIdx) => {
           return s + (Number(opts[optIdx]?.extraCost) || 0);
         }, 0);
         return sum + (Math.round(priceEuros * 100) + Math.round(optExtra * 100)) * qty;
       }, 0);
+
+      // ── PRE-PAYMENT: fetch event + duplicate check ────────────────────────
+      let ev = null;
+      if (postType !== "Ad") {
+        const { ev: fetchedEv, evErr, attempt } = await fetchEventForPost(postId);
+        if (evErr || !fetchedEv?.id) {
+          WARN("Could not find event", { attempt, postId, evErr });
+          showFeedback("Error", "Could not find the event for this post.");
+          return;
+        }
+        ev = fetchedEv;
+
+        const parseInfo = (raw) => {
+          if (Array.isArray(raw)) return raw;
+          if (typeof raw === "string" && raw.trim()) {
+            try { return JSON.parse(raw); } catch { return []; }
+          }
+          return [];
+        };
+        const attendeesInfo = parseInfo(ev.attendees_info);
+        const registeredUsernames = new Set(
+          attendeesInfo.map((a) => String(a.username || "").toLowerCase()).filter(Boolean)
+        );
+        const existingHolders = new Set(
+          (ev.ticket_holders || []).map((x) => String(x).toLowerCase())
+        );
+        const purchaseUsernames = new Set();
+        for (const u of units) {
+          const holderId = u.isMe ? cleanUsername(myUsername || "") : cleanUsername(u.usernameHint || "");
+          if (!holderId) continue;
+          const lc = holderId.toLowerCase();
+          if (purchaseUsernames.has(lc)) {
+            showFeedback("Duplicate", u.isMe
+              ? "Cannot buy multiple tickets for yourself in one purchase."
+              : `Cannot buy multiple tickets for @${holderId} in one purchase.`);
+            return;
+          }
+          purchaseUsernames.add(lc);
+        }
+        for (const u of units) {
+          const holderId = u.isMe ? cleanUsername(myUsername || "") : cleanUsername(u.usernameHint || "");
+          if (!holderId) continue;
+          const lc = holderId.toLowerCase();
+          if (registeredUsernames.has(lc) || existingHolders.has(lc)) {
+            showFeedback("Already registered", u.isMe
+              ? "You already have a ticket for this event."
+              : `@${holderId} already has a ticket for this event.`);
+            return;
+          }
+        }
+        if (!myUsername && units.some((u) => u.isMe)) {
+          const { data: myExisting } = await supabase
+            .from("tickets").select("id").eq("event_id", ev.id).eq("owner_id", uid).limit(1);
+          if (myExisting?.length) {
+            showFeedback("Already registered", "You already have a ticket for this event.");
+            return;
+          }
+        }
+        const nameCheckField = (requiredInfo || []).find(fieldIsName) || getRequiredInfoForIndex(0).find(fieldIsName);
+        if (nameCheckField) {
+          const purchaseManualNames = new Set();
+          for (const u of units) {
+            if (u.isMe || u.usernameHint) continue;
+            const mn = String(u.manual?.[nameCheckField] || "").trim().toLowerCase();
+            if (!mn) continue;
+            if (purchaseManualNames.has(mn)) {
+              showFeedback("Duplicate", "Cannot buy multiple tickets for the same person in one purchase.");
+              return;
+            }
+            purchaseManualNames.add(mn);
+          }
+          const buyer = String(myUsername || "").toLowerCase();
+          for (const u of units) {
+            if (u.isMe || u.usernameHint) continue;
+            const mn = String(u.manual?.[nameCheckField] || "").trim();
+            if (!mn) continue;
+            const isDupe = attendeesInfo.some(
+              (a) => String(a.purchased_by || "").toLowerCase() === buyer &&
+                     String(a.name || "").toLowerCase() === mn.toLowerCase()
+            );
+            if (isDupe) {
+              showFeedback("Already registered", `Someone named "${mn}" already has a ticket for this event.`);
+              return;
+            }
+          }
+        }
+      }
 
       // === STRIPE PAYMENT GATE (skipped automatically for free events) ===
       if (totalCents > 0) {
@@ -694,7 +782,7 @@ export default function BuyModal({ visible, onClose, postId }) {
               googlePay: {
                 merchantCountryCode: "IT",
                 currencyCode: "EUR",
-                testEnv: true,
+                testEnv: false,
               },
             }
           );
@@ -724,138 +812,24 @@ export default function BuyModal({ visible, onClose, postId }) {
       }
       // === END PAYMENT GATE — proceed with ticket issuance ===
 
-      LOG("PAY start", {
-        postId,
-        postId_type: typeof postId,
-        myUsername,
-        unitsCount: units.length,
-      });
-
-      // 1) load event by post_id (with logs + fallback)
-      const { ev, evErr, attempt } = await fetchEventForPost(postId);
-
-      if (evErr || !ev?.id) {
-        if (postType === "Ad") {
-          // Ad purchase — no event row; track stat and confirm
-          supabase.rpc("increment_ad_stat", { p_post_id: postId, p_field: "purchases" }).catch(() => {});
-          // Save individual purchase records for the Buyers section in AdPublisherScreen
-          const purchaseRows = units.map((u) => ({
-            post_id: postId,
-            buyer_id: uid,
-            buyer_username: myUsername || null,
-            product_name: u.productLabel || null,
-            required_info: u.manual && Object.keys(u.manual).length > 0 ? u.manual : null,
-          }));
-          if (purchaseRows.length > 0) {
-            supabase.from("ad_purchases").insert(purchaseRows).catch(() => {});
-          }
-          showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); });
-          return;
+      // Ad purchase — no event row
+      if (postType === "Ad") {
+        supabase.rpc("increment_ad_stat", { p_post_id: postId, p_field: "purchases" }).catch(() => {});
+        const purchaseRows = units.map((u) => ({
+          post_id: postId,
+          buyer_id: uid,
+          buyer_username: myUsername || null,
+          product_name: u.productLabel || null,
+          required_info: u.manual && Object.keys(u.manual).length > 0 ? u.manual : null,
+        }));
+        if (purchaseRows.length > 0) {
+          supabase.from("ad_purchases").insert(purchaseRows).catch(() => {});
         }
-        WARN("Could not find event", { attempt, postId, evErr });
-        showFeedback("Error", "Could not find the event for this post.");
+        showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); });
         return;
       }
 
-      // Block duplicate tickets.
-      // Primary source: attendees_info (ticket_holders is often stale/empty).
-      // attendees_info may be a parsed array (jsonb) or a JSON string (text column).
-      const parseInfo = (raw) => {
-        if (Array.isArray(raw)) return raw;
-        if (typeof raw === "string" && raw.trim()) {
-          try { return JSON.parse(raw); } catch { return []; }
-        }
-        return [];
-      };
-      const attendeesInfo = parseInfo(ev.attendees_info);
-      const registeredUsernames = new Set(
-        attendeesInfo.map((a) => String(a.username || "").toLowerCase()).filter(Boolean)
-      );
-      // Fallback: ticket_holders array (kept for backwards compatibility)
-      const existingHolders = new Set(
-        (ev.ticket_holders || []).map((x) => String(x).toLowerCase())
-      );
-      // Check for duplicates within this purchase (e.g. two units for the same person)
-      const purchaseUsernames = new Set();
-      for (const u of units) {
-        const holderId = u.isMe
-          ? cleanUsername(myUsername || "")
-          : cleanUsername(u.usernameHint || "");
-        if (!holderId) continue;
-        const lc = holderId.toLowerCase();
-        if (purchaseUsernames.has(lc)) {
-          const msg = u.isMe
-            ? "Cannot buy multiple tickets for yourself in one purchase."
-            : `Cannot buy multiple tickets for @${holderId} in one purchase.`;
-          showFeedback("Duplicate", msg);
-          return;
-        }
-        purchaseUsernames.add(lc);
-      }
-
-      // Check against already-registered attendees
-      for (const u of units) {
-        const holderId = u.isMe
-          ? cleanUsername(myUsername || "")
-          : cleanUsername(u.usernameHint || "");
-        if (!holderId) continue;
-        const lc = holderId.toLowerCase();
-        if (registeredUsernames.has(lc) || existingHolders.has(lc)) {
-          const msg = u.isMe
-            ? "You already have a ticket for this event."
-            : `@${holderId} already has a ticket for this event.`;
-          showFeedback("Already registered", msg);
-          return;
-        }
-      }
-
-      // Safety: if myUsername is null, fall back to owner_id check in tickets table
-      if (!myUsername && units.some((u) => u.isMe)) {
-        const { data: myExisting } = await supabase
-          .from("tickets")
-          .select("id")
-          .eq("event_id", ev.id)
-          .eq("owner_id", uid)
-          .limit(1);
-        if (myExisting?.length) {
-          showFeedback("Already registered", "You already have a ticket for this event.");
-          return;
-        }
-      }
-
-      // Duplicate check for manual-entry units (no @username, name typed manually)
-      const nameCheckField = (requiredInfo || []).find(fieldIsName) || getRequiredInfoForIndex(0).find(fieldIsName);
-      if (nameCheckField) {
-        const purchaseManualNames = new Set();
-        for (const u of units) {
-          if (u.isMe || u.usernameHint) continue;
-          const mn = String(u.manual?.[nameCheckField] || "").trim().toLowerCase();
-          if (!mn) continue;
-          if (purchaseManualNames.has(mn)) {
-            showFeedback("Duplicate", "Cannot buy multiple tickets for the same person in one purchase.");
-            return;
-          }
-          purchaseManualNames.add(mn);
-        }
-        // Check against already-registered attendees (same purchased_by + name combo)
-        const buyer = String(myUsername || "").toLowerCase();
-        for (const u of units) {
-          if (u.isMe || u.usernameHint) continue;
-          const mn = String(u.manual?.[nameCheckField] || "").trim();
-          if (!mn) continue;
-          const isDupe = attendeesInfo.some(
-            (a) =>
-              String(a.purchased_by || "").toLowerCase() === buyer &&
-              String(a.name || "").toLowerCase() === mn.toLowerCase()
-          );
-          if (isDupe) {
-            showFeedback("Already registered", `Someone named "${mn}" already has a ticket for this event.`);
-            return;
-          }
-        }
-      }
-
-      // ✅ FIX: define ticketsToInsert
+      // ev was already fetched and duplicate-checked before payment
       const ticketsToInsert = [];
 
       // 2) determine which usernames we need to fetch from profiles
@@ -904,19 +878,24 @@ export default function BuyModal({ visible, onClose, postId }) {
         const holderId = info.username || info.name || null;
         if (holderId) additions.push(holderId);
 
-        const ticketId =
-          typeof Crypto.randomUUID === "function"
+        let ticketId;
+        try {
+          ticketId = typeof Crypto.randomUUID === "function"
             ? Crypto.randomUUID()
-            : await (async () => {
-                const bytes = await Crypto.getRandomBytesAsync(16);
-                bytes[6] = (bytes[6] & 0x0f) | 0x40; // v4
-                bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
-                const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-                return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(
-                  16,
-                  20
-                )}-${hex.slice(20)}`;
+            : Crypto.getRandomBytes(16) && (() => {
+                const b = Crypto.getRandomBytes(16);
+                b[6] = (b[6] & 0x0f) | 0x40;
+                b[8] = (b[8] & 0x3f) | 0x80;
+                const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+                return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
               })();
+        } catch (_e) {
+          // fallback: Math.random-based UUID v4
+          ticketId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+            const r = Math.random() * 16 | 0;
+            return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+          });
+        }
 
         const qrPayload = String(ticketId);
 
@@ -982,6 +961,10 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (tErr) throw tErr;
       }
 
+      // DB operations succeeded
+      ticketSuccess = true;
+      showFeedback("Success", "Tickets bought successfully!", () => { setFeedback(null); onClose?.(); });
+
       // Remove newly confirmed ticket holders from events.unconfirmed (fire-and-forget)
       if (additions.length > 0) {
         supabase.rpc("remove_from_unconfirmed", {
@@ -989,11 +972,9 @@ export default function BuyModal({ visible, onClose, postId }) {
           p_usernames: additions,
         }).catch(() => {});
       }
-
-      showFeedback("Success", "Tickets reserved.", () => { setFeedback(null); onClose?.(); });
     } catch (e) {
       WARN("pay error:", e?.message || e, e);
-      showFeedback("Error", "Could not complete purchase.");
+      if (!ticketSuccess) showFeedback("Error", "Could not complete purchase.");
     } finally {
       setLoading(false);
     }

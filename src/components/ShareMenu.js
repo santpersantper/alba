@@ -453,19 +453,7 @@ export default function ShareMenu({
           });
         }
 
-        if (finalText) {
-          rows.push({
-            ...base,
-            content: finalText,
-            media_reference: null,
-            post_reference: null,
-            post_id: postId ?? null,
-            group_id: null,
-          });
-        } else if (postId != null && !inviteGroup) {
-          // Encode as __feed_video__ when this is a video post, even if thumbnail is null.
-          // FeedVideoMessage will fetch the thumbnail itself when not pre-stored.
-          console.log("[ShareMenu] postId:", postId, "isVideo:", isVideo, "thumbnailUrl:", thumbnailUrl);
+        if (postId != null && !inviteGroup) {
           const videoContent = (isVideo || thumbnailUrl)
             ? `__feed_video__:${JSON.stringify({ thumbnailUrl: thumbnailUrl || null })}`
             : "";
@@ -475,6 +463,16 @@ export default function ShareMenu({
             media_reference: null,
             post_reference: null,
             post_id: postId,
+            group_id: null,
+          });
+        }
+        if (finalText) {
+          rows.push({
+            ...base,
+            content: finalText,
+            media_reference: null,
+            post_reference: null,
+            post_id: null,
             group_id: null,
           });
         }

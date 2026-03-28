@@ -2,10 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import Stripe from "npm:stripe@13.11.0";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Use test key when STRIPE_SECRET_TEST_KEY is set (for sandbox testing).
+// Use test key when STRIPE_TEST_SECRET_KEY is set (for sandbox testing).
 // Remove that secret to switch back to the live key.
 const stripe = new Stripe(
-  Deno.env.get("STRIPE_SECRET_TEST_KEY") ?? Deno.env.get("STRIPE_SECRET_KEY") ?? "",
+  Deno.env.get("STRIPE_TEST_SECRET_KEY") ?? Deno.env.get("STRIPE_SECRET_KEY") ?? "",
   { apiVersion: "2023-10-16" }
 );
 

@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
 } from "react-native";
 import {
-  PlatformPayButton,
   usePlatformPay,
   useStripe,
 } from "@stripe/stripe-react-native";
@@ -52,11 +51,12 @@ export default function PremiumPurchaseModal({
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const [platformPayAvailable, setPlatformPayAvailable] = useState(false);
 
-  useEffect(() => {
-    if (Platform.OS !== "ios") {
-      isPlatformPaySupported().then(setPlatformPayAvailable).catch(() => {});
-    }
-  }, [isPlatformPaySupported]);
+  // TODO: re-enable once Google Pay merchant approval is complete.
+  // useEffect(() => {
+  //   if (Platform.OS !== "ios") {
+  //     isPlatformPaySupported().then(setPlatformPayAvailable).catch(() => {});
+  //   }
+  // }, [isPlatformPaySupported]);
 
   // ── iOS: StoreKit via expo-iap ────────────────────────────────────────────
   const purchaseListenerRef = useRef(null);
@@ -217,7 +217,7 @@ export default function PremiumPurchaseModal({
             googlePay: {
               merchantCountryCode: "IT",
               currencyCode: "EUR",
-              testEnv: __DEV__,
+              testEnv: false,
             },
           }
         );
@@ -347,13 +347,6 @@ export default function PremiumPurchaseModal({
                     Subscribe
                   </Text>
                 </TouchableOpacity>
-              ) : platformPayAvailable ? (
-                <PlatformPayButton
-                  onPress={handleAndroidPay}
-                  type="buy"
-                  borderRadius={10}
-                  style={styles.platformPayBtn}
-                />
               ) : (
                 <TouchableOpacity
                   style={[styles.actionBtn, styles.payBtn]}
@@ -439,8 +432,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   payBtn: { backgroundColor: "#4EBCFF", borderColor: "#4EBCFF" },
-  platformPayBtn: { minWidth: 110, height: 42 },
-  cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
+cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
   actionText: { fontFamily: "PoppinsBold" },
   restoreBtn: { alignSelf: "center", paddingVertical: 10, marginTop: 4 },
   restoreText: { fontFamily: "Poppins", fontSize: 12 },

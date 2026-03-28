@@ -273,7 +273,12 @@ export default function ChatListScreen({ navigation }) {
       } else if (isBlocked) {
         lastMessage = t("chat_user_blocked_snippet");
       } else if (text.startsWith("__feed_video__:")) {
-        lastMessage = isGroup ? `${actorBase}: Shared a video` : "Shared a video";
+        const postActor = th?.last_sender_is_me
+          ? "You"
+          : isGroup
+          ? (senderProfilesMap[th?.last_sender_username]?.firstName || th?.last_sender_username || "Someone")
+          : (senderProfilesMap[th?.last_sender_username]?.firstName || displayName.split(" ")[0] || username || "Someone");
+        lastMessage = isGroup ? `${postActor}: shared a post` : `${postActor} shared a post`;
       } else if (text.startsWith("__location__:")) {
         lastMessage = isGroup ? `${actorBase}: Shared a location` : "Shared a location";
       } else if (text) {
