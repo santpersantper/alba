@@ -20,6 +20,7 @@ import { useFonts } from 'expo-font';
 import { supabase } from '../lib/supabase';
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { posthog } from '../lib/analytics';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -98,6 +99,7 @@ export default function StartScreen({ navigation }) {
       password: pendingPasswordRef.current,
     });
     if (error) throw error;
+    posthog.capture('user_logged_in', { method: 'email' });
     navigation.getParent()?.reset({ index: 0, routes: [{ name: 'App' }] });
   };
 
@@ -232,6 +234,7 @@ export default function StartScreen({ navigation }) {
           const { error } = await supabase.auth.exchangeCodeForSession(codeMatch[1]);
           console.log('[Google] exchangeCodeForSession result — error:', error?.message ?? null);
           if (error) throw error;
+          posthog.capture('user_logged_in', { method: 'google' });
           return;
         }
         const fragMatch = url?.match(/#(.+)/);
@@ -319,6 +322,7 @@ export default function StartScreen({ navigation }) {
         nonce: rawNonce,
       });
       if (error) throw error;
+      posthog.capture('user_logged_in', { method: 'apple' });
       // Auth state change in AppNavigator handles navigation automatically.
     } catch (e) {
       if (e.code !== 'ERR_REQUEST_CANCELED') {

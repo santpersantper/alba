@@ -147,6 +147,7 @@ export default {
       ],
       "./plugins/withScreenTime",
       "./plugins/withAndroidNativeModules",
+      "@sentry/react-native",
     ],
   },
 };

@@ -14,6 +14,7 @@ import {
   Alert,
   Text,
   Switch,
+  Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
@@ -1151,6 +1152,22 @@ export default function CommunitySettingsScreen({ navigation }) {
             <ThemedText style={[styles.savedPostsBtnText, { color: theme.text }]}>
               {t("saved_posts_button")}
             </ThemedText>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => Linking.openURL("mailto:support@albaappofficial.com")}
+            style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
+            activeOpacity={0.7}
+          >
+            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>Contact Support</ThemedText>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => Linking.openURL("https://albaappofficial.com/feedback")}
+            style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
+            activeOpacity={0.7}
+          >
+            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>Send Feedback</ThemedText>
           </TouchableOpacity>
 
           <TouchableOpacity

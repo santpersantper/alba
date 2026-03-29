@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { posthog } from "../lib/analytics";
 import * as Crypto from "expo-crypto";
 import {
   PlatformPayButton,
@@ -963,6 +964,7 @@ export default function BuyModal({ visible, onClose, postId }) {
 
       // DB operations succeeded
       ticketSuccess = true;
+      posthog.capture('ticket_purchased', { post_id: postId });
       showFeedback("Success", "Tickets bought successfully!", () => { setFeedback(null); onClose?.(); });
 
       // Remove newly confirmed ticket holders from events.unconfirmed (fire-and-forget)
