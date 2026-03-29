@@ -40,6 +40,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { posthog } from "../lib/analytics";
 import { useScreenTime } from "../hooks/useScreenTime";
 
 import {
@@ -962,6 +963,7 @@ export default function FeedScreen() {
     const newIndex = Math.round(offsetY / pageHeight);
     if (newIndex !== currentIndex) {
       setCurrentIndex(newIndex);
+      posthog.capture('feed_video_watched', { index: newIndex });
     }
 
     setPausedByHold(false);

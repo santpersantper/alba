@@ -15,6 +15,7 @@ import {
 import * as ExpoIAP from "expo-iap";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { supabase } from "../lib/supabase";
+import { posthog } from "../lib/analytics";
 
 // Maps Stripe endpoint type → App Store product ID + IAP type
 const IAP_PRODUCTS = {
@@ -79,6 +80,7 @@ export default function PremiumPurchaseModal({
           // Finish the transaction with Apple first — this is the source of truth.
           await ExpoIAP.finishTransaction({ purchase, isConsumable });
           // Update local state immediately so the feature unlocks right away.
+          posthog.capture('premium_purchased', { product_id: purchase.productId, platform: 'ios' });
           onSuccess();
           // Server-side receipt validation is best-effort; don't block on it.
           supabase.functions

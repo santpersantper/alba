@@ -24,6 +24,7 @@ import Constants from "expo-constants";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { posthog } from "../lib/analytics";
 
 /* ── Post type definitions ──────────────────────────────────────── */
 const POST_TYPES = [
@@ -603,6 +604,7 @@ export default function CreatePost() {
       }).select("id").single();
       if (insErr) throw insErr;
       const postId = inserted.id;
+      posthog.capture('post_created', { post_type: postType });
 
       // Semantic embedding (fire-and-forget)
       const textToEmbed = [title, finalDesc].filter(Boolean).join(" ");

@@ -25,6 +25,7 @@ import * as Location from "expo-location";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { getDeviceId } from "../lib/deviceId";
+import { posthog } from "../lib/analytics";
 
 const { height } = Dimensions.get("window");
 
@@ -378,6 +379,7 @@ export default function SignUpScreen({ navigation }) {
       }
 
       await doSignUp(data?.signup_ip ?? null);
+      posthog.capture('user_signed_up', { method: 'email' });
       // Auth state change in AppNavigator handles navigation automatically.
     } catch (e) {
       showAlert(t("signup_failed_title"), e.message || t("signup_failed_generic"));
