@@ -25,6 +25,7 @@ import { useAlbaTheme } from "../theme/ThemeContext";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { posthog } from "../lib/analytics";
+import { userErrorMessage } from "../lib/errorUtils";
 
 /* ── Post type definitions ──────────────────────────────────────── */
 const POST_TYPES = [
@@ -661,7 +662,7 @@ export default function CreatePost() {
       setSuccessModal({ visible: true, title: t("create_post_success_title"), message: t("create_post_success_message") });
     } catch (e) {
       console.warn(e);
-      Alert.alert(t("create_post_fail_title"), e?.message || String(e));
+      Alert.alert(t("create_post_fail_title"), userErrorMessage(e, t("create_post_fail_title")));
     } finally {
       setSubmitting(false);
     }

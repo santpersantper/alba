@@ -302,6 +302,7 @@ export default function SingleChatScreen({ navigation, route }) {
   const listRef = useRef(null);
   const optimisticIds = useRef(new Set());
   const runRef = useRef(0);
+  const sendingTextRef = useRef(false);
 
   const [peerDisplayName, setPeerDisplayName] = useState(peerName);
 
@@ -722,7 +723,7 @@ export default function SingleChatScreen({ navigation, route }) {
         });
       } catch (e) {
         setItems((p) => p.filter((m) => m.id !== optimisticId));
-        Alert.alert("Image not sent", e?.message || "Please try again.");
+        Alert.alert("Image not sent", "Please try again.");
       } finally {
         setSendingMedia(false);
       }
@@ -732,6 +733,8 @@ export default function SingleChatScreen({ navigation, route }) {
     // ── text send ────────────────────────────────────────────────────────────
     const text = input.trim();
     if (!text) return;
+    if (sendingTextRef.current) return;
+    sendingTextRef.current = true;
 
     const now = new Date();
     const optimistic = {
@@ -764,6 +767,8 @@ export default function SingleChatScreen({ navigation, route }) {
     } catch (e) {
       console.error("[SingleChat][SEND] text FAILED:", e?.message, e?.code, e?.details, e?.hint);
       setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
+    } finally {
+      sendingTextRef.current = false;
     }
   }, [chatId, input, pendingImage, myUsername, isBlocked, getSessionUid, peerUsername]);
 

@@ -26,6 +26,7 @@ import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 import { getDeviceId } from '../lib/deviceId';
+import { userErrorMessage } from '../lib/errorUtils';
 
 // Required for expo-web-browser to close the auth session on redirect
 WebBrowser.maybeCompleteAuthSession();
@@ -156,7 +157,7 @@ export default function StartScreen({ navigation }) {
         }).catch(() => {});
       }
     } catch (e) {
-      showAlert('Login failed', e.message || 'Try again.');
+      showAlert('Login failed', userErrorMessage(e, 'Try again.'));
     } finally {
       setLoading(false);
     }
@@ -191,7 +192,7 @@ export default function StartScreen({ navigation }) {
       setDeviceOtpVisible(false);
       await completeLogin();
     } catch (e) {
-      showAlert('Verification failed', e.message || 'Please try again.');
+      showAlert('Verification failed', userErrorMessage(e, 'Please try again.'));
     } finally {
       setVerifyingDevice(false);
     }
@@ -211,7 +212,7 @@ export default function StartScreen({ navigation }) {
       }
       showAlert(t('signup_code_resent_title'), t('signup_code_resent_body'));
     } catch (e) {
-      showAlert('Error', e.message || 'Could not resend code.');
+      showAlert('Error', userErrorMessage(e, 'Could not resend code.'));
     } finally {
       setResendingOtp(false);
     }
@@ -253,7 +254,7 @@ export default function StartScreen({ navigation }) {
         console.warn('[Google] finish(): no code or token found in URL');
         throw new Error('Authentication failed. Please try again.');
       } catch (e) {
-        showAlert('Google sign in failed', e.message || 'Please try again.');
+        showAlert('Google sign in failed', userErrorMessage(e, 'Please try again.'));
       } finally {
         setGoogleLoading(false);
       }
@@ -287,7 +288,7 @@ export default function StartScreen({ navigation }) {
     } catch (e) {
       if (!settled) {
         settled = true;
-        showAlert('Google sign in failed', e.message || 'Please try again.');
+        showAlert('Google sign in failed', userErrorMessage(e, 'Please try again.'));
         setGoogleLoading(false);
       }
     }
@@ -326,7 +327,7 @@ export default function StartScreen({ navigation }) {
       // Auth state change in AppNavigator handles navigation automatically.
     } catch (e) {
       if (e.code !== 'ERR_REQUEST_CANCELED') {
-        showAlert('Apple sign in failed', e.message || 'Please try again.');
+        showAlert('Apple sign in failed', userErrorMessage(e, 'Please try again.'));
       }
     } finally {
       setAppleLoading(false);
@@ -392,7 +393,7 @@ export default function StartScreen({ navigation }) {
       }
       setForgotDone(true);
     } catch (e) {
-      showAlert('Error', e?.message || 'Could not send reset email. Please try again.');
+      showAlert('Error', userErrorMessage(e, 'Could not send reset email. Please try again.'));
     } finally {
       setForgotLoading(false);
     }
