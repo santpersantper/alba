@@ -8,6 +8,10 @@ export async function uploadImage({ uri, postId, filename }) {
   const res = await fetch(uri);
   const blob = await res.blob();
 
+  if (blob.size > 10 * 1024 * 1024) {
+    throw new Error("Image must be under 10 MB.");
+  }
+
   // 2) Build object key
   const key = `posts/${postId}/media/${filename}`;
 
@@ -42,6 +46,12 @@ export async function uploadChatMedia({ uri, chatId }) {
     : ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpeg";
   const key = `chats/${chatId}/${Date.now()}.${ext}`;
 
+  const info = await FileSystem.getInfoAsync(uri);
+  const sizeLimit = isVideo ? 50 * 1024 * 1024 : 5 * 1024 * 1024;
+  if (info.size && info.size > sizeLimit) {
+    throw new Error(isVideo ? "Video must be under 50 MB." : "Image must be under 5 MB.");
+  }
+
   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
   const binary = decode(base64);
   const buffer = new Uint8Array(binary.length);
@@ -61,6 +71,11 @@ export async function uploadChatImage({ uri, chatId }) {
   const ext = uri.split(".").pop()?.split("?")[0]?.toLowerCase() || "jpg";
   const mimeType = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : "image/jpeg";
   const key = `chats/${chatId}/${Date.now()}.${ext}`;
+
+  const info = await FileSystem.getInfoAsync(uri);
+  if (info.size && info.size > 5 * 1024 * 1024) {
+    throw new Error("Image must be under 5 MB.");
+  }
 
   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
   const binary = decode(base64);
