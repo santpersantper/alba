@@ -648,6 +648,7 @@ export default function GroupChatScreen({ navigation, route }) {
   // Send
   const onSend = useCallback(async () => {
     if (!isMember || !chatId) return;
+    if (sendingMedia) return;
 
     // ── media send ──────────────────────────────────────────────────────────
     if (pendingImage) {

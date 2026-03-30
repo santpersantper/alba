@@ -667,6 +667,7 @@ export default function SingleChatScreen({ navigation, route }) {
   const onSend = useCallback(async () => {
     if (!chatId) return;
     if (isBlocked) { setUnblockModalVisible(true); return; }
+    if (sendingMedia) return;
 
     // ── media send ──────────────────────────────────────────────────────────
     if (pendingImage) {

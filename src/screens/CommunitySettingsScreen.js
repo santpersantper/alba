@@ -66,10 +66,17 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [allowDMs, setAllowDMs] = useState(true);
   const [showFollowedPosts, setShowFollowedPosts] = useState(false);
 
+  const [allowTags, setAllowTags] = useState(true);
+
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [blockedProfiles, setBlockedProfiles] = useState([]);
   const [unblockModalVisible, setUnblockModalVisible] = useState(false);
   const [unblockCandidate, setUnblockCandidate] = useState(null);
+
+  const [followedUserIds, setFollowedUserIds] = useState([]);
+  const [followedProfiles, setFollowedProfiles] = useState([]);
+  const [unfollowModalVisible, setUnfollowModalVisible] = useState(false);
+  const [unfollowCandidate, setUnfollowCandidate] = useState(null); // { id, username }
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -123,7 +130,7 @@ export default function CommunitySettingsScreen({ navigation }) {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts")
+        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, followed_users")
         .eq("id", u.id)
         .maybeSingle();
 
@@ -134,6 +141,9 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (typeof data.visible_to_all === "boolean") setVisibleToAll(data.visible_to_all);
       if (typeof data.allow_dms === "boolean") setAllowDMs(data.allow_dms);
       if (typeof data.show_followed_users_posts === "boolean") setShowFollowedPosts(data.show_followed_users_posts);
+      if (typeof data.allow_tags === "boolean") setAllowTags(data.allow_tags);
+      const fu = Array.isArray(data.followed_users) ? data.followed_users : [];
+      setFollowedUserIds(fu);
       if (typeof data.name === "string") setEditName(data.name);
       if (typeof data.username === "string") {
         setEditUsername(data.username);
@@ -188,6 +198,32 @@ export default function CommunitySettingsScreen({ navigation }) {
     return () => { mounted = false; };
   }, [blockedUsers]);
 
+  // Load followed user profiles (followedUserIds are UUIDs)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        if (!followedUserIds.length) {
+          if (mounted) setFollowedProfiles([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, username, name")
+          .in("id", followedUserIds);
+        if (!mounted) return;
+        if (!error && data && data.length > 0) {
+          setFollowedProfiles(data);
+        } else {
+          setFollowedProfiles([]);
+        }
+      } catch {
+        if (mounted) setFollowedProfiles([]);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [followedUserIds]);
+
   // Debounced username availability check
   useEffect(() => {
     const trimmed = editUsername.trim();
@@ -227,6 +263,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? "#222" : "#fff" }} />;
 
   const saveProfile = async () => {
+    if (saving) return;
     setSaveError(null);
     setSaveSuccess(false);
 
@@ -344,6 +381,24 @@ export default function CommunitySettingsScreen({ navigation }) {
     const next = blockedUsers.filter((u) => u !== unblockCandidate);
     updateBlockedUsers(next);
     closeUnblockModal();
+  };
+
+  const openUnfollowModal = (profile) => {
+    setUnfollowCandidate(profile);
+    setUnfollowModalVisible(true);
+  };
+
+  const closeUnfollowModal = () => {
+    setUnfollowCandidate(null);
+    setUnfollowModalVisible(false);
+  };
+
+  const confirmUnfollow = async () => {
+    if (!unfollowCandidate) { closeUnfollowModal(); return; }
+    const next = followedUserIds.filter((id) => id !== unfollowCandidate.id);
+    setFollowedUserIds(next);
+    updateProfile({ followed_users: next });
+    closeUnfollowModal();
   };
 
   const handleLogout = () => setLogoutModalVisible(true);

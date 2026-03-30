@@ -390,14 +390,15 @@ export default function CommunityScreen() {
         : DEFAULT_RADIUS_KM * 1000;
       setCommunityRadiusM(radiusM);
       const _doneNearby = trackRequest(`Community.nearby_posts radius=${radiusM / 1000}km`);
-      const { data, error: rpcErr } = await supabase.rpc("nearby_posts", {
-        uid: userId,
-        radius_m: radiusM,
-      }).limit(50);
+      const { data, error: rpcErr } = await withTimeout(
+        supabase.rpc("nearby_posts", { uid: userId, radius_m: radiusM }).limit(50),
+        15000,
+      );
       _doneNearby();
 
       if (rpcErr) {
         console.warn("[Community] nearby_posts error", rpcErr);
+        Alert.alert("Could not load posts", "Check your connection and pull down to retry.");
       }
 
       let arr = Array.isArray(data) ? data : [];
@@ -434,6 +435,9 @@ export default function CommunityScreen() {
     } catch (e) {
       console.warn("fetchNearbyPosts error", e);
       setActivePostId(null);
+      if (e?.message === "timeout") {
+        Alert.alert("Taking too long", "The request timed out. Check your connection and pull down to retry.");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
