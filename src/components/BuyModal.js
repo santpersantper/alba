@@ -826,6 +826,11 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (purchaseRows.length > 0) {
           supabase.from("ad_purchases").insert(purchaseRows).catch(() => {});
         }
+        posthog.capture('product_purchased', {
+          post_id: postId,
+          product_names: units.map(u => u.productLabel).filter(Boolean),
+          quantity: units.length,
+        });
         showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); });
         return;
       }

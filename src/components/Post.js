@@ -31,6 +31,7 @@ import { useEvent } from "expo";
 import { Image as ExpoImage } from "expo-image";
 import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "../lib/supabase";
+import { posthog } from "../lib/analytics";
 
 import ShareMenu from "../components/ShareMenu";
 import BuyModal from "../components/BuyModal";
@@ -744,6 +745,7 @@ export default function Post(props) {
       const mergedMembers = Array.isArray(groupRow.members) ? groupRow.members : [];
       const finalMembers = uniqCI([...mergedMembers, myUname]);
 
+      posthog.capture('event_group_chat_joined', { group_id: groupRow.id, group_name: groupRow.groupname || desiredName });
       navigation.navigate("GroupChat", {
         groupId: groupRow.id,
         groupName: groupRow.groupname || desiredName,
@@ -901,6 +903,7 @@ export default function Post(props) {
                 }).catch((e) => console.warn("[Post] profiles fetch catch:", e?.message));
             }).catch((e) => console.warn("[Post] getUser catch:", e?.message));
           }
+          posthog.capture('message_seller_tapped', { post_id: postId });
           if (onPressMessage) onPressMessage();
           else goToDm();
         };

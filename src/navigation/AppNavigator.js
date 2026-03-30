@@ -41,6 +41,8 @@ import AdPublisherScreen from "../screens/AdPublisherScreen";
 import SavedVideosScreen from "../screens/SavedVideosScreen";
 import SingleFeedVideoScreen from "../screens/SingleFeedVideoScreen";
 import { registerForPushNotifications, savePushToken, addNotificationTapListener } from "../lib/notifications";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { posthog } from "../lib/analytics";
 
 const Stack = createNativeStackNavigator();
 
@@ -213,6 +215,37 @@ export default function AppNavigator() {
   const [banState, setBanState] = useState(null); // null | { type: "temp"|"terminated", bannedUntil?, reason? }
   const navRef = useRef(null);
   const signedInRef = useRef(false);
+  const sessionStartRef = useRef(null);
+
+  const trackLoginStreak = async (userId) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const raw = await AsyncStorage.getItem("alba_login_streak");
+      const stored = raw ? JSON.parse(raw) : null;
+
+      let streak = 1;
+      if (stored?.lastDate) {
+        const last = new Date(stored.lastDate);
+        const now = new Date(today);
+        const diffDays = Math.round((now - last) / (1000 * 60 * 60 * 24));
+        if (diffDays === 0) {
+          // Already logged in today — keep existing streak, don't re-identify
+          return;
+        } else if (diffDays === 1) {
+          streak = (stored.streak ?? 1) + 1;
+        }
+        // diffDays > 1 → streak resets to 1
+      }
+
+      await AsyncStorage.setItem("alba_login_streak", JSON.stringify({ lastDate: today, streak }));
+      posthog.identify(userId, {
+        $set: { login_streak: streak, last_login: today },
+        $set_once: { first_login: today },
+      });
+    } catch (e) {
+      console.warn("[AppNav] trackLoginStreak error:", e?.message);
+    }
+  };
 
   const checkBanStatus = async (userId) => {
     try {
@@ -283,6 +316,7 @@ export default function AppNavigator() {
 
           // Only run Google profile-setup check on actual sign-in events
           if (event === 'SIGNED_IN' && session?.user) {
+            trackLoginStreak(session.user.id);
             const isGoogleUser =
               session.user.app_metadata?.provider === "google" ||
               (session.user.app_metadata?.providers ?? []).includes("google");
@@ -389,9 +423,22 @@ export default function AppNavigator() {
           const { data } = await supabase.auth.getUser().catch(() => ({ data: null }));
           if (data?.user?.id) checkBanStatus(data.user.id);
         }
+        // Start session timer when app comes to foreground
+        sessionStartRef.current = Date.now();
+      } else if (next.match(/inactive|background/) && !appStateRef.current.match(/inactive|background/)) {
+        // App going to background — fire session_ended with duration
+        if (sessionStartRef.current) {
+          const duration_seconds = Math.round((Date.now() - sessionStartRef.current) / 1000);
+          if (duration_seconds > 0) {
+            posthog.capture('session_ended', { duration_seconds });
+          }
+          sessionStartRef.current = null;
+        }
       }
       appStateRef.current = next;
     });
+    // Start timing the initial session when the component mounts
+    sessionStartRef.current = Date.now();
     return () => sub.remove();
   }, []);
 
