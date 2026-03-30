@@ -24,6 +24,7 @@ import { useUserPreferences } from "../hooks/useUserPreferences";
 import OnboardingOverlay from "../components/OnboardingOverlay";
 import AndroidAppSelectorModal from "../components/AndroidAppSelectorModal";
 import { useScreenTime } from "../hooks/useScreenTime";
+import { posthog } from "../lib/analytics";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import {
   evaluateStreak,
@@ -565,6 +566,7 @@ export default function UseTimeScreen() {
       // Toggling back ON
       startMonitoring();
       updatePrefs({ trackingActive: true });
+      posthog.capture('screen_time_activated');
     }
   };
 
@@ -588,10 +590,12 @@ export default function UseTimeScreen() {
   };
   const handleSaveWeeklyGoal = () => {
     updatePrefs({ screenTimeGoalReductionPercent: editReductionPct });
+    posthog.capture('screen_time_goals_set', { goal_type: 'weekly', reduction_percent: editReductionPct });
     setGoalModalType(null);
   };
   const handleSaveDailyGoal = () => {
     updatePrefs({ screenTimeGoalDailyMaxMinutes: editDailyMax });
+    posthog.capture('screen_time_goals_set', { goal_type: 'daily', max_minutes: editDailyMax });
     setGoalModalType(null);
   };
 

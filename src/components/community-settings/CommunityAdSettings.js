@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { View, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Linking, Alert } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
+import { posthog } from "../../lib/analytics";
 import ThemedView from "../../theme/ThemedView";
 import ThemedText from "../../theme/ThemedText";
 import { useAlbaTheme } from "../../theme/ThemeContext";
@@ -70,8 +71,20 @@ export default function AdSettings({ navigation }) {
       });
       if (error) throw new Error(error.message || "Failed to start onboarding");
       if (!data?.url) throw new Error("No onboarding URL received");
+      posthog.capture('stripe_connect_started');
       await Linking.openURL(data.url);
-      setTimeout(() => fetchPayoutStatus(userId), 3000);
+      setTimeout(async () => {
+        await fetchPayoutStatus(userId);
+        // Re-read state after refresh — if onboarding is now complete, fire connected event
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("stripe_onboarding_complete")
+          .eq("id", userId)
+          .maybeSingle();
+        if (profile?.stripe_onboarding_complete) {
+          posthog.capture('stripe_connected');
+        }
+      }, 3000);
     } catch (e) {
       console.warn("Ad payout onboarding error:", e.message);
       Alert.alert("Error", e.message || "Could not start payout setup. Please try again.");
