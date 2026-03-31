@@ -183,9 +183,20 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
   // ✅ KEY REMOUNT: this fully resets navigation state when auth flips
   const navKey = signedIn ? "nav-signed-in" : "nav-signed-out";
 
+  const linking = {
+    prefixes: ["alba://", "https://albaappofficial.com", "https://www.albaappofficial.com"],
+    config: {
+      screens: {
+        SinglePost: "post/:postId",
+        SingleFeedVideo: "video/:postId",
+        GroupChat: "join/group/:groupId",
+      },
+    },
+  };
+
   return (
     <>
-      <NavigationContainer ref={navRef} theme={navTheme} key={navKey}>
+      <NavigationContainer ref={navRef} theme={navTheme} key={navKey} linking={linking}>
         {signedIn ? <MainNavigator /> : <AuthNavigator />}
       </NavigationContainer>
 

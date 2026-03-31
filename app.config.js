@@ -36,6 +36,8 @@ export default {
         CFBundleURLTypes: [
           {
             CFBundleURLSchemes: [
+              // Custom app scheme — required for deep links (alba://post/123, etc.)
+              "alba",
               // Reversed iOS OAuth client ID — required for Google Sign-In redirect
               "com.googleusercontent.apps.1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi",
             ],
@@ -62,6 +64,7 @@ export default {
         "com.apple.security.application-groups": ["group.com.alba.app.screentime"],
         "com.apple.developer.in-app-payments": ["merchant.com.alba.app"],
         "com.apple.developer.applesignin": ["Default"],
+        "com.apple.developer.associated-domains": ["applinks:albaappofficial.com"],
       },
     },
     android: {
@@ -84,6 +87,16 @@ export default {
               scheme:
                 "com.googleusercontent.apps.1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq",
             },
+          ],
+          category: ["BROWSABLE", "DEFAULT"],
+        },
+        {
+          action: "VIEW",
+          autoVerify: true,
+          data: [
+            { scheme: "https", host: "albaappofficial.com", pathPrefix: "/join/group/" },
+            { scheme: "https", host: "albaappofficial.com", pathPrefix: "/post/" },
+            { scheme: "https", host: "albaappofficial.com", pathPrefix: "/video/" },
           ],
           category: ["BROWSABLE", "DEFAULT"],
         },
