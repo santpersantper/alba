@@ -311,7 +311,24 @@ export default function AdPublisherScreen() {
       console.log("[AdPublisher] buyers:", buyerData?.length ?? 0, "error:", buyErr?.message ?? "none");
       console.log("[AdPublisher] contacts:", contactData?.length ?? 0, "error:", contactErr?.message ?? "none");
       setBuyers(buyerData || []);
-      setContacts(contactData || []);
+
+      // Fetch live avatars from profiles so stale snapshots don't show old pics
+      let enrichedContacts = contactData || [];
+      const usernames = enrichedContacts.map((c) => c.contacter_username).filter(Boolean);
+      if (usernames.length > 0) {
+        const { data: profileData } = await supabase
+          .from("profiles")
+          .select("username, avatar_url")
+          .in("username", usernames);
+        if (profileData) {
+          const avatarMap = Object.fromEntries(profileData.map((p) => [p.username, p.avatar_url]));
+          enrichedContacts = enrichedContacts.map((c) => ({
+            ...c,
+            contacter_avatar: avatarMap[c.contacter_username] ?? c.contacter_avatar,
+          }));
+        }
+      }
+      setContacts(enrichedContacts);
     } catch (e) {
       console.warn("[AdPublisher] bc load error", e?.message ?? e);
     } finally {
@@ -377,15 +394,13 @@ export default function AdPublisherScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
-      allowsMultipleSelection: true,
+      allowsMultipleSelection: false,
+      allowsEditing: true,
     });
     if (result.canceled) return;
-    const newItems = result.assets.map((a) => ({
-      uri: a.uri,
-      type: a.type === "video" ? "video" : "image",
-      isNew: true,
-    }));
-    setDraftMedia((prev) => [...prev, ...newItems]);
+    const asset = result.assets?.[0];
+    if (!asset?.uri) return;
+    setDraftMedia((prev) => [...prev, { uri: asset.uri, type: asset.type === "video" ? "video" : "image", isNew: true }]);
   };
 
   const removeMedia = (index) => {

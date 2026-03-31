@@ -23,6 +23,7 @@ import {
 import { useFonts } from "expo-font";
 import { Feather } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import * as Clipboard from "expo-clipboard";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
 
@@ -61,6 +62,7 @@ export default function ShareMenu({
 
   const [meId, setMeId] = useState(null);
   const [meUsername, setMeUsername] = useState(null);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const [accounts, setAccounts] = useState([]); // menu items (<=6) in recency order
   const [loadingGrid, setLoadingGrid] = useState(false);
@@ -83,6 +85,25 @@ export default function ShareMenu({
     [accounts, selectedIds]
   );
   const isSearching = q.trim().length > 0;
+
+  const shareLink = useMemo(() => {
+    if (inviteGroup?.id) {
+      return `https://albaappofficial.com/join/group/${inviteGroup.id}`;
+    }
+    if (postId != null) {
+      return isVideo || thumbnailUrl
+        ? `https://albaappofficial.com/video/${postId}`
+        : `https://albaappofficial.com/post/${postId}`;
+    }
+    return null;
+  }, [inviteGroup, postId, isVideo, thumbnailUrl]);
+
+  const handleCopyLink = useCallback(async () => {
+    if (!shareLink) return;
+    await Clipboard.setStringAsync(shareLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  }, [shareLink]);
 
   const toggleSelected = useCallback((id) => {
     setSelectedIds((prev) => {
@@ -735,8 +756,22 @@ export default function ShareMenu({
               </View>
             )}
 
+            {/* COPY LINK */}
+            {!!shareLink && (
+              <TouchableOpacity
+                style={[styles.copyLinkRow, { backgroundColor: isDark ? "#1a1a1a" : "#F4F6F9" }]}
+                onPress={handleCopyLink}
+                activeOpacity={0.75}
+              >
+                <Feather name="link" size={18} color="#4EBCFF" style={{ marginRight: 10 }} />
+                <Text style={[styles.copyLinkText, { color: theme.text }]}>
+                  {copiedLink ? "Copied!" : "Copy link"}
+                </Text>
+              </TouchableOpacity>
+            )}
+
             {/* MENU GRID (packed left-to-right) */}
-            <View style={[styles.grid, { marginTop: isSearching ? 12 : 2 }]}>
+            <View style={[styles.grid, { marginTop: shareLink || isSearching ? 12 : 2 }]}>
               {loadingGrid ? (
                 <View
                   style={{
@@ -907,6 +942,19 @@ const styles = StyleSheet.create({
     backgroundColor: "#4EBCFF",
     borderRadius: 2,
     marginTop: 6,
+  },
+
+  copyLinkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 4,
+  },
+  copyLinkText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 14,
   },
 
   msgBox: {

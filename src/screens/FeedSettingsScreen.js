@@ -41,7 +41,7 @@ export default function FeedSettingsScreen() {
   });
 
   // --- existing timer state ---
-  const [timerEnabled, setTimerEnabled] = useState(false);
+  const [timerEnabled, setTimerEnabled] = useState(true);
   const [alertMinutes, setAlertMinutes] = useState(String(DEFAULT_ALERT_MINUTES));
 
   // --- personalization state ---

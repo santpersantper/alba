@@ -12,9 +12,16 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImageManipulator from "expo-image-manipulator";
+import { decode as b64decodeStr } from "base-64";
 import { useFonts } from "expo-font";
 import { useFocusEffect } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -38,10 +45,43 @@ import { getLastVisitedMap } from "../lib/chatLastVisited";
 const prettifyUsername = (u) =>
   (u || "").replace(/[_\-]+/g, " ").replace(/\b\w/g, (c) => c) || "User";
 
+/* ---------- group image upload (same strategy as GroupInfoScreen) ---------- */
+
+function base64ToArrayBuffer(base64) {
+  const binary = b64decodeStr(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function uploadGroupImage(localUri, supabase) {
+  let uri = localUri;
+  let ext = (localUri.split(".").pop() || "jpg").toLowerCase();
+  let mime = "image/jpeg";
+  if (ext === "png") mime = "image/png";
+  if (ext === "heic" || ext === "heif") {
+    const m = await ImageManipulator.manipulateAsync(localUri, [], {
+      compress: 0.9,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    uri = m.uri;
+    ext = "jpg";
+    mime = "image/jpeg";
+  }
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+  const filePath = `avatars/group_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const { data, error } = await supabase.storage
+    .from("alba-media")
+    .upload(filePath, base64ToArrayBuffer(base64), { contentType: mime, upsert: true });
+  if (error) throw error;
+  const { data: pub } = supabase.storage.from("alba-media").getPublicUrl(data.path);
+  return pub.publicUrl;
+}
+
 const isVideoUrl = (u = "") =>
   /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(String(u).split("?")[0] || "");
 
-function Header({ title, onBack, theme }) {
+function Header({ title, onBack, onNewGroup, theme }) {
   return (
     <View
       style={[
@@ -65,7 +105,9 @@ function Header({ title, onBack, theme }) {
         </View>
       </View>
 
-      <View style={{ width: 30 }} />
+      <TouchableOpacity onPress={onNewGroup} hitSlop={8} style={{ paddingLeft: 8 }}>
+        <Feather name="plus-circle" size={24} color={theme.text} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -99,6 +141,14 @@ export default function ChatListScreen({ navigation }) {
   const [mutedGroups, setMutedGroups] = useState([]); // group IDs the current user has muted
   const [muteModalVisible, setMuteModalVisible] = useState(false);
   const [pendingMuteItem, setPendingMuteItem] = useState(null); // item captured when mute modal opens
+
+  // new group modal
+  const [newGroupModal, setNewGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [newGroupDesc, setNewGroupDesc] = useState("");
+  const [newGroupPicUri, setNewGroupPicUri] = useState(null);
+  const [newGroupCreating, setNewGroupCreating] = useState(false);
+  const [newGroupSuccess, setNewGroupSuccess] = useState(false);
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -472,13 +522,102 @@ export default function ChatListScreen({ navigation }) {
     setRefreshing(false);
   }, [currentUserId, refreshInBackground]);
 
+  const openNewGroupModal = () => {
+    setNewGroupName("");
+    setNewGroupDesc("");
+    setNewGroupPicUri(null);
+    setNewGroupSuccess(false);
+    setNewGroupModal(true);
+  };
+
+  const pickGroupImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      setNewGroupPicUri(result.assets[0].uri);
+    }
+  };
+
+  const handleCreateGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name || !myUsername || !currentUserId) return;
+    setNewGroupCreating(true);
+    try {
+      let picUrl = null;
+      if (newGroupPicUri) {
+        picUrl = await uploadGroupImage(newGroupPicUri, supabase);
+      }
+
+      const { data: grp, error: grpErr } = await supabase
+        .from("groups")
+        .insert({
+          groupname: name,
+          group_desc: newGroupDesc.trim() || null,
+          group_pic_link: picUrl,
+          members: [myUsername],
+          group_admin: [myUsername],
+          require_approval: false,
+          pending_members: [],
+          subgroups_allowed: true,
+          subgroups: [],
+          review_links: false,
+        })
+        .select("id")
+        .single();
+
+      if (grpErr) throw grpErr;
+
+      const groupId = grp.id;
+      const now = new Date();
+
+      // Insert the "You created the group." message
+      await supabase.from("messages").insert({
+        chat_id: groupId,
+        is_group: true,
+        sender_id: currentUserId,
+        sender_username: myUsername,
+        content: "You created the group.",
+        sent_date: now.toISOString().slice(0, 10),
+        sent_time: now.toTimeString().slice(0, 8),
+      });
+
+      // Upsert a chat_threads row so the group appears at the top of the list
+      await supabase.from("chat_threads").upsert(
+        {
+          owner_id: currentUserId,
+          chat_id: groupId,
+          is_group: true,
+          last_sent_at: now.toISOString(),
+          last_sender_is_me: true,
+          last_sender_username: myUsername,
+          last_content: "You created the group.",
+          peer_profile_id: null,
+        },
+        { onConflict: "owner_id,chat_id" }
+      );
+
+      setNewGroupSuccess(true);
+      invalidateChatListCache();
+      refreshInBackground(currentUserId);
+    } catch (e) {
+      Alert.alert("Error", "Could not create group. Please try again.");
+      console.warn("[NewGroup] create error:", e?.message);
+    } finally {
+      setNewGroupCreating(false);
+    }
+  };
+
   const onPressBack = () => navigation?.goBack?.();
   const isSearching = q.trim().length > 0;
   const noMatchText = t("chat_search_no_matching_users") || "No matching users nearby";
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
-      <Header title={t("chats_title")} onBack={onPressBack} theme={theme} />
+      <Header title={t("chats_title")} onBack={onPressBack} onNewGroup={openNewGroupModal} theme={theme} />
 
       <View
         style={[
@@ -759,6 +898,96 @@ export default function ChatListScreen({ navigation }) {
         </TouchableOpacity>
       </Modal>
 
+      {/* New Group modal */}
+      <Modal
+        visible={newGroupModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => { if (!newGroupCreating) setNewGroupModal(false); }}
+      >
+        <Pressable
+          style={ngStyles.backdrop}
+          onPress={() => { if (!newGroupCreating && !newGroupSuccess) setNewGroupModal(false); }}
+        />
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={ngStyles.kbWrap}>
+          <View style={[ngStyles.card, { backgroundColor: theme.gray }]}>
+            {newGroupSuccess ? (
+              /* ---- success state ---- */
+              <>
+                <Text style={[ngStyles.cardTitle, { color: theme.text }]}>Group created.</Text>
+                <TouchableOpacity
+                  style={ngStyles.createBtn}
+                  onPress={() => setNewGroupModal(false)}
+                >
+                  <Text style={ngStyles.createBtnText}>OK</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              /* ---- form state ---- */
+              <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                <Text style={[ngStyles.cardTitle, { color: theme.text }]}>New group</Text>
+
+                {/* Profile picture */}
+                <TouchableOpacity style={ngStyles.avatarWrap} onPress={pickGroupImage} activeOpacity={0.8}>
+                  {newGroupPicUri ? (
+                    <Image source={{ uri: newGroupPicUri }} style={ngStyles.avatarImg} />
+                  ) : (
+                    <View style={[ngStyles.avatarPlaceholder, { backgroundColor: isDark ? "#2a2a2a" : "#E5ECF4" }]}>
+                      <Feather name="camera" size={28} color={isDark ? "#777" : "#aaa"} />
+                    </View>
+                  )}
+                  <View style={ngStyles.avatarEditBadge}>
+                    <Feather name="edit-2" size={12} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+
+                {/* Name */}
+                <Text style={[ngStyles.label, { color: theme.text }]}>Name</Text>
+                <View style={[ngStyles.inputWrap, { backgroundColor: isDark ? "#121212" : "#F4F6F9", borderColor: isDark ? "#444" : "transparent", borderWidth: isDark ? 1 : 0 }]}>
+                  <TextInput
+                    style={[ngStyles.input, { color: theme.text }]}
+                    placeholder="Group name"
+                    placeholderTextColor={isDark ? "#A0A4AE" : "#9CA3AF"}
+                    value={newGroupName}
+                    onChangeText={setNewGroupName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    maxLength={80}
+                  />
+                </View>
+
+                {/* Description */}
+                <Text style={[ngStyles.label, { color: theme.text }]}>Description</Text>
+                <View style={[ngStyles.inputWrap, { backgroundColor: isDark ? "#121212" : "#F4F6F9", borderColor: isDark ? "#444" : "transparent", borderWidth: isDark ? 1 : 0, minHeight: 80, alignItems: "flex-start", paddingVertical: 10 }]}>
+                  <TextInput
+                    style={[ngStyles.input, { color: theme.text, textAlignVertical: "top" }]}
+                    placeholder="What's this group about?"
+                    placeholderTextColor={isDark ? "#A0A4AE" : "#9CA3AF"}
+                    value={newGroupDesc}
+                    onChangeText={setNewGroupDesc}
+                    multiline
+                    maxLength={300}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[ngStyles.createBtn, { opacity: newGroupName.trim() && !newGroupCreating ? 1 : 0.5 }]}
+                  onPress={handleCreateGroup}
+                  disabled={!newGroupName.trim() || newGroupCreating}
+                >
+                  {newGroupCreating ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={ngStyles.createBtnText}>Create group</Text>
+                  )}
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* Mute / Unmute group modal */}
       <Modal visible={muteModalVisible} transparent animationType="fade" onRequestClose={() => setMuteModalVisible(false)}>
         <View style={styles.muteOverlay}>
@@ -887,4 +1116,84 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   subgroupButtonText: { fontFamily: "PoppinsBold", fontSize: 13, color: "#ffffff" },
+});
+
+const ngStyles = StyleSheet.create({
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+  },
+  kbWrap: { flex: 1, justifyContent: "flex-end" },
+  card: {
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: 20,
+    maxHeight: "88%",
+  },
+  cardTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 18,
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  avatarWrap: {
+    alignSelf: "center",
+    marginBottom: 20,
+    position: "relative",
+  },
+  avatarImg: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+  },
+  avatarPlaceholder: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarEditBadge: {
+    position: "absolute",
+    bottom: 2,
+    right: 2,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#4EBCFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  label: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+    marginBottom: 6,
+    marginLeft: 2,
+  },
+  inputWrap: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    justifyContent: "center",
+  },
+  input: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    paddingVertical: 10,
+    includeFontPadding: false,
+  },
+  createBtn: {
+    backgroundColor: "#4EBCFF",
+    borderRadius: 12,
+    height: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  createBtnText: {
+    color: "#fff",
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
+  },
 });
