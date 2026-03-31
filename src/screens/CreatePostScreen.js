@@ -8,13 +8,13 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, Image,
   ScrollView, StyleSheet, ActivityIndicator, Alert,
-  Modal, Platform, KeyboardAvoidingView,
+  Modal, Platform, KeyboardAvoidingView, FlatList,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { useFonts } from "expo-font";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import { supabase } from "../lib/supabase";
 import EventPanel from "../components/EventPanel";
 import AdPanel from "../components/AdPanel";
@@ -94,9 +94,21 @@ const normalizeRequiredInfoInput = (text) => {
   return uniq(parts.map((p) => canonicalRequiredKey(p) || p));
 };
 
+/* ── Mention helpers ─────────────────────────────────────────────── */
+function getActiveMention(text) {
+  const m = text.match(/@(\w*)$/);
+  return m ? m[1] : null;
+}
+function applyMention(text, query, username) {
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`@${escaped}$`), `@${username} `);
+}
+
 /* ── Screen ─────────────────────────────────────────────────────── */
 export default function CreatePost() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const editPost = route.params?.editPost ?? null; // pre-filled for edit mode
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
 
@@ -109,12 +121,27 @@ export default function CreatePost() {
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
     PoppinsBold: require("../../assets/fonts/Poppins-Bold.ttf"),
   });
+  useFocusEffect(useCallback(() => { posthog.screen("Create Post"); }, []));
   if (!fontsLoaded) return null;
 
   /* ── state ── */
-  const [title,    setTitle]    = useState("");
-  const [desc,     setDesc]     = useState("");
-  const [postType, setPostType] = useState("event");
+  const [title,    setTitle]    = useState(editPost?.title    ?? "");
+  const [desc,     setDesc]     = useState(editPost?.description ?? "");
+  const [postType, setPostType] = useState(
+    editPost?.type
+      ? (editPost.type.toLowerCase() === "event" ? "event"
+        : editPost.type.toLowerCase() === "ad" ? "ad"
+        : editPost.type.toLowerCase() === "article" ? "article"
+        : editPost.type.toLowerCase() === "product" ? "product"
+        : "update")
+      : "event"
+  );
+
+  // @ mention autocomplete
+  const [mentionQuery,   setMentionQuery]   = useState(null); // string after @, or null
+  const [mentionResults, setMentionResults] = useState([]);
+  const [mentionField,   setMentionField]   = useState(null); // "title" | "desc"
+  const mentionDebounceRef = useRef(null);
 
   const [eventState, setEventState] = useState({
     enableGroupChat: true, allowTicketing: false, tickets: [],
@@ -133,21 +160,25 @@ export default function CreatePost() {
     targetInterested: true, iap: false, products: [],
   });
 
-  const [media,        setMedia]        = useState([]);
+  const [media,        setMedia]        = useState(
+    editPost?.mediaUrls
+      ? editPost.mediaUrls.map((uri) => ({ uri, type: /\.(mp4|mov|m4v)$/i.test(uri) ? "video" : "image", isNew: false }))
+      : []
+  );
   const [thumbnailUri, setThumbnailUri] = useState(null);
   const [submitting,   setSubmitting]   = useState(false);
   const [successModal, setSuccessModal] = useState({ visible: false, title: "", message: "" });
 
-  const [selectedDate,    setSelectedDate]    = useState(null);
+  const [selectedDate,    setSelectedDate]    = useState(editPost?.date    ?? null);
   const [showDatePicker,  setShowDatePicker]  = useState(false);
-  const [selectedTime,    setSelectedTime]    = useState(null);
+  const [selectedTime,    setSelectedTime]    = useState(editPost?.time    ?? null);
   const [showTimePicker,  setShowTimePicker]  = useState(false);
-  const [selectedEndDate,    setSelectedEndDate]    = useState(null);
+  const [selectedEndDate,    setSelectedEndDate]    = useState(editPost?.endDate ?? null);
   const [showEndDatePicker,  setShowEndDatePicker]  = useState(false);
-  const [selectedEndTime,    setSelectedEndTime]    = useState(null);
+  const [selectedEndTime,    setSelectedEndTime]    = useState(editPost?.endTime ?? null);
   const [showEndTimePicker,  setShowEndTimePicker]  = useState(false);
 
-  const [locationText,        setLocationText]        = useState("");
+  const [locationText,        setLocationText]        = useState(editPost?.location ?? "");
   const [locationSuggestions, setLocationSuggestions] = useState([]);
   const locationDebounceRef = useRef(null);
   const userCoordsRef = useRef(null);
@@ -341,18 +372,57 @@ export default function CreatePost() {
     setAdNotes(""); setThumbnailUri(null); setFeedTags([]);
   };
 
+  /* ── @ mention search ── */
+  const searchMentions = useCallback((query) => {
+    if (mentionDebounceRef.current) clearTimeout(mentionDebounceRef.current);
+    if (!query) { setMentionResults([]); return; }
+    mentionDebounceRef.current = setTimeout(async () => {
+      try {
+        const { data } = await supabase
+          .from("profiles")
+          .select("username, name")
+          .ilike("username", `${query}%`)
+          .eq("allow_tags", true)
+          .limit(8);
+        setMentionResults(data || []);
+      } catch { setMentionResults([]); }
+    }, 250);
+  }, []);
+
+  const handleTitleChange = (v) => {
+    setTitle(v);
+    const q = getActiveMention(v);
+    if (q !== null) { setMentionField("title"); setMentionQuery(q); searchMentions(q); }
+    else { setMentionQuery(null); setMentionResults([]); }
+  };
+
+  const handleDescChange = (v) => {
+    setDesc(v);
+    const q = getActiveMention(v);
+    if (q !== null) { setMentionField("desc"); setMentionQuery(q); searchMentions(q); }
+    else { setMentionQuery(null); setMentionResults([]); }
+  };
+
+  const onSelectMention = (username) => {
+    if (mentionField === "title") setTitle(applyMention(title, mentionQuery, username));
+    else setDesc(applyMention(desc, mentionQuery, username));
+    setMentionResults([]);
+    setMentionQuery(null);
+    setMentionField(null);
+  };
+
   /* ── submit ── */
   const handleSubmit = async () => {
     try {
       setSubmitting(true);
       if (!title.trim()) throw new Error(t("create_post_error_title_required"));
-      if (!media.length) throw new Error(t("create_post_error_media_required"));
+      if (!editPost && !media.length) throw new Error(t("create_post_error_media_required"));
 
       const badVideo = media.find((m) => m.type === "video" && typeof m.durationSec === "number" && m.durationSec > MAX_VIDEO_SECONDS);
       if (badVideo) throw new Error(tr("create_post_error_video_too_long_message", `Video must be ${MAX_VIDEO_SECONDS} seconds or less.`));
       if (postType === "feedPost" && media.some((m) => m.type !== "video")) throw new Error("Feed Posts must contain only video media.");
       if (postType === "event" && (!selectedDate || !selectedTime || !locationText.trim())) throw new Error(t("create_post_error_event_fields_required"));
-      if ((postType === "event" || postType === "ad") && selectedDate && selectedTime) {
+      if (!editPost && (postType === "event" || postType === "ad") && selectedDate && selectedTime) {
         const startDT = new Date(`${selectedDate}T${selectedTime}`);
         if (startDT <= new Date()) throw new Error("The start date and time must be in the future.");
         if (selectedEndDate && selectedEndTime) {
@@ -371,70 +441,71 @@ export default function CreatePost() {
       const userStripeAccountId = prof?.stripe_account_id || null;
       const userStripeComplete = !!prof?.stripe_onboarding_complete;
 
-      // Feature 1: rate limit — 1 post per 10 minutes
-      const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000);
-      try {
-        const { data: lastPost } = await supabase
-          .from("posts")
-          .select("date, time")
-          .eq("user", username)
-          .order("date", { ascending: false })
-          .order("time", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (lastPost) {
-          const postTs = new Date(`${lastPost.date}T${lastPost.time || "00:00:00"}`);
-          if (postTs > tenMinsAgo) throw new Error("You can only post once every 10 minutes. Please wait a moment before posting again.");
-        }
-        const { data: lastFeed } = await supabase
-          .from("feed_videos")
-          .select("created_at")
-          .eq("username", username)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (lastFeed && new Date(lastFeed.created_at) > tenMinsAgo) {
-          throw new Error("You can only post once every 10 minutes. Please wait a moment before posting again.");
-        }
-      } catch (e) {
-        if (e.message?.includes("10 minutes")) throw e;
-        // DB errors — skip rate limit silently
-      }
-
-      // Feature 2: duplicate check — same title/caption by this user in last 24h
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const checkTitle = (title || "").trim();
-      if (checkTitle) {
+      // Features 1 & 2: rate limit + duplicate check (skipped for edits)
+      if (!editPost) {
+        const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000);
         try {
-          if (postType !== "feedPost") {
-            const { data: dupPost } = await supabase
-              .from("posts")
-              .select("id")
-              .eq("user", username)
-              .ilike("title", checkTitle)
-              .order("date", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (dupPost) throw new Error("You already posted something with this title recently. Please use a different title.");
-          } else {
-            const caption = (desc || title || "").trim();
-            if (caption) {
-              const { data: dupFeed } = await supabase
-                .from("feed_videos")
-                .select("id")
-                .eq("username", username)
-                .ilike("caption", caption)
-                .gte("created_at", oneDayAgo.toISOString())
-                .limit(1)
-                .maybeSingle();
-              if (dupFeed) throw new Error("You already posted a video with this caption recently. Please use a different caption.");
-            }
+          const { data: lastPost } = await supabase
+            .from("posts")
+            .select("date, time")
+            .eq("user", username)
+            .order("date", { ascending: false })
+            .order("time", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (lastPost) {
+            const postTs = new Date(`${lastPost.date}T${lastPost.time || "00:00:00"}`);
+            if (postTs > tenMinsAgo) throw new Error("You can only post once every 10 minutes. Please wait a moment before posting again.");
+          }
+          const { data: lastFeed } = await supabase
+            .from("feed_videos")
+            .select("created_at")
+            .eq("username", username)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (lastFeed && new Date(lastFeed.created_at) > tenMinsAgo) {
+            throw new Error("You can only post once every 10 minutes. Please wait a moment before posting again.");
           }
         } catch (e) {
-          if (e.message?.includes("already posted")) throw e;
-          // DB errors — skip duplicate check silently
+          if (e.message?.includes("10 minutes")) throw e;
+          // DB errors — skip rate limit silently
         }
-      }
+
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const checkTitle = (title || "").trim();
+        if (checkTitle) {
+          try {
+            if (postType !== "feedPost") {
+              const { data: dupPost } = await supabase
+                .from("posts")
+                .select("id")
+                .eq("user", username)
+                .ilike("title", checkTitle)
+                .order("date", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (dupPost) throw new Error("You already posted something with this title recently. Please use a different title.");
+            } else {
+              const caption = (desc || title || "").trim();
+              if (caption) {
+                const { data: dupFeed } = await supabase
+                  .from("feed_videos")
+                  .select("id")
+                  .eq("username", username)
+                  .ilike("caption", caption)
+                  .gte("created_at", oneDayAgo.toISOString())
+                  .limit(1)
+                  .maybeSingle();
+                if (dupFeed) throw new Error("You already posted a video with this caption recently. Please use a different caption.");
+              }
+            }
+          } catch (e) {
+            if (e.message?.includes("already posted")) throw e;
+            // DB errors — skip duplicate check silently
+          }
+        }
+      } // end !editPost gate
 
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") throw new Error(t("create_post_error_location_denied"));
@@ -588,6 +659,51 @@ export default function CreatePost() {
         ? [desc.trim(), adNotes.trim()].filter(Boolean).join("\n\n")
         : desc;
 
+      // Extract @mentions and resolve to tagged_usernames (only users who allow tags)
+      const mentionMatches = [...new Set([
+        ...(title.match(/@(\w+)/g) || []),
+        ...(finalDesc.match(/@(\w+)/g) || []),
+      ].map((m) => m.slice(1).toLowerCase()))];
+      let taggedUsernames = [];
+      if (mentionMatches.length > 0) {
+        try {
+          const { data: tagData } = await supabase
+            .from("profiles")
+            .select("username")
+            .in("username", mentionMatches)
+            .eq("allow_tags", true);
+          taggedUsernames = (tagData || []).map((p) => p.username);
+        } catch {}
+      }
+
+      // ── Edit mode: update existing post ──────────────────────────
+      if (editPost?.id) {
+        // Upload only new media; keep existing URLs as-is
+        const finalMediaUrls = await Promise.all(
+          media.map((m, i) =>
+            m.isNew
+              ? uploadOne({ postId: editPost.id, fileUri: m.uri, index: `edit_${Date.now()}_${i}`, kind: m.type })
+              : Promise.resolve(m.uri)
+          )
+        );
+        const { error: upErr } = await supabase.from("posts").update({
+          title,
+          description: finalDesc,
+          date: dateStr,
+          time: timeStr,
+          end_date: selectedEndDate || null,
+          end_time: selectedEndTime || null,
+          location: locationLabel,
+          postmediauri: finalMediaUrls,
+          tagged_usernames: taggedUsernames,
+        }).eq("id", editPost.id);
+        if (upErr) throw upErr;
+        resetForm();
+        setSuccessModal({ visible: true, title: t("create_post_success_title") || "Updated!", message: t("create_post_edit_success") || "Your post has been updated." });
+        return;
+      }
+
+      // ── Create mode: insert new post ──────────────────────────────
       const { data: inserted, error: insErr } = await supabase.from("posts").insert({
         title, description: finalDesc, user: username, author_id: uid, userpicuri: null,
         type: typeLabel, date: dateStr, time: timeStr,
@@ -598,6 +714,7 @@ export default function CreatePost() {
         product_notes, product_required_info, product_options,
         labels: adLabelsToSave,
         lat, lon, geom: `SRID=4326;POINT(${lon} ${lat})`, postmediauri: [],
+        tagged_usernames: taggedUsernames,
         ...(postType === "ad" && userStripeAccountId ? {
           stripe_account_id: userStripeAccountId,
           stripe_onboarding_complete: userStripeComplete,
@@ -662,7 +779,12 @@ export default function CreatePost() {
       setSuccessModal({ visible: true, title: t("create_post_success_title"), message: t("create_post_success_message") });
     } catch (e) {
       console.warn(e);
-      Alert.alert(t("create_post_fail_title"), userErrorMessage(e, t("create_post_fail_title")));
+      // Show the actual message for validation errors we throw ourselves;
+      // fall back to a generic message for Supabase/network errors (which have a `code` field).
+      const userMsg = e.code
+        ? tr("create_post_fail_title", "Something went wrong. Please try again.")
+        : (e.message || tr("create_post_fail_title", "Something went wrong. Please try again."));
+      Alert.alert(t("create_post_fail_title"), userMsg);
     } finally {
       setSubmitting(false);
     }
@@ -775,11 +897,25 @@ export default function CreatePost() {
               placeholder={t("create_post_title_label")}
               placeholderTextColor={subtle}
               value={title}
-              onChangeText={setTitle}
+              onChangeText={handleTitleChange}
               style={[cs.input, { color: theme.text }]}
               maxLength={120}
             />
           </View>
+          {mentionField === "title" && mentionResults.length > 0 && (
+            <View style={[cs.mentionDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: theme.border }]}>
+              {mentionResults.map((u) => (
+                <TouchableOpacity
+                  key={u.username}
+                  style={[cs.mentionItem, { borderBottomColor: theme.border }]}
+                  onPress={() => onSelectMention(u.username)}
+                >
+                  <Text style={[cs.mentionUsername, { color: theme.text }]}>@{u.username}</Text>
+                  {!!u.name && <Text style={[cs.mentionName, { color: subtle }]}>{u.name}</Text>}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
           {/* ── Description ── */}
           <Text style={[cs.sectionLabel, { color: subtle, marginTop: 16 }]}>Description</Text>
@@ -788,13 +924,27 @@ export default function CreatePost() {
               placeholder={t("create_post_description_placeholder")}
               placeholderTextColor={subtle}
               value={desc}
-              onChangeText={setDesc}
+              onChangeText={handleDescChange}
               style={[cs.input, { color: theme.text, height: 90 }]}
               multiline
               textAlignVertical="top"
               maxLength={1000}
             />
           </View>
+          {mentionField === "desc" && mentionResults.length > 0 && (
+            <View style={[cs.mentionDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: theme.border }]}>
+              {mentionResults.map((u) => (
+                <TouchableOpacity
+                  key={u.username}
+                  style={[cs.mentionItem, { borderBottomColor: theme.border }]}
+                  onPress={() => onSelectMention(u.username)}
+                >
+                  <Text style={[cs.mentionUsername, { color: theme.text }]}>@{u.username}</Text>
+                  {!!u.name && <Text style={[cs.mentionName, { color: subtle }]}>{u.name}</Text>}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
           {/* Feature 7: link warning */}
           {URL_REGEX.test(title + " " + desc) && (
@@ -1092,6 +1242,12 @@ const cs = StyleSheet.create({
   // Inputs
   inputWrap: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
   input:     { fontFamily: "Poppins", fontSize: 14, flex: 1 },
+
+  // @ mention dropdown
+  mentionDropdown:  { borderWidth: 1, borderRadius: 8, marginTop: 4, marginBottom: 8, overflow: "hidden" },
+  mentionItem:      { paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", alignItems: "center", gap: 8 },
+  mentionUsername:  { fontFamily: "PoppinsBold", fontSize: 13 },
+  mentionName:      { fontFamily: "Poppins", fontSize: 12 },
 
   // Date / time
   dateTimeContainer: { marginBottom: 4, position: "relative", zIndex: 20 },

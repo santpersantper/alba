@@ -186,6 +186,27 @@ const normalizeTime = (raw) => {
   return `${hh}:${mm}`;
 };
 
+// Renders text with @mentions styled bold + coloured and tappable
+function parseMentionText(text, isDark, onMentionPress) {
+  if (!text || !text.includes("@")) return text;
+  const parts = text.split(/(@\w+)/g);
+  return parts.map((part, i) => {
+    if (/^@\w+$/.test(part)) {
+      const username = part.slice(1);
+      return (
+        <Text
+          key={i}
+          style={{ fontFamily: "PoppinsBold", color: isDark ? "#a0a0a0" : "#4EBCFF" }}
+          onPress={() => onMentionPress(username)}
+        >
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
+}
+
 // Session-level set so each ad post is counted as a view at most once per app session
 const _adViewsTracked = new Set();
 
@@ -787,6 +808,9 @@ export default function Post(props) {
   const [isLongCaption, setIsLongCaption] = useState(false);
   const [hasMeasuredCaption, setHasMeasuredCaption] = useState(false);
 
+  const onMentionPress = (uname) => navigation.navigate("Profile", { username: uname });
+  const parsedCaption = captionText ? parseMentionText(captionText, isDark, onMentionPress) : null;
+
   let captionContent = null;
   if (!captionText) captionContent = null;
   else if (!hasMeasuredCaption) {
@@ -800,13 +824,13 @@ export default function Post(props) {
           }
         }}
       >
-        {captionText}
+        {parsedCaption}
       </ThemedText>
     );
   } else if (showFullCaption) {
     captionContent = (
       <>
-        <ThemedText style={styles.description}>{captionText}</ThemedText>
+        <ThemedText style={styles.description}>{parsedCaption}</ThemedText>
         {isLongCaption && (
           <ThemedText style={styles.readMoreText} onPress={() => setShowFullCaption(false)}>
             {t("caption_read_less") || "Read less"}
@@ -818,7 +842,7 @@ export default function Post(props) {
     captionContent = (
       <>
         <ThemedText style={styles.description} numberOfLines={1} ellipsizeMode="tail">
-          {captionText}
+          {parsedCaption}
         </ThemedText>
         {isLongCaption && (
           <ThemedText style={styles.readMoreText} onPress={() => setShowFullCaption(true)}>
@@ -1049,7 +1073,9 @@ export default function Post(props) {
       </View>
 
       {!!(title || basePost.title) && (
-        <ThemedText style={styles.title}>{title || basePost.title}</ThemedText>
+        <ThemedText style={styles.title}>
+          {parseMentionText(title || basePost.title, isDark, (uname) => navigation.navigate("Profile", { username: uname }))}
+        </ThemedText>
       )}
       {captionContent}
 
@@ -1187,6 +1213,32 @@ export default function Post(props) {
             )}
 
             {canDelete && <ThemedView style={styles.menuDivider} />}
+
+            {canDelete && (
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => {
+                  setMenuOpen(false);
+                  navigation.navigate("CreatePost", {
+                    editPost: {
+                      id: effectivePostId,
+                      title: title || basePost.title || "",
+                      description: description || basePost.description || "",
+                      type: props.type || basePost.type || "",
+                      date: rawDate || null,
+                      time: rawTime || null,
+                      endDate: rawEndDate || null,
+                      endTime: rawEndTime || null,
+                      location: rawLocation || null,
+                      mediaUrls: mediaArr,
+                    },
+                  });
+                }}
+              >
+                <Feather name="edit-2" size={16} color={isDark ? "#FFFFFF" : "#333333"} style={{ marginRight: 8 }} />
+                <ThemedText style={styles.menuText}>{t("menu_edit") || "Edit"}</ThemedText>
+              </TouchableOpacity>
+            )}
 
             {canDelete && (
               <TouchableOpacity

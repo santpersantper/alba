@@ -43,6 +43,7 @@ import {
   readCachedFirstPostOverride,
   warmCommunityFirstPost,
 } from "../lib/communityFirstPostCache";
+import { posthog } from "../lib/analytics";
 
 /* --------------------------- CONSTANTS ---------------------------- */
 
@@ -446,6 +447,7 @@ export default function CommunityScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      posthog.screen("Community");
       navigation.setParams({ bottomBarVisible: true });
       animationState.current = "shown";
       topBarOpacity.setValue(1);
@@ -863,7 +865,7 @@ export default function CommunityScreen() {
               labels={labels}
               colors={LABEL_COLORS}
               activeLabel={activeLabel}
-              loading={loading}
+              loading={semanticLoading}
               onSelect={(name) => {
                 setActiveLabel((prev) => (prev === name ? null : name));
                 scrollToTop();

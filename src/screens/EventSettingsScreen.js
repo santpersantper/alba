@@ -12,6 +12,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  FlatList,
   Image,
   Alert,
   Modal,
@@ -27,6 +28,9 @@ import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/nativ
 import { Feather } from "@expo/vector-icons";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import { decode } from "base-64";
 
 import ThemedView from "../theme/ThemedView";
 import { useAlbaTheme } from "../theme/ThemeContext";
@@ -37,7 +41,7 @@ import ShareMenu from "../components/ShareMenu";
 
 /* ------------------- schema ------------------- */
 const POSTS_TABLE = "posts";
-const POSTS_COLS = "id, title, description, date, time, end_date, end_time, location, author_id, group_id, actions";
+const POSTS_COLS = "id, title, description, date, time, end_date, end_time, location, author_id, group_id, actions, postmediauri";
 
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
@@ -68,6 +72,12 @@ const uniqCI = (arr) => {
     out.push(s);
   });
   return out;
+};
+
+const isVideoUrl = (url) => {
+  if (!url) return false;
+  const l = String(url).toLowerCase();
+  return l.includes(".mp4") || l.includes(".mov") || l.includes(".m4v");
 };
 
 // usernames in ticket_holders/unconfirmed -> fetch profiles -> build rows
@@ -141,6 +151,7 @@ export default function EventSettingsScreen() {
   const [draftEndDate, setDraftEndDate] = useState("");
   const [draftEndTime, setDraftEndTime] = useState("");
   const [draftLocation, setDraftLocation] = useState("");
+  const [draftMedia, setDraftMedia] = useState([]); // [{ uri, type, isNew }]
 
   const [purchasesActive, setPurchasesActive] = useState(true);
   const [ticketsPaused, setTicketsPaused] = useState(false);
@@ -302,7 +313,11 @@ export default function EventSettingsScreen() {
     setDraftEndDate(postRow?.end_date || "");
     setDraftEndTime((postRow?.end_time || "").toString().slice(0, 5) || "");
     setDraftLocation(postRow?.location || "");
-  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.location]);
+    const existingMedia = Array.isArray(postRow?.postmediauri)
+      ? postRow.postmediauri.map((uri) => ({ uri, type: isVideoUrl(uri) ? "video" : "image", isNew: false }))
+      : [];
+    setDraftMedia(existingMedia);
+  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.location, postRow?.postmediauri]);
 
   useEffect(() => {
     resetDraftsToPost();
@@ -451,6 +466,12 @@ export default function EventSettingsScreen() {
     const baseEndDate = postRow?.end_date || "";
     const baseEndTime = (postRow?.end_time || "").toString().slice(0, 5) || "";
     const baseLoc = postRow?.location || "";
+    const baseMediaUris = Array.isArray(postRow?.postmediauri) ? postRow.postmediauri : [];
+    const draftMediaUris = draftMedia.map((m) => m.uri);
+    const mediaChanged =
+      draftMedia.some((m) => m.isNew) ||
+      draftMediaUris.length !== baseMediaUris.length ||
+      draftMediaUris.some((u, i) => u !== baseMediaUris[i]);
 
     return (
       (draftTitle || "") !== baseTitle ||
@@ -459,9 +480,10 @@ export default function EventSettingsScreen() {
       (draftTime || "") !== baseTime ||
       (draftEndDate || "") !== baseEndDate ||
       (draftEndTime || "") !== baseEndTime ||
-      (draftLocation || "") !== baseLoc
+      (draftLocation || "") !== baseLoc ||
+      mediaChanged
     );
-  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation]);
+  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation, draftMedia]);
 
   const onSave = async () => {
     if (!postRow?.id) return;
@@ -483,6 +505,22 @@ export default function EventSettingsScreen() {
       const endTimeChanged = (draftEndTime || "") !== baseEndTime;
       const locChanged = (draftLocation || "") !== baseLoc;
 
+      // Upload new media items
+      const finalMedia = [];
+      for (const m of draftMedia) {
+        if (!m.isNew) {
+          finalMedia.push(m.uri);
+        } else {
+          const url = await uploadEventMedia(m.uri, postRow.id);
+          finalMedia.push(url);
+        }
+      }
+      const baseMediaUris = Array.isArray(postRow?.postmediauri) ? postRow.postmediauri : [];
+      const mediaChanged =
+        draftMedia.some((m) => m.isNew) ||
+        finalMedia.length !== baseMediaUris.length ||
+        finalMedia.some((u, i) => u !== baseMediaUris[i]);
+
       const postPatch = {};
       if (titleChanged) postPatch.title = draftTitle;
       if (descChanged) postPatch.description = draftDesc;
@@ -491,6 +529,7 @@ export default function EventSettingsScreen() {
       if (endDateChanged) postPatch.end_date = draftEndDate || null;
       if (endTimeChanged) postPatch.end_time = draftEndTime || null;
       if (locChanged) postPatch.location = draftLocation;
+      if (mediaChanged) postPatch.postmediauri = finalMedia;
 
       if (Object.keys(postPatch).length) {
         const { error } = await supabase.from(POSTS_TABLE).update(postPatch).eq("id", postRow.id);
@@ -520,6 +559,44 @@ export default function EventSettingsScreen() {
 
   const onCancelEdits = () => {
     resetDraftsToPost();
+  };
+
+  /* ---------------- media helpers ---------------- */
+  const uploadEventMedia = async (localUri, postId) => {
+    const ext = localUri.split(".").pop()?.split("?")[0]?.toLowerCase() || "jpg";
+    const isVideo = ["mp4", "mov", "m4v"].includes(ext);
+    const mimeType = isVideo ? "video/mp4" : ext === "png" ? "image/png" : "image/jpeg";
+    const key = `posts/${postId}/media/${Date.now()}.${ext}`;
+    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" });
+    const binary = decode(base64);
+    const buffer = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+    const { error } = await supabase.storage
+      .from("alba-media")
+      .upload(key, buffer, { upsert: false, contentType: mimeType });
+    if (error) throw error;
+    const { data: pub } = supabase.storage.from("alba-media").getPublicUrl(key);
+    return pub.publicUrl;
+  };
+
+  const pickEventMedia = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      quality: 0.85,
+      allowsMultipleSelection: false,
+      allowsEditing: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (!asset?.uri) return;
+    setDraftMedia((prev) => [
+      ...prev,
+      { uri: asset.uri, type: asset.type === "video" ? "video" : "image", isNew: true },
+    ]);
+  };
+
+  const removeEventMedia = (index) => {
+    setDraftMedia((prev) => prev.filter((_, i) => i !== index));
   };
 
   /* ---------------- Invite users / PastEvents nav ---------------- */
@@ -928,6 +1005,37 @@ export default function EventSettingsScreen() {
               />
             </View>
 
+            {/* Media */}
+            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
+              {t("event_media") || "Media"}
+            </Text>
+            <View style={styles.mediaGrid}>
+              {draftMedia.map((m, i) => (
+                <View key={i} style={styles.mediaThumbnailWrap}>
+                  <Image source={{ uri: m.uri }} style={styles.mediaThumbnail} resizeMode="cover" />
+                  {m.type === "video" && (
+                    <View style={styles.videoOverlay}>
+                      <Feather name="play" size={18} color="#fff" />
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={styles.mediaRemoveBtn}
+                    onPress={() => removeEventMedia(i)}
+                    hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                  >
+                    <Feather name="x" size={14} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <TouchableOpacity
+                style={[styles.mediaAddBtn, { borderColor: theme.border, backgroundColor: theme.card }]}
+                onPress={pickEventMedia}
+                activeOpacity={0.75}
+              >
+                <Feather name="plus" size={22} color={theme.subtleText || "#8c97a8"} />
+              </TouchableOpacity>
+            </View>
+
             {/* Save + Cancel (only when dirty) */}
             {isDirty && (
               <View style={styles.saveRow}>
@@ -1297,6 +1405,36 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     backgroundColor: "#fff",
+  },
+
+  mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
+  mediaThumbnailWrap: { width: 80, height: 80, borderRadius: 10, overflow: "hidden" },
+  mediaThumbnail: { width: 80, height: 80 },
+  videoOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.3)",
+  },
+  mediaRemoveBtn: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mediaAddBtn: {
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   saveRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginTop: 12 },

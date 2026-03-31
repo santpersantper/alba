@@ -7,6 +7,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import {
   usePlatformPay,
@@ -338,6 +339,18 @@ export default function PremiumPurchaseModal({
               </View>
             )}
 
+            {!loading && (
+              <View style={styles.legalRow}>
+                <TouchableOpacity onPress={() => Linking.openURL("https://albaappofficial.com/terms/")}>
+                  <Text style={[styles.legalLink, { color: isDark ? "#9CA3AF" : "#8A96A3" }]}>Terms of Use</Text>
+                </TouchableOpacity>
+                <Text style={[styles.legalSep, { color: isDark ? "#9CA3AF" : "#8A96A3" }]}> · </Text>
+                <TouchableOpacity onPress={() => Linking.openURL("https://albaappofficial.com/privacy/")}>
+                  <Text style={[styles.legalLink, { color: isDark ? "#9CA3AF" : "#8A96A3" }]}>Privacy Policy</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             <View style={styles.bottomRow}>
               {Platform.OS === "ios" ? (
                 <TouchableOpacity
@@ -438,6 +451,9 @@ cancelBtn: { backgroundColor: "#FFFFFF", borderColor: "#E3E8EE" },
   actionText: { fontFamily: "PoppinsBold" },
   restoreBtn: { alignSelf: "center", paddingVertical: 10, marginTop: 4 },
   restoreText: { fontFamily: "Poppins", fontSize: 12 },
+  legalRow: { flexDirection: "row", justifyContent: "center", alignItems: "center", paddingTop: 12 },
+  legalLink: { fontFamily: "Poppins", fontSize: 11, textDecorationLine: "underline" },
+  legalSep: { fontFamily: "Poppins", fontSize: 11 },
   feedbackCard: {
     width: "78%",
     borderRadius: 18,

@@ -14,7 +14,7 @@ Sentry.init({
 
 function App() {
   return (
-    <PostHogProvider client={posthog}>
+    <PostHogProvider client={posthog} autocapture={{ captureScreens: false }}>
       <AppNavigator />
     </PostHogProvider>
   );

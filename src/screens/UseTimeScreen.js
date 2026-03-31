@@ -18,7 +18,7 @@ import * as Notifications from "expo-notifications";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Slider from "@react-native-community/slider";
 import { useUserPreferences } from "../hooks/useUserPreferences";
 import OnboardingOverlay from "../components/OnboardingOverlay";
@@ -349,6 +349,7 @@ function CollapsibleAppList({ label, totalMinutes, appsData, cs, noDataText = "N
 
 export default function UseTimeScreen() {
   const navigation = useNavigation();
+  useFocusEffect(useCallback(() => { posthog.screen("Screen Time"); }, []));
   const { t, language } = useAlbaLanguage();
   const { prefs, updatePrefs, loaded } = useUserPreferences();
   const {
@@ -1076,15 +1077,17 @@ export default function UseTimeScreen() {
                     </View>
                   </View>
 
-                  {/* ── PER-APP DETAILS (native modal) ── */}
-                  <TouchableOpacity
-                    style={[s.manageBtn, { borderColor: cs.divider, alignSelf: "stretch", justifyContent: "center", marginBottom: 12 }]}
-                    onPress={presentReport}
-                    activeOpacity={0.75}
-                  >
-                    <Feather name="bar-chart-2" size={15} color={cs.text} style={{ marginRight: 6 }} />
-                    <Text style={[s.manageBtnText, { color: cs.text }]}>{t("usetime_view_per_app") || "View per-app details"}</Text>
-                  </TouchableOpacity>
+                  {/* ── PER-APP DETAILS (native modal — iOS only) ── */}
+                  {Platform.OS === "ios" && (
+                    <TouchableOpacity
+                      style={[s.manageBtn, { borderColor: cs.divider, alignSelf: "stretch", justifyContent: "center", marginBottom: 12 }]}
+                      onPress={presentReport}
+                      activeOpacity={0.75}
+                    >
+                      <Feather name="bar-chart-2" size={15} color={cs.text} style={{ marginRight: 6 }} />
+                      <Text style={[s.manageBtnText, { color: cs.text }]}>{t("usetime_view_per_app") || "View per-app details"}</Text>
+                    </TouchableOpacity>
+                  )}
 
                   {/* ── MANAGE TRACKING ── */}
                   {authorized && (
@@ -1338,6 +1341,7 @@ const cc = StyleSheet.create({
     fontFamily: "PoppinsBold",
     fontSize: 15,
     marginBottom: 6,
+    textAlign: "center",
   },
   cardBody: {
     fontFamily: "Poppins",

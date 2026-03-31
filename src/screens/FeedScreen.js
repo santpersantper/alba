@@ -41,6 +41,7 @@ import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useScreenTime } from "../hooks/useScreenTime";
+import { posthog } from "../lib/analytics";
 
 import {
   readCachedFirstFeedVideoOverride,
@@ -488,7 +489,7 @@ export default function FeedScreen() {
           AsyncStorage.getItem(FEED_TIMER_ENABLED_KEY),
           AsyncStorage.getItem(FEED_TIMER_ALERT_MINUTES_KEY),
         ]);
-        timerEnabledRef.current = enabled === "true";
+        timerEnabledRef.current = enabled === null ? true : enabled === "true";
         alertMinutesRef.current =
           parseInt(mins || String(DEFAULT_ALERT_MINUTES), 10) || DEFAULT_ALERT_MINUTES;
       } catch {}
@@ -563,6 +564,7 @@ export default function FeedScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      posthog.screen("Feed");
       let isActive = true;
 
       // ✅ 0) instant cache paint (no network)

@@ -18,6 +18,7 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
+import { posthog } from "../lib/analytics";
 import MyEvents from "../components/community-settings/MyEvents";
 import MyAds from "../components/community-settings/MyAds";
 import CommunityEventSettings from "../components/community-settings/CommunityEventSettings";
@@ -162,6 +163,7 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   useFocusEffect(
     useCallback(() => {
+      posthog.screen("Settings");
       loadSettings();
       reload();
       return undefined;
@@ -1113,6 +1115,60 @@ export default function CommunitySettingsScreen({ navigation }) {
                 thumbColor="#fff"
               />
             </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("settings_allow_tags") || "Allow others to tag me"}</Text>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>
+                  {t("settings_allow_tags_sub") || "Others can @mention you in their posts"}
+                </Text>
+              </View>
+              <Switch
+                value={allowTags}
+                onValueChange={async (val) => {
+                  setAllowTags(val);
+                  await updateProfile({ allow_tags: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+          </View>
+
+          {/* ── Followed users ── */}
+          <Text style={[styles.sectionLabel, { color: secondaryText }]}>{t("settings_followed_users_title") || "Following"}</Text>
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+            {followedProfiles.length === 0 ? (
+              <View style={{ padding: 14 }}>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>{t("settings_no_following") || "You're not following anyone yet."}</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={followedProfiles}
+                keyExtractor={(item) => item.id || item.username || Math.random().toString()}
+                scrollEnabled={false}
+                renderItem={({ item, index }) => (
+                  <View
+                    style={[
+                      styles.blockedRow,
+                      { paddingHorizontal: 14 },
+                      index > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor },
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.blockedName, { color: textColor }]} numberOfLines={1}>
+                        {item.name || `@${item.username}`}
+                      </Text>
+                      <Text style={[styles.blockedUsername, { color: secondaryText }]} numberOfLines={1}>
+                        @{item.username}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => openUnfollowModal(item)} hitSlop={8}>
+                      <Feather name="x" size={18} color={textColor} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              />
+            )}
           </View>
 
           {/* ── Blocked users ── */}
@@ -1257,6 +1313,24 @@ export default function CommunitySettingsScreen({ navigation }) {
               </TouchableOpacity>
               <TouchableOpacity style={[styles.unblockBtnSmall, styles.unblockYesBtn]} onPress={confirmUnblock}>
                 <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>Yes</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={unfollowModalVisible} transparent animationType="fade" onRequestClose={closeUnfollowModal}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.unblockModalContent, { backgroundColor: isDark ? theme.gray : theme.background }]}>
+            <ThemedText style={[styles.unblockTitle, { color: theme.text }]}>
+              {t("settings_unfollow_confirm") || `Unfollow @${unfollowCandidate?.username || ""}?`}
+            </ThemedText>
+            <View style={styles.unblockButtonsRow}>
+              <TouchableOpacity style={[styles.unblockBtnSmall, styles.unblockNoBtn]} onPress={closeUnfollowModal}>
+                <ThemedText style={styles.unblockBtnSmallText}>{t("confirm_no") || "No"}</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.unblockBtnSmall, styles.unblockYesBtn]} onPress={confirmUnfollow}>
+                <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>{t("confirm_yes") || "Yes"}</ThemedText>
               </TouchableOpacity>
             </View>
           </View>

@@ -1,5 +1,5 @@
 // navigation/AppNavigator.js — auth-gated root (FIXED)
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   NavigationContainer,
   DefaultTheme,
@@ -202,6 +202,35 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
   );
 }
 
+function JoinPendingModal({ visible, onClose }) {
+  const { isDark } = useAlbaTheme();
+  const bg = isDark ? "#1A1F27" : "#FFFFFF";
+  const fg = isDark ? "#FFFFFF" : "#111111";
+  if (!visible) return null;
+  return (
+    <Modal visible transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={joinModalStyles.overlay}>
+        <View style={[joinModalStyles.card, { backgroundColor: bg }]}>
+          <Text style={[joinModalStyles.message, { color: fg }]}>
+            Admins will review your request. Once they approve it, you will join the group.
+          </Text>
+          <TouchableOpacity style={joinModalStyles.okBtn} onPress={onClose}>
+            <Text style={joinModalStyles.okText}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const joinModalStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", padding: 28 },
+  card: { borderRadius: 18, padding: 22, alignItems: "center", width: "82%" },
+  message: { fontFamily: "Poppins", fontSize: 15, textAlign: "center", marginBottom: 20 },
+  okBtn: { backgroundColor: "#4EBCFF", paddingVertical: 10, paddingHorizontal: 36, borderRadius: 12 },
+  okText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
+});
+
 export default function AppNavigator() {
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -213,9 +242,11 @@ export default function AppNavigator() {
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
   const [banState, setBanState] = useState(null); // null | { type: "temp"|"terminated", bannedUntil?, reason? }
+  const [joinPendingModal, setJoinPendingModal] = useState(false);
   const navRef = useRef(null);
   const signedInRef = useRef(false);
   const sessionStartRef = useRef(null);
+  const pendingDeepLinkRef = useRef(null);
 
   const trackLoginStreak = async (userId) => {
     try {
@@ -442,6 +473,85 @@ export default function AppNavigator() {
     return () => sub.remove();
   }, []);
 
+  // Deep link handler
+  const handleDeepLink = useCallback(async (url, attempt = 0) => {
+    if (!url) return;
+
+    let path = "";
+    try {
+      const parsed = new URL(url);
+      path = parsed.pathname;
+    } catch {
+      path = url.replace(/^alba:\/\//, "/").split("?")[0];
+    }
+
+    const nav = navRef.current;
+    if (!nav?.isReady()) {
+      if (attempt < 15) {
+        setTimeout(() => handleDeepLink(url, attempt + 1), 300);
+      }
+      return;
+    }
+
+    if (path.startsWith("/join/group/")) {
+      const groupId = path.replace("/join/group/", "").replace(/\/$/, "").trim();
+      if (!groupId) return;
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        if (!authData?.user) return;
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("username")
+          .eq("id", authData.user.id)
+          .maybeSingle();
+        const username = profile?.username;
+        if (!username) return;
+        const { data: group } = await supabase
+          .from("groups")
+          .select("id, groupname, members, pending_members, require_approval")
+          .eq("id", groupId)
+          .maybeSingle();
+        if (!group) return;
+        const currentMembers = Array.isArray(group.members) ? group.members : [];
+        const currentPending = Array.isArray(group.pending_members) ? group.pending_members : [];
+        if (!group.require_approval) {
+          if (!currentMembers.includes(username)) {
+            await supabase
+              .from("groups")
+              .update({ members: [...currentMembers, username] })
+              .eq("id", groupId);
+          }
+          nav.navigate("Community");
+        } else {
+          if (!currentPending.includes(username) && !currentMembers.includes(username)) {
+            await supabase
+              .from("groups")
+              .update({ pending_members: [...currentPending, username] })
+              .eq("id", groupId);
+          }
+          nav.navigate("Community");
+          setJoinPendingModal(true);
+        }
+      } catch (e) {
+        console.warn("[DeepLink] join group error:", e?.message);
+      }
+    } else if (path.startsWith("/post/")) {
+      const postId = path.replace("/post/", "").replace(/\/$/, "").trim();
+      if (postId) nav.navigate("SinglePost", { postId });
+    } else if (path.startsWith("/video/")) {
+      const postId = path.replace("/video/", "").replace(/\/$/, "").trim();
+      if (postId) nav.navigate("SingleFeedVideo", { postId });
+    }
+  }, []);
+
+  useEffect(() => {
+    Linking.getInitialURL()
+      .then((url) => { if (url) handleDeepLink(url); })
+      .catch(() => {});
+    const sub = Linking.addEventListener("url", ({ url }) => handleDeepLink(url));
+    return () => sub.remove();
+  }, [handleDeepLink]);
+
   // Register push token when user signs in
   useEffect(() => {
     if (!signedIn) return;
@@ -497,16 +607,22 @@ export default function AppNavigator() {
               <ActivityIndicator />
             </View>
           ) : (
-            <ThemedNavigation
-              signedIn={signedIn}
-              needsProfileSetup={needsProfileSetup}
-              pendingGoogleUser={pendingGoogleUser}
-              onProfileComplete={handleProfileComplete}
-              navRef={navRef}
-              banState={banState}
-              onBanRecheck={handleBanRecheck}
-              onTerminationAck={handleTerminationAck}
-            />
+            <>
+              <ThemedNavigation
+                signedIn={signedIn}
+                needsProfileSetup={needsProfileSetup}
+                pendingGoogleUser={pendingGoogleUser}
+                onProfileComplete={handleProfileComplete}
+                navRef={navRef}
+                banState={banState}
+                onBanRecheck={handleBanRecheck}
+                onTerminationAck={handleTerminationAck}
+              />
+              <JoinPendingModal
+                visible={joinPendingModal}
+                onClose={() => setJoinPendingModal(false)}
+              />
+            </>
           )}
         </ThemeProvider>
       </LanguageProvider>

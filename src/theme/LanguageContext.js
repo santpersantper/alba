@@ -63,6 +63,7 @@ const STRINGS = {
       "For events, date, time and location are required.",
     create_post_success_title: "Success",
     create_post_success_message: "Post created!",
+    create_post_edit_success: "Your post has been updated.",
     create_post_fail_title: "Failed to create post",
 
     /* ---------- Generic actions (used in Post / EventPanel / AdPanel) ---------- */
@@ -82,6 +83,7 @@ const STRINGS = {
     menu_save: "Save",
     menu_saved: "Saved",
     menu_delete: "Delete",
+    menu_edit: "Edit",
     confirm_delete_title: "Are you sure you want to delete your post?",
     confirm_yes: "Yes",
     confirm_no: "No",
@@ -301,6 +303,10 @@ const STRINGS = {
     settings_blocked_users_title: "Blocked users",
     settings_no_blocked: "You haven't blocked anyone.",
     show_followed_posts: "Show posts from followed users",
+    settings_allow_tags: "Allow others to tag me",
+    settings_allow_tags_sub: "Others can @mention you in their posts",
+    settings_followed_users_title: "Following",
+    settings_unfollow_confirm: "Are you sure you want to unfollow this user?",
 
     /* ---------- Feed screen ---------- */
     feed_loading: "Loading videos…",
@@ -705,6 +711,7 @@ const STRINGS = {
       "Per gli eventi, data, orario e posizione sono obbligatori.",
     create_post_success_title: "Fatto",
     create_post_success_message: "Post creato!",
+    create_post_edit_success: "Il tuo post è stato aggiornato.",
     create_post_fail_title: "Errore nella creazione del post",
 
     /* ---------- Generic actions ---------- */
@@ -724,6 +731,7 @@ const STRINGS = {
     menu_save: "Salva",
     menu_saved: "Salvato",
     menu_delete: "Elimina",
+    menu_edit: "Modifica",
     confirm_delete_title: "Sei sicuro di voler eliminare il post?",
     confirm_yes: "Sì",
     confirm_no: "No",
@@ -945,6 +953,10 @@ const STRINGS = {
     settings_blocked_users_title: "Utenti bloccati",
     settings_no_blocked: "Non hai bloccato nessuno.",
     show_followed_posts: "Mostra post degli utenti che segui",
+    settings_allow_tags: "Permetti agli altri di taggarmi",
+    settings_allow_tags_sub: "Gli altri possono menzionarti con @username nei loro post",
+    settings_followed_users_title: "Seguiti",
+    settings_unfollow_confirm: "Sei sicuro di voler smettere di seguire questo utente?",
 
     /* ---------- Feed screen ---------- */
     feed_loading: "Caricamento video…",
