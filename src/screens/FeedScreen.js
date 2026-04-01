@@ -101,9 +101,9 @@ function FeedItem({
     (playerInstance) => {
       playerInstance.loop = true;
       playerInstance.bufferOptions = {
-        preferredForwardBufferDuration: 10,
+        preferredForwardBufferDuration: 5,
         minBufferForPlayback: 2,
-        maxBufferBytes: 15 * 1024 * 1024, // 15 MB cap
+        maxBufferBytes: 10 * 1024 * 1024, // 10 MB cap
       };
     }
   );
@@ -1176,6 +1176,9 @@ export default function FeedScreen() {
             keyExtractor={(item) => item.id}
             pagingEnabled
             showsVerticalScrollIndicator={false}
+            windowSize={3}
+            maxToRenderPerBatch={2}
+            removeClippedSubviews
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
