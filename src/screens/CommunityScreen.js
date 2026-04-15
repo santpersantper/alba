@@ -182,6 +182,7 @@ export default function CommunityScreen() {
   const [labels, setLabels] = useState(BASE_LABELS);
   const [activeLabel, setActiveLabel] = useState(null);
   const [followedUserIds, setFollowedUserIds] = useState([]);
+  const [followedUsernames, setFollowedUsernames] = useState([]);
   const [showFollowedPosts, setShowFollowedPosts] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState(null);
@@ -409,18 +410,71 @@ export default function CommunityScreen() {
       const showFollowed = pref?.show_followed_users_posts === true;
       if (showFollowed && followedIds.length > 0) {
         try {
+          // Also resolve followed usernames for collaborator matching
+          const { data: followedProfileRows } = await supabase
+            .from("profiles")
+            .select("id, username")
+            .in("id", followedIds);
+          const resolvedFollowedUsernames = (followedProfileRows || []).map((p) => p.username).filter(Boolean);
+          setFollowedUsernames(resolvedFollowedUsernames);
+
           const _doneFollowed = trackRequest(`Community.followedPosts count=${followedIds.length}`);
           const { data: followedPostsData } = await supabase
             .from("posts")
             .select("*")
             .in("author_id", followedIds)
-            .order("created_at", { ascending: false })
+            .order("date", { ascending: false })
             .limit(20);
           _doneFollowed();
           if (Array.isArray(followedPostsData) && followedPostsData.length > 0) {
             const existingIds = new Set(arr.map((p) => String(p.id)));
             const newPosts = followedPostsData.filter((p) => !existingIds.has(String(p.id)));
             arr = [...arr, ...newPosts];
+          }
+
+          // Fetch posts where a followed user is a collaborator (not already loaded)
+          if (resolvedFollowedUsernames.length > 0) {
+            const existingIds = new Set(arr.map((p) => String(p.id)));
+            for (const uname of resolvedFollowedUsernames) {
+              try {
+                const { data: collabPosts } = await supabase
+                  .from("posts")
+                  .select("*")
+                  .contains("collaborators", [uname])
+                  .order("date", { ascending: false })
+                  .limit(10);
+                if (Array.isArray(collabPosts)) {
+                  collabPosts.forEach((p) => {
+                    if (!existingIds.has(String(p.id))) {
+                      existingIds.add(String(p.id));
+                      arr.push(p);
+                    }
+                  });
+                }
+              } catch {}
+            }
+          }
+
+          // Fetch share posts authored by followed users (not already loaded)
+          if (followedIds.length > 0) {
+            const existingIds = new Set(arr.map((p) => String(p.id)));
+            try {
+              const { data: sharePosts } = await supabase
+                .from("posts")
+                .select("*")
+                .in("author_id", followedIds)
+                .not("shared_post_id", "is", null)
+                .order("date", { ascending: false })
+                .limit(20);
+              if (Array.isArray(sharePosts)) {
+                sharePosts.forEach((p) => {
+                  if (!existingIds.has(String(p.id))) {
+                    existingIds.add(String(p.id));
+                    arr.push(p);
+                  }
+                });
+              }
+            } catch {}
           }
         } catch {}
       }
@@ -592,12 +646,21 @@ export default function CommunityScreen() {
     const promptedCategories = new Set();
     let out = postsInput.reduce((acc, p) => {
       const type = String(p.type || "");
-      const isFromFollowed = showFollowedPosts && followedUserIds.length > 0 && followedUserIds.includes(p.author_id);
+      const isFromFollowed = showFollowedPosts && (
+        (followedUserIds.length > 0 && followedUserIds.includes(p.author_id)) ||
+        (followedUsernames.length > 0 && Array.isArray(p.collaborators) && p.collaborators.some((u) => followedUsernames.includes(u))) ||
+        // Share posts from followed users
+        (followedUserIds.length > 0 && !!p.shared_post_id && followedUserIds.includes(p.author_id))
+      );
       if (!VISIBLE_TYPES.has(type) && !isFromFollowed) return acc;
       if (type === "Article" && !showLocalNews) return acc;
       if (blockedUsers.length && blockedUsers.includes(asAt(p.user))) return acc;
-      // Hide events whose date has already passed
-      if (type === "Event" && p.date && String(p.date).slice(0, 10) < todayStr) return acc;
+      // Hide events whose date has already passed, unless end_date is today or future,
+      // or the event repeats every day (shown until deleted by the poster)
+      if (type === "Event" && !p.every_day && p.date && String(p.date).slice(0, 10) < todayStr) {
+        const endDate = p.end_date ? String(p.end_date).slice(0, 10) : null;
+        if (!endDate || endDate < todayStr) return acc;
+      }
 
       if (type === "Ad") {
         // Creator always sees their own ad directly
@@ -624,7 +687,7 @@ export default function CommunityScreen() {
               id: `ad_prompt_${p.id}`,
               type: "ad_prompt",
               category,
-              created_at: p.created_at,
+              date: p.date,
             });
           }
         }
@@ -670,11 +733,12 @@ export default function CommunityScreen() {
           return (simMap.get(String(b.id)) || 0) - (simMap.get(String(a.id)) || 0);
         });
     } else {
-      // Sort chronologically (newest first); ad_prompts use their ad's created_at
+      // Sort chronologically (newest first); compare by date then time
       out = [...out].sort((a, b) => {
-        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return tb - ta;
+        const da = String(a.date || ""), db = String(b.date || "");
+        if (db !== da) return db > da ? 1 : -1;
+        const ta = String(a.time || ""), tb = String(b.time || "");
+        return tb > ta ? 1 : -1;
       });
     }
 
@@ -725,6 +789,7 @@ export default function CommunityScreen() {
     semanticResults,
     showFollowedPosts,
     followedUserIds,
+    followedUsernames,
     adMatchesUserTags,
     prefs.premiumAdFree,
     uid,
@@ -1159,21 +1224,13 @@ export default function CommunityScreen() {
           return (
             <ThemedView variant="gray" style={styles.feedSection}>
               <Post
+                {...item}
                 postId={item.id}
-                title={item.title}
-                description={item.description}
-                type={item.type}
-                date={item.date}
-                time={item.time}
-                location={item.location}
-                user={item.user}
                 userPicUri={effectiveAvatar || "https://placehold.co/48x48"}
                 postMediaUri={effectiveMedia}
                 postMediaUriHint={item.postmediauri}
                 actions={item.actions || []}
-                groupName={item.title}
                 authorId={item.author_id}
-                end_time={item.end_time}
                 initialSaved={!!savedMeta[item.id]}
                 onToggleSave={toggleSave}
                 onDeleted={(id) =>
@@ -1200,7 +1257,7 @@ export default function CommunityScreen() {
         onPress={() => navigation.navigate("MyTickets")}
         style={[
           styles.ticketsWidget,
-          { backgroundColor: "#6C2BD9", borderColor: "rgba(255,255,255,0.35)" },
+          { backgroundColor: "#6C2BD9" },
         ]}
       >
         <Ionicons name="ticket-outline" size={18} color="#fff" />
@@ -1353,7 +1410,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
     zIndex: 999,
     elevation: 10,
   },

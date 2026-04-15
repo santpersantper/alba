@@ -606,8 +606,53 @@ export default function ProfileScreen({ navigation, route }) {
 
         console.log("[Profile][Posts] ok", { count: data?.length || 0 });
 
+        let allPosts = Array.isArray(data) ? data : [];
+
+        // Also fetch posts where this user is a collaborator
+        if (uname) {
+          try {
+            const { data: collabData } = await supabase
+              .from("posts")
+              .select("*")
+              .contains("collaborators", [uname])
+              .order("date", { ascending: false })
+              .order("time", { ascending: false });
+            if (Array.isArray(collabData) && collabData.length > 0) {
+              const existingIds = new Set(allPosts.map((p) => String(p.id)));
+              const newPosts = collabData.filter((p) => !existingIds.has(String(p.id)));
+              allPosts = [...allPosts, ...newPosts];
+            }
+          } catch {}
+        }
+
+        // Also fetch share posts authored by this user
+        if (authorId) {
+          try {
+            const { data: shareData } = await supabase
+              .from("posts")
+              .select("*")
+              .eq("author_id", authorId)
+              .not("shared_post_id", "is", null)
+              .order("date", { ascending: false })
+              .limit(50);
+            if (Array.isArray(shareData) && shareData.length > 0) {
+              const existingIds = new Set(allPosts.map((p) => String(p.id)));
+              const newPosts = shareData.filter((p) => !existingIds.has(String(p.id)));
+              allPosts = [...allPosts, ...newPosts];
+            }
+          } catch {}
+        }
+
+        // Sort merged array by date/time descending
+        allPosts = allPosts.sort((a, b) => {
+          const da = String(a.date || ""), db = String(b.date || "");
+          if (db !== da) return db > da ? 1 : -1;
+          const ta = String(a.time || ""), tb = String(b.time || "");
+          return tb > ta ? 1 : -1;
+        });
+
         if (!alive) return;
-        setPosts(Array.isArray(data) ? data : []);
+        setPosts(allPosts);
       } catch (e) {
         if (!alive) return;
         console.log("[Profile][Posts] catch", e?.message || e);

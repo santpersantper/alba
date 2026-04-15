@@ -31,6 +31,10 @@ export default function EventPanel({ onState }) {
   const [enableGroupChat, setEnableGroupChat] = useState(true);
   const [allowTicketing, setAllowTicketing] = useState(true);
   const [isAgeRestricted, setIsAgeRestricted] = useState(false);
+  const [fixedTicketCount, setFixedTicketCount] = useState(false);
+  const [ticketNumber, setTicketNumber] = useState("");
+  const [manuallyApprove, setManuallyApprove] = useState(false);
+  const [approvalInfoPlaceholder, setApprovalInfoPlaceholder] = useState("");
 
   const ticketIdRef = useRef(3);
   const optionIdRef = useRef(100);
@@ -86,8 +90,12 @@ export default function EventPanel({ onState }) {
       ...tk,
       requiredInfo: sameRequiredInfo ? firstRI : tk.requiredInfo,
     }));
-    onState?.({ enableGroupChat, allowTicketing, isAgeRestricted, tickets: normalizedTickets, allowSubgroups, allowInvites });
-  }, [enableGroupChat, allowTicketing, isAgeRestricted, tickets, sameRequiredInfo, allowSubgroups, allowInvites, onState]);
+    onState?.({
+      enableGroupChat, allowTicketing, isAgeRestricted,
+      tickets: normalizedTickets, allowSubgroups, allowInvites,
+      fixedTicketCount, ticketNumber, manuallyApprove, approvalInfoPlaceholder,
+    });
+  }, [enableGroupChat, allowTicketing, isAgeRestricted, tickets, sameRequiredInfo, allowSubgroups, allowInvites, fixedTicketCount, ticketNumber, manuallyApprove, approvalInfoPlaceholder, onState]);
 
   return (
     <View style={[styles.panel, { backgroundColor: theme.background }]}>
@@ -97,6 +105,47 @@ export default function EventPanel({ onState }) {
       {allowTicketing && (
         <>
           <CheckboxRow label={t("event_age_restricted") || "+18 only event"} checked={isAgeRestricted} onToggle={() => setIsAgeRestricted((v) => !v)} style={{ marginTop: 10 }} theme={theme} isDark={isDark} />
+
+          <CheckboxRow
+            label={t("event_sell_fixed_tickets") || "Sell fixed number of tickets"}
+            checked={fixedTicketCount}
+            onToggle={() => setFixedTicketCount((v) => !v)}
+            style={{ marginTop: 10 }}
+            theme={theme}
+            isDark={isDark}
+          />
+          {fixedTicketCount && (
+            <View style={[styles.inputWrap, { borderColor, backgroundColor: inputBg, marginTop: 8 }]}>
+              <TextInput
+                value={ticketNumber}
+                onChangeText={(v) => setTicketNumber(v.replace(/[^0-9]/g, ""))}
+                keyboardType="numeric"
+                placeholder={t("event_ticket_how_many") || "How many?"}
+                placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                style={[styles.input, { color: theme.text }]}
+              />
+            </View>
+          )}
+
+          <CheckboxRow
+            label={t("event_manually_approve_buyers") || "Manually approve ticket buyers"}
+            checked={manuallyApprove}
+            onToggle={() => setManuallyApprove((v) => !v)}
+            style={{ marginTop: 10 }}
+            theme={theme}
+            isDark={isDark}
+          />
+          {manuallyApprove && (
+            <View style={[styles.inputWrap, { borderColor, backgroundColor: inputBg, marginTop: 8 }]}>
+              <TextInput
+                value={approvalInfoPlaceholder}
+                onChangeText={setApprovalInfoPlaceholder}
+                placeholder={t("event_approval_info_label") || "Required info to approve buyer"}
+                placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+                style={[styles.input, { color: theme.text }]}
+              />
+            </View>
+          )}
 
           {tickets.map((ticket, idx) => {
             const ticketPlaceholder = idx === 0 ? t("event_ticket_general") : idx === 1 ? t("event_ticket_vip") : t("event_ticket_name");

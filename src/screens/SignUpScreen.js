@@ -206,7 +206,9 @@ export default function SignUpScreen({ navigation }) {
   };
 
   const handleUsernameChange = (value) => {
-    const cleaned = value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 25);
+    let cleaned = value.replace(/[^a-zA-Z0-9._]/g, "").slice(0, 25);
+    // no leading/trailing dots, no consecutive dots
+    cleaned = cleaned.replace(/\.{2,}/g, ".").replace(/^\.|\.$/g, "");
     setUsername(cleaned);
     setUsernameValid(null);
     if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);

@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, Image,
   ScrollView, StyleSheet, ActivityIndicator, Alert,
-  Modal, Platform, KeyboardAvoidingView, FlatList,
+  Modal, Platform, KeyboardAvoidingView, FlatList, Switch,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -143,6 +143,12 @@ export default function CreatePost() {
   const [mentionField,   setMentionField]   = useState(null); // "title" | "desc"
   const mentionDebounceRef = useRef(null);
 
+  // Collaborators
+  const [collaborators,       setCollaborators]       = useState([]); // array of usernames
+  const [collabInput,         setCollabInput]         = useState("");
+  const [collabResults,       setCollabResults]       = useState([]);
+  const collabDebounceRef = useRef(null);
+
   const [eventState, setEventState] = useState({
     enableGroupChat: true, allowTicketing: false, tickets: [],
     allowSubgroups: true, allowInvites: true,
@@ -177,6 +183,8 @@ export default function CreatePost() {
   const [showEndDatePicker,  setShowEndDatePicker]  = useState(false);
   const [selectedEndTime,    setSelectedEndTime]    = useState(editPost?.endTime ?? null);
   const [showEndTimePicker,  setShowEndTimePicker]  = useState(false);
+  const [allDay,          setAllDay]          = useState(editPost?.all_day ?? false);
+  const [everyDay,        setEveryDay]        = useState(editPost?.every_day ?? false);
 
   const [locationText,        setLocationText]        = useState(editPost?.location ?? "");
   const [locationSuggestions, setLocationSuggestions] = useState([]);
@@ -361,6 +369,33 @@ export default function CreatePost() {
     if (date) setSelectedEndTime(date.toTimeString().slice(0, 8));
   };
 
+  /* ── collaborator search ── */
+  const searchCollaborators = useCallback((query) => {
+    if (collabDebounceRef.current) clearTimeout(collabDebounceRef.current);
+    if (!query || query.length < 1) { setCollabResults([]); return; }
+    collabDebounceRef.current = setTimeout(async () => {
+      try {
+        const { data } = await supabase
+          .from("profiles")
+          .select("username, name")
+          .ilike("username", `${query}%`)
+          .eq("allows_collab", true)
+          .limit(8);
+        setCollabResults((data || []).filter((u) => !collaborators.includes(u.username)));
+      } catch { setCollabResults([]); }
+    }, 250);
+  }, [collaborators]);
+
+  const addCollaborator = (username) => {
+    if (!collaborators.includes(username)) setCollaborators((prev) => [...prev, username]);
+    setCollabInput("");
+    setCollabResults([]);
+  };
+
+  const removeCollaborator = (username) => {
+    setCollaborators((prev) => prev.filter((u) => u !== username));
+  };
+
   /* ── reset ── */
   const resetForm = () => {
     setTitle(""); setDesc(""); setMedia([]); setPostType("event");
@@ -368,8 +403,11 @@ export default function CreatePost() {
     setAdState({ targetInterested: true, iap: false, products: [] });
     setSelectedDate(null); setSelectedTime(null);
     setSelectedEndDate(null); setSelectedEndTime(null);
+    setAllDay(false);
+    setEveryDay(false);
     setLocationText(""); setLocationSuggestions([]); locationSessionToken.current = null;
     setAdNotes(""); setThumbnailUri(null); setFeedTags([]);
+    setCollaborators([]); setCollabInput(""); setCollabResults([]);
   };
 
   /* ── @ mention search ── */
@@ -421,13 +459,15 @@ export default function CreatePost() {
       const badVideo = media.find((m) => m.type === "video" && typeof m.durationSec === "number" && m.durationSec > MAX_VIDEO_SECONDS);
       if (badVideo) throw new Error(tr("create_post_error_video_too_long_message", `Video must be ${MAX_VIDEO_SECONDS} seconds or less.`));
       if (postType === "feedPost" && media.some((m) => m.type !== "video")) throw new Error("Feed Posts must contain only video media.");
-      if (postType === "event" && (!selectedDate || !selectedTime || !locationText.trim())) throw new Error(t("create_post_error_event_fields_required"));
-      if (!editPost && (postType === "event" || postType === "ad") && selectedDate && selectedTime) {
-        const startDT = new Date(`${selectedDate}T${selectedTime}`);
-        if (startDT <= new Date()) throw new Error("The start date and time must be in the future.");
-        if (selectedEndDate && selectedEndTime) {
-          const endDT = new Date(`${selectedEndDate}T${selectedEndTime}`);
-          if (endDT <= startDT) throw new Error("The end date and time must be after the start.");
+      if (postType === "event" && (!selectedDate || (!allDay && !selectedTime) || !locationText.trim())) throw new Error(t("create_post_error_event_fields_required"));
+      if (!editPost && (postType === "event" || postType === "ad") && selectedDate && (allDay || selectedTime)) {
+        if (!allDay) {
+          const startDT = new Date(`${selectedDate}T${selectedTime}`);
+          if (startDT <= new Date()) throw new Error("The start date and time must be in the future.");
+          if (selectedEndDate && selectedEndTime) {
+            const endDT = new Date(`${selectedEndDate}T${selectedEndTime}`);
+            if (endDT <= startDT) throw new Error("The end date and time must be after the start.");
+          }
         }
       }
 
@@ -562,7 +602,9 @@ export default function CreatePost() {
       /* ── Community posts branch ── */
       const now = new Date();
       const dateStr = postType === "event" ? selectedDate : (selectedDate || now.toISOString().slice(0, 10));
-      const timeStr = postType === "event" ? selectedTime : (selectedTime || now.toTimeString().slice(0, 8));
+      const timeStr = postType === "event"
+        ? (allDay ? null : selectedTime)
+        : (selectedTime || now.toTimeString().slice(0, 8));
 
       const typeLabel = postType === "event" ? "Event"
         : postType === "ad"          ? "Ad"
@@ -592,6 +634,8 @@ export default function CreatePost() {
       let isticketable = false, is_age_restricted = false;
       let product_types = [], product_prices = [], required_info = [];
       let product_notes = [], product_required_info = [], product_options = [];
+      let is_ticket_number_fixed = false, ticket_number = null;
+      let manually_approve_attendees = false, ticket_approval_info = null;
 
       if (postType === "event" && latestEventState.allowTicketing) {
         isticketable = true;
@@ -621,6 +665,16 @@ export default function CreatePost() {
         );
         // legacy required_info: union of all per-type required info
         required_info = uniq(product_required_info.flat());
+
+        if (latestEventState.fixedTicketCount) {
+          is_ticket_number_fixed = true;
+          const n = parseInt(String(latestEventState.ticketNumber || ""), 10);
+          ticket_number = Number.isFinite(n) && n > 0 ? n : null;
+        }
+        if (latestEventState.manuallyApprove) {
+          manually_approve_attendees = true;
+          ticket_approval_info = (latestEventState.approvalInfoPlaceholder || "").trim() || null;
+        }
       }
 
       if (postType === "ad" && adState.iap) {
@@ -693,6 +747,8 @@ export default function CreatePost() {
           time: timeStr,
           end_date: selectedEndDate || null,
           end_time: selectedEndTime || null,
+          all_day: allDay,
+          every_day: everyDay,
           location: locationLabel,
           postmediauri: finalMediaUrls,
           tagged_usernames: taggedUsernames,
@@ -708,13 +764,17 @@ export default function CreatePost() {
         title, description: finalDesc, user: username, author_id: uid, userpicuri: null,
         type: typeLabel, date: dateStr, time: timeStr,
         end_date: selectedEndDate || null, end_time: selectedEndTime || null,
+        all_day: allDay, every_day: everyDay,
         location: locationLabel,
         actions, isticketable, is_age_restricted,
         product_types, product_prices, required_info,
         product_notes, product_required_info, product_options,
+        is_ticket_number_fixed, ticket_number,
+        manually_approve_attendees, ticket_approval_info,
         labels: adLabelsToSave,
         lat, lon, geom: `SRID=4326;POINT(${lon} ${lat})`, postmediauri: [],
         tagged_usernames: taggedUsernames,
+        collaborators: collaborators.length > 0 ? collaborators : null,
         ...(postType === "ad" && userStripeAccountId ? {
           stripe_account_id: userStripeAccountId,
           stripe_onboarding_complete: userStripeComplete,
@@ -723,6 +783,33 @@ export default function CreatePost() {
       if (insErr) throw insErr;
       const postId = inserted.id;
       posthog.capture('post_created', { post_type: postType });
+
+      // Collaborator notifications (fire-and-forget)
+      if (collaborators.length > 0) {
+        (async () => {
+          try {
+            for (const collabUsername of collaborators) {
+              // Notify the collaborator they were tagged
+              supabase.functions.invoke("send-push", {
+                body: {
+                  type: "collab_tagged",
+                  collaborator_username: collabUsername,
+                  poster_username: username,
+                  post_id: postId,
+                },
+              }).catch(() => {});
+              // Notify the collaborator's followers
+              supabase.functions.invoke("send-push", {
+                body: {
+                  type: "new_collab_post",
+                  collaborator_username: collabUsername,
+                  post_id: postId,
+                },
+              }).catch(() => {});
+            }
+          } catch {}
+        })();
+      }
 
       // Semantic embedding (fire-and-forget)
       const textToEmbed = [title, finalDesc].filter(Boolean).join(" ");
@@ -962,6 +1049,62 @@ export default function CreatePost() {
               <Text style={[cs.sectionLabel, { color: subtle, marginTop: 16 }]}>
                 {isEvent ? "Start date & time *" : "Start date & time"}
               </Text>
+
+              {/* All day toggle — events only */}
+              {isEvent && (
+                <TouchableOpacity
+                  style={cs.allDayRow}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    const next = !allDay;
+                    setAllDay(next);
+                    if (next) {
+                      setSelectedTime(null);
+                      setSelectedEndTime(null);
+                      setShowTimePicker(false);
+                      setShowEndTimePicker(false);
+                    }
+                  }}
+                >
+                  <Switch
+                    value={allDay}
+                    onValueChange={(next) => {
+                      setAllDay(next);
+                      if (next) {
+                        setSelectedTime(null);
+                        setSelectedEndTime(null);
+                        setShowTimePicker(false);
+                        setShowEndTimePicker(false);
+                      }
+                    }}
+                    trackColor={{ false: isDark ? "#444" : "#d0d7e2", true: "#3D8BFF" }}
+                    thumbColor="#fff"
+                  />
+                  <Text style={[cs.allDayLabel, { color: theme.text }]}>
+                    {t("event_all_day") || "All day"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Every day toggle */}
+              {isEvent && (
+                <TouchableOpacity
+                  style={cs.allDayRow}
+                  activeOpacity={0.7}
+                  onPress={() => setEveryDay((p) => !p)}
+                >
+                  <Switch
+                    value={everyDay}
+                    onValueChange={setEveryDay}
+                    trackColor={{ false: isDark ? "#444" : "#d0d7e2", true: "#3D8BFF" }}
+                    thumbColor="#fff"
+                  />
+                  <Text style={[cs.allDayLabel, { color: theme.text }]}>
+                    {t("event_every_day") || "Every day"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               <View style={[cs.dateTimeContainer, (showDatePicker || showTimePicker) && { zIndex: 40 }]}>
                 <View style={cs.dateTimeRow}>
                   <TouchableOpacity
@@ -977,23 +1120,25 @@ export default function CreatePost() {
                       </TouchableOpacity>
                     )}
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[cs.filterChip, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
-                    onPress={() => { setShowTimePicker((p) => !p); setShowDatePicker(false); setShowEndDatePicker(false); setShowEndTimePicker(false); }}
-                    onLongPress={() => setSelectedTime(null)}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="clock" size={15} color="#2F91FF" style={{ marginRight: 6 }} />
-                    <Text style={[cs.filterText, { color: theme.text }]}>{timeLabel}</Text>
-                    <Feather name={showTimePicker ? "chevron-up" : "chevron-down"} size={14} color={subtle} style={{ marginLeft: 4 }} />
-                  </TouchableOpacity>
+                  {!allDay && (
+                    <TouchableOpacity
+                      style={[cs.filterChip, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
+                      onPress={() => { setShowTimePicker((p) => !p); setShowDatePicker(false); setShowEndDatePicker(false); setShowEndTimePicker(false); }}
+                      onLongPress={() => setSelectedTime(null)}
+                      activeOpacity={0.8}
+                    >
+                      <Feather name="clock" size={15} color="#2F91FF" style={{ marginRight: 6 }} />
+                      <Text style={[cs.filterText, { color: theme.text }]}>{timeLabel}</Text>
+                      <Feather name={showTimePicker ? "chevron-up" : "chevron-down"} size={14} color={subtle} style={{ marginLeft: 4 }} />
+                    </TouchableOpacity>
+                  )}
                 </View>
                 {showDatePicker && (
                   <View style={[cs.pickerDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#d0d7e2" }]}>
                     <DateTimePicker value={selectedDate ? new Date(selectedDate) : new Date()} mode="date" display={Platform.OS === "ios" ? "inline" : "calendar"} onChange={handleDateChange} minimumDate={new Date()} style={{ alignSelf: "center" }} />
                   </View>
                 )}
-                {showTimePicker && (
+                {!allDay && showTimePicker && (
                   <View style={[cs.pickerDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#d0d7e2" }]}>
                     <DateTimePicker value={selectedTime ? timeStringToDate(selectedTime) : new Date()} mode="time" display={Platform.OS === "ios" ? "spinner" : "clock"} onChange={handleTimeChange} style={{ alignSelf: "center" }} />
                   </View>
@@ -1016,23 +1161,25 @@ export default function CreatePost() {
                       </TouchableOpacity>
                     )}
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[cs.filterChip, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
-                    onPress={() => { setShowEndTimePicker((p) => !p); setShowEndDatePicker(false); setShowDatePicker(false); setShowTimePicker(false); }}
-                    onLongPress={() => setSelectedEndTime(null)}
-                    activeOpacity={0.8}
-                  >
-                    <Feather name="clock" size={15} color={isDark ? "#888" : "#aaa"} style={{ marginRight: 6 }} />
-                    <Text style={[cs.filterText, { color: selectedEndTime ? theme.text : subtle }]}>{endTimeLabel}</Text>
-                    <Feather name={showEndTimePicker ? "chevron-up" : "chevron-down"} size={14} color={subtle} style={{ marginLeft: 4 }} />
-                  </TouchableOpacity>
+                  {!allDay && (
+                    <TouchableOpacity
+                      style={[cs.filterChip, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", backgroundColor: inputBg }]}
+                      onPress={() => { setShowEndTimePicker((p) => !p); setShowEndDatePicker(false); setShowDatePicker(false); setShowTimePicker(false); }}
+                      onLongPress={() => setSelectedEndTime(null)}
+                      activeOpacity={0.8}
+                    >
+                      <Feather name="clock" size={15} color={isDark ? "#888" : "#aaa"} style={{ marginRight: 6 }} />
+                      <Text style={[cs.filterText, { color: selectedEndTime ? theme.text : subtle }]}>{endTimeLabel}</Text>
+                      <Feather name={showEndTimePicker ? "chevron-up" : "chevron-down"} size={14} color={subtle} style={{ marginLeft: 4 }} />
+                    </TouchableOpacity>
+                  )}
                 </View>
                 {showEndDatePicker && (
                   <View style={[cs.pickerDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#d0d7e2" }]}>
                     <DateTimePicker value={selectedEndDate ? new Date(selectedEndDate) : (selectedDate ? new Date(selectedDate) : new Date())} mode="date" display={Platform.OS === "ios" ? "inline" : "calendar"} onChange={handleEndDateChange} minimumDate={selectedDate ? new Date(selectedDate) : new Date()} style={{ alignSelf: "center" }} />
                   </View>
                 )}
-                {showEndTimePicker && (
+                {!allDay && showEndTimePicker && (
                   <View style={[cs.pickerDropdown, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#d0d7e2" }]}>
                     <DateTimePicker value={selectedEndTime ? timeStringToDate(selectedEndTime) : new Date()} mode="time" display={Platform.OS === "ios" ? "spinner" : "clock"} onChange={handleEndTimeChange} style={{ alignSelf: "center" }} />
                   </View>
@@ -1146,6 +1293,64 @@ export default function CreatePost() {
             </View>
           )}
 
+          {/* ── Collaborators ── */}
+          {(isEvent || isAd || postType === "article" || postType === "profilePost") && (
+            <View style={{ marginTop: 16 }}>
+              <Text style={[cs.sectionLabel, { color: subtle }]}>{t("create_post_collaborators_label") || "Collaborators"}</Text>
+              {collaborators.length > 0 && (
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                  {collaborators.map((u) => (
+                    <View
+                      key={u}
+                      style={{ flexDirection: "row", alignItems: "center", backgroundColor: isDark ? "#2a2a2a" : "#eef4ff", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 }}
+                    >
+                      <Text style={{ color: isDark ? "#aad4ff" : "#1a6fd4", fontFamily: "Poppins", fontSize: 13 }}>@{u}</Text>
+                      <TouchableOpacity onPress={() => removeCollaborator(u)} style={{ marginLeft: 6 }} hitSlop={8}>
+                        <Feather name="x" size={12} color={isDark ? "#aaa" : "#666"} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+              <View style={{ position: "relative", zIndex: 6 }}>
+                <View style={[cs.inputWrap, { borderColor: theme.border, backgroundColor: inputBg }]}>
+                  <Feather name="users" size={15} color="#2F91FF" style={{ marginRight: 8 }} />
+                  <TextInput
+                    placeholder={t("create_post_collaborators_placeholder") || "Search users to collaborate…"}
+                    placeholderTextColor={subtle}
+                    value={collabInput}
+                    onChangeText={(v) => { setCollabInput(v); searchCollaborators(v); }}
+                    style={[cs.input, { color: theme.text }]}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {!!collabInput && (
+                    <TouchableOpacity onPress={() => { setCollabInput(""); setCollabResults([]); }} hitSlop={8}>
+                      <Feather name="x" size={14} color={subtle} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {collabResults.length > 0 && (
+                  <View style={[cs.suggestionsBox, { backgroundColor: isDark ? "#1a1a1a" : "#fff", borderColor: isDark ? "#444" : "#ddd" }]}>
+                    {collabResults.map((u) => (
+                      <TouchableOpacity
+                        key={u.username}
+                        style={cs.suggestionItem}
+                        onPress={() => addCollaborator(u.username)}
+                      >
+                        <Feather name="user" size={13} color="#2F91FF" style={{ marginRight: 8 }} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[cs.suggestionText, { color: theme.text }]}>@{u.username}</Text>
+                          {!!u.name && <Text style={[cs.suggestionText, { color: subtle, fontSize: 12 }]}>{u.name}</Text>}
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
+
           {/* ── Dynamic panels ── */}
           {isEvent && <EventPanel onState={setEventStateSafe} />}
           {isAd    && <AdPanel    onState={setAdState}    />}
@@ -1252,6 +1457,8 @@ const cs = StyleSheet.create({
   // Date / time
   dateTimeContainer: { marginBottom: 4, position: "relative", zIndex: 20 },
   dateTimeRow:       { flexDirection: "row", alignItems: "center", columnGap: 10 },
+  allDayRow:         { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  allDayLabel:       { fontFamily: "Poppins", fontSize: 14, marginLeft: 10 },
   filterChip:        { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10 },
   filterText:        { fontFamily: "Poppins", fontSize: 13 },
   filterClear:       { fontSize: 15, marginLeft: 4, fontFamily: "Poppins" },

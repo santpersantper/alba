@@ -68,6 +68,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [showFollowedPosts, setShowFollowedPosts] = useState(false);
 
   const [allowTags, setAllowTags] = useState(true);
+  const [allowsCollab, setAllowsCollab] = useState(true);
 
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [blockedProfiles, setBlockedProfiles] = useState([]);
@@ -131,7 +132,7 @@ export default function CommunitySettingsScreen({ navigation }) {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, followed_users")
+        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, allows_collab, followed_users")
         .eq("id", u.id)
         .maybeSingle();
 
@@ -143,6 +144,7 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (typeof data.allow_dms === "boolean") setAllowDMs(data.allow_dms);
       if (typeof data.show_followed_users_posts === "boolean") setShowFollowedPosts(data.show_followed_users_posts);
       if (typeof data.allow_tags === "boolean") setAllowTags(data.allow_tags);
+      if (typeof data.allows_collab === "boolean") setAllowsCollab(data.allows_collab);
       const fu = Array.isArray(data.followed_users) ? data.followed_users : [];
       setFollowedUserIds(fu);
       if (typeof data.name === "string") setEditName(data.name);
@@ -234,6 +236,11 @@ export default function CommunitySettingsScreen({ navigation }) {
       return;
     }
     if (trimmed.length < 3) {
+      setUsernameStatus("invalid");
+      return;
+    }
+    // only letters, numbers, dots, underscores; no leading/trailing/consecutive dots
+    if (!/^[a-zA-Z0-9._]+$/.test(trimmed) || /^\.|\.$|\.\./.test(trimmed)) {
       setUsernameStatus("invalid");
       return;
     }
@@ -598,7 +605,11 @@ export default function CommunitySettingsScreen({ navigation }) {
                 autoCapitalize="none"
                 autoCorrect={false}
                 value={editUsername}
-                onChangeText={setEditUsername}
+                onChangeText={(v) => {
+                  let cleaned = v.replace(/[^a-zA-Z0-9._]/g, "").slice(0, 25);
+                  cleaned = cleaned.replace(/\.{2,}/g, ".");
+                  setEditUsername(cleaned);
+                }}
               />
               {usernameStatus === "checking" && (
                 <View style={styles.usernameStatusRow}>
@@ -1127,6 +1138,23 @@ export default function CommunitySettingsScreen({ navigation }) {
                 onValueChange={async (val) => {
                   setAllowTags(val);
                   await updateProfile({ allow_tags: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("settings_allow_collab") || "Allow others to include me as collaborator"}</Text>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>
+                  {t("settings_allow_collab_sub") || "Others can tag you as a collaborator on their posts"}
+                </Text>
+              </View>
+              <Switch
+                value={allowsCollab}
+                onValueChange={async (val) => {
+                  setAllowsCollab(val);
+                  await updateProfile({ allows_collab: val });
                 }}
                 trackColor={{ false: borderColor, true: accent }}
                 thumbColor="#fff"

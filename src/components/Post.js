@@ -34,6 +34,8 @@ import { supabase } from "../lib/supabase";
 import { posthog } from "../lib/analytics";
 
 import ShareMenu from "../components/ShareMenu";
+import SharePostModal from "../components/SharePostModal";
+import SharedPostView from "../components/SharedPostView";
 import BuyModal from "../components/BuyModal";
 
 import ThemedView from "../theme/ThemedView";
@@ -331,6 +333,18 @@ function VideoSlide({ uri, width, height, index, autoPlay }) {
   );
 }
 
+/* ---------- localized post type label ---------- */
+function getLocalizedTypeLabel(type, t) {
+  const k = String(type || "").toLowerCase();
+  if (k === "event") return t("post_type_label_event") || "Event";
+  if (k === "ad") return t("post_type_label_ad") || "Ad";
+  if (k === "article") return t("post_type_label_article") || "Article";
+  if (k === "profilepost" || k === "profile") return t("post_type_label_profilePost") || "Profile Post";
+  if (k === "product") return t("post_type_label_product") || "Product";
+  if (k === "feedpost" || k === "feed") return t("post_type_label_feedPost") || "Post";
+  return null;
+}
+
 /* ---------- main component ---------- */
 export default function Post(props) {
   const {
@@ -364,6 +378,7 @@ export default function Post(props) {
     isActive = false,
 
     postMediaUriHint,
+    isNestedShare = false, // prevents share-of-share infinite nesting
   } = props;
 
   const basePost = props.post || props.item || {};
@@ -527,8 +542,31 @@ export default function Post(props) {
   const [reportSuccessOpen, setReportSuccessOpen] = useState(false);
 
   const [shareVisible, setShareVisible] = useState(false);
+  const [sharePostModalVisible, setSharePostModalVisible] = useState(false);
   const [buyVisible, setBuyVisible] = useState(false);
   const [joinPendingModal, setJoinPendingModal] = useState(false);
+  const [isSoldOut, setIsSoldOut] = useState(false);
+  const [collabModalOpen, setCollabModalOpen] = useState(false);
+
+  // For share posts: the original post data fetched from DB
+  const [originalPost, setOriginalPost] = useState(null);
+  const sharedPostId = basePost.shared_post_id ?? props.shared_post_id ?? null;
+
+  useEffect(() => {
+    if (!sharedPostId || isNestedShare) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("posts")
+          .select("*")
+          .eq("id", sharedPostId)
+          .maybeSingle();
+        if (alive && data) setOriginalPost(data);
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, [sharedPostId, isNestedShare]);
 
   // Translation
   const [translated, setTranslated] = useState(false);
@@ -853,6 +891,28 @@ export default function Post(props) {
     );
   }
 
+  // Sold-out check: fetch event ticket_holders count when fixed ticket count is set
+  useEffect(() => {
+    const isFixed = !!(basePost.is_ticket_number_fixed ?? props.is_ticket_number_fixed);
+    const maxTickets = basePost.ticket_number ?? props.ticket_number;
+    if (!isFixed || !maxTickets || !effectivePostId) { setIsSoldOut(false); return; }
+
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("events")
+          .select("ticket_holders")
+          .eq("post_id", effectivePostId)
+          .maybeSingle();
+        if (!mounted) return;
+        const count = Array.isArray(data?.ticket_holders) ? data.ticket_holders.length : 0;
+        setIsSoldOut(count >= maxTickets);
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, [effectivePostId, basePost.is_ticket_number_fixed, basePost.ticket_number]);
+
   /* ---------- actions & CTAs ---------- */
   const rawActions = (actions || basePost.actions || []).filter(Boolean);
   const hasSaveAction = rawActions.some((a) => normalizeAction(a) === "save");
@@ -871,14 +931,20 @@ export default function Post(props) {
       const conf = key ? ACTIONS[key] : null;
       const text = conf ? t(conf.i18nKey) || conf.text : String(raw);
 
+      const soldOut = key === "tickets" && isSoldOut;
+
       const legacyIcon = actionIconPaths?.[i];
-      const icon = conf?.icon
+      const icon = soldOut
+        ? null // replaced by featherIcon below
+        : conf?.icon
         ? conf.icon
         : typeof legacyIcon === "string"
         ? { uri: legacyIcon }
         : legacyIcon || null;
+      const featherIcon = soldOut ? "slash" : null;
 
-      const bg = conf?.color || colors?.[i] || undefined;
+      const displayText = soldOut ? (t("actions_sold_out") || "Sold out") : text;
+      const bg = soldOut ? "#9CA3AF" : (conf?.color || colors?.[i] || undefined);
 
       let onPress;
 
@@ -887,7 +953,7 @@ export default function Post(props) {
       } else if (key === "share") {
         onPress = onPressShare ? onPressShare : () => setShareVisible(true);
       } else if (key === "tickets" || key === "buy") {
-        onPress = onPressBuy || (() => setBuyVisible(true));
+        onPress = soldOut ? undefined : (onPressBuy || (() => setBuyVisible(true)));
       } else if (key === "message") {
         const goToDm = () => {
           const target = stripAt(displayUser || "");
@@ -933,7 +999,7 @@ export default function Post(props) {
         };
       }
 
-      return { key: key || `custom-${i}`, text, icon, bg, onPress };
+      return { key: key || `custom-${i}`, text: displayText, icon, featherIcon, bg, onPress, disabled: soldOut };
     });
 
   const runDelete = async () => {
@@ -997,13 +1063,62 @@ export default function Post(props) {
     ? [prettyDateRange, timeRange, rawLocation].filter(Boolean).join(", ")
     : [rawLocation].filter(Boolean).join(", ");
 
+  // ── shared post rendering ──────────────────────────────────────────────────
+  if (sharedPostId && !isNestedShare) {
+    const sharerUser = String(displayUser || basePost.username || "").replace(/^@/, "");
+    const originalType = originalPost?.type ?? basePost.type ?? "";
+    const shareComment = basePost.comment ?? props.comment ?? null;
+    const nestedPost = originalPost ? (
+      <Post
+        key={originalPost.id}
+        post={originalPost}
+        item={originalPost}
+        postId={originalPost.id}
+        authorId={originalPost.author_id}
+        user={originalPost.username ?? originalPost.user}
+        userPicUri={originalPost.userpicuri}
+        title={originalPost.title}
+        description={originalPost.description}
+        postMediaUri={originalPost.postmediauri}
+        actions={originalPost.actions}
+        labelTag={null}
+        isActive={isActive}
+        isNestedShare
+      />
+    ) : null;
+    const header = (
+      <SharedPostView
+        sharePostId={effectivePostId}
+        sharerUsername={sharerUser}
+        originalPostType={originalType}
+        comment={shareComment}
+        isOwn={!!authUserId && authUserId === (resolvedAuthorId ?? basePost.author_id)}
+        onDeleted={() => {
+          if (props.onDeleted) props.onDeleted(effectivePostId);
+        }}
+      />
+    );
+    return (
+      <>
+        {header}
+        {nestedPost}
+      </>
+    );
+  }
+
+  // ── localized label ─────────────────────────────────────────────────────────
+  const postType = props.type || basePost.type || "";
+  const localizedLabel = labelTag
+    ? (getLocalizedTypeLabel(postType, t) || labelTag)
+    : null;
+
   return (
     <ThemedView style={[styles.card, { backgroundColor: isDark ? "#222222" : "#FFFFFF" }]}>
-      {labelTag && (
+      {localizedLabel && (
         <ThemedView
           style={[styles.postLabelChip, { backgroundColor: labelColor || "#2F91FF" }]}
         >
-          <ThemedText style={styles.postLabelText}>{labelTag}</ThemedText>
+          <ThemedText style={styles.postLabelText}>{localizedLabel}</ThemedText>
         </ThemedView>
       )}
 
@@ -1016,9 +1131,39 @@ export default function Post(props) {
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
-          <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
-            <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
+            <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
+              <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
+            </TouchableOpacity>
+            {(() => {
+              const collabs = Array.isArray(basePost.collaborators) ? basePost.collaborators.filter(Boolean) : [];
+              if (collabs.length === 0) return null;
+              if (collabs.length === 1) {
+                return (
+                  <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
+                    {" "}and{" "}
+                    <ThemedText
+                      style={[styles.handleLine]}
+                      onPress={() => navigation.navigate("Profile", { username: collabs[0] })}
+                    >
+                      @{collabs[0]}
+                    </ThemedText>
+                  </ThemedText>
+                );
+              }
+              return (
+                <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
+                  {" "}and{" "}
+                  <ThemedText
+                    style={[styles.handleLine, { color: isDark ? "#59A7FF" : "#1a6fd4" }]}
+                    onPress={() => setCollabModalOpen(true)}
+                  >
+                    {(t("collab_others") || "{n} others").replace("{n}", String(collabs.length))}
+                  </ThemedText>
+                </ThemedText>
+              );
+            })()}
+          </View>
           {(isEventPost ? (prettyDateRange || timeRange || rawLocation) : rawLocation) && (
             <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" }}>
               {isEventPost && (prettyDateRange || timeRange) && (
@@ -1128,14 +1273,20 @@ export default function Post(props) {
             <TouchableOpacity
               key={`${cta.key}-${i}`}
               onPress={cta.onPress}
-              activeOpacity={0.85}
+              activeOpacity={cta.disabled ? 1 : 0.85}
+              disabled={cta.disabled}
               style={[
                 styles.ctaButton,
                 cta.bg ? { backgroundColor: cta.bg } : null,
                 i === ctas.length - 1 ? { marginRight: 0 } : null,
               ]}
             >
-              {cta.icon && <Image source={cta.icon} style={styles.ctaIcon} resizeMode="contain" />}
+              {cta.featherIcon
+                ? <Feather name={cta.featherIcon} size={16} color="#fff" style={styles.ctaIcon} />
+                : cta.icon
+                ? <Image source={cta.icon} style={styles.ctaIcon} resizeMode="contain" />
+                : null
+              }
               <ThemedText style={styles.ctaLabel} numberOfLines={1} ellipsizeMode="tail">
                 {cta.text}
               </ThemedText>
@@ -1151,6 +1302,26 @@ export default function Post(props) {
         postId={effectivePostId}
         isVideo={(props.type || basePost.type || "") === "feedPost"}
         thumbnailUrl={basePost.thumbnail_url || hintArr.find((u) => u && !isVideoUrl(u)) || null}
+        onShareOnProfile={!isNestedShare ? () => setSharePostModalVisible(true) : undefined}
+        t={t}
+      />
+      <SharePostModal
+        visible={sharePostModalVisible}
+        onClose={() => setSharePostModalVisible(false)}
+        postId={effectivePostId}
+        postPreview={{
+          id: effectivePostId,
+          username: resolvedUsername || displayUsername,
+          userpicuri: avatarForHeader,
+          title: title || basePost.title,
+          description: description || basePost.description,
+          postmediauri: mediaArr,
+          thumbnail_url: basePost.thumbnail_url || null,
+          type: props.type || basePost.type || null,
+        }}
+        onShared={(newId) => {
+          if (props.onShared) props.onShared(newId);
+        }}
       />
       <BuyModal visible={buyVisible} onClose={() => setBuyVisible(false)} postId={effectivePostId} />
 
@@ -1212,6 +1383,40 @@ export default function Post(props) {
               </TouchableOpacity>
             )}
 
+            {/* Remove collaboration — only for collaborators who are not the post author */}
+            {!canDelete && authUsername && Array.isArray(basePost.collaborators) && basePost.collaborators.includes(authUsername) && (
+              <>
+                <ThemedView style={styles.menuDivider} />
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={async () => {
+                    setMenuOpen(false);
+                    try {
+                      await supabase.rpc("remove_collaborator", {
+                        p_post_id: effectivePostId,
+                        p_username: authUsername,
+                      });
+                      const posterUsername = String(displayUser || basePost.user || "").replace(/^@/, "");
+                      supabase.functions.invoke("send-push", {
+                        body: {
+                          type: "collab_removed",
+                          collaborator_username: authUsername,
+                          poster_username: posterUsername,
+                        },
+                      }).catch(() => {});
+                    } catch (e) {
+                      console.warn("[Post] remove_collaborator error:", e?.message);
+                    }
+                  }}
+                >
+                  <Feather name="user-minus" size={16} color="#d23b3b" style={{ marginRight: 8 }} />
+                  <ThemedText style={[styles.menuText, { color: "#d23b3b" }]}>
+                    {t("collab_remove_menu") || "Remove collaboration"}
+                  </ThemedText>
+                </TouchableOpacity>
+              </>
+            )}
+
             {canDelete && <ThemedView style={styles.menuDivider} />}
 
             {canDelete && (
@@ -1254,6 +1459,35 @@ export default function Post(props) {
             )}
           </ThemedView>
         </View>
+      )}
+
+      {/* Collaborator list modal (when "X others" is tapped) */}
+      {collabModalOpen && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setCollabModalOpen(false)}>
+          <View style={styles.menuBackdrop}>
+            <ThemedView style={[styles.menuCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff", padding: 20, margin: 32, borderRadius: 16 }]}>
+              <ThemedText style={{ fontFamily: "PoppinsBold", fontSize: 15, marginBottom: 14 }}>
+                Collaborators
+              </ThemedText>
+              {(Array.isArray(basePost.collaborators) ? basePost.collaborators.filter(Boolean) : []).map((u) => (
+                <TouchableOpacity
+                  key={u}
+                  style={{ paddingVertical: 8, flexDirection: "row", alignItems: "center" }}
+                  onPress={() => { setCollabModalOpen(false); navigation.navigate("Profile", { username: u }); }}
+                >
+                  <Feather name="user" size={14} color={isDark ? "#aaa" : "#555"} style={{ marginRight: 8 }} />
+                  <ThemedText style={{ fontFamily: "Poppins", fontSize: 14 }}>@{u}</ThemedText>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={{ marginTop: 14, backgroundColor: "#3D8BFF", borderRadius: 10, paddingVertical: 10, alignItems: "center" }}
+                onPress={() => setCollabModalOpen(false)}
+              >
+                <ThemedText style={{ color: "#fff", fontFamily: "PoppinsBold" }}>Close</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </View>
+        </Modal>
       )}
 
       <Modal visible={reportOpen} transparent animationType="fade" onRequestClose={() => setReportOpen(false)}>
@@ -1379,7 +1613,7 @@ const styles = StyleSheet.create({
   description: { fontSize: 14, marginBottom: 4, fontFamily: "Poppins", paddingLeft: 10, paddingRight: 10 },
   readMoreText: { fontSize: 12, fontFamily: "PoppinsBold", paddingLeft: 10, paddingRight: 10, marginBottom: 8 },
 
-  carouselWrap: { width: "100%", overflow: "hidden", marginBottom: 12 },
+  carouselWrap: { width: "100%", overflow: "hidden", marginTop: 4, marginBottom: 12 },
   mediaItem: { width: "100%", height: "100%" },
   dots: { position: "absolute", bottom: 8, alignSelf: "center", flexDirection: "row", gap: 6, backgroundColor: "rgba(0,0,0,0.15)", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.6)" },

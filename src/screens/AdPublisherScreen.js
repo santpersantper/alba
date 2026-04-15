@@ -192,6 +192,7 @@ export default function AdPublisherScreen() {
   const [bcLoading, setBcLoading] = useState(false);
   const [buyers, setBuyers] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [sharedBy, setSharedBy] = useState([]);
   const [bcPickerVisible, setBcPickerVisible] = useState(false);
 
   /* ── auth ── */
@@ -311,6 +312,14 @@ export default function AdPublisherScreen() {
       console.log("[AdPublisher] buyers:", buyerData?.length ?? 0, "error:", buyErr?.message ?? "none");
       console.log("[AdPublisher] contacts:", contactData?.length ?? 0, "error:", contactErr?.message ?? "none");
       setBuyers(buyerData || []);
+
+      // Fetch users who shared this ad post
+      const { data: sharePosts } = await supabase
+        .from("posts")
+        .select("username, created_at")
+        .eq("shared_post_id", adId)
+        .order("created_at", { ascending: false });
+      setSharedBy(sharePosts || []);
 
       // Fetch live avatars from profiles so stale snapshots don't show old pics
       let enrichedContacts = contactData || [];
@@ -910,6 +919,45 @@ export default function AdPublisherScreen() {
                     <TouchableOpacity
                       style={s.bcMsgBtn}
                       onPress={() => msgUser(c.contacter_username)}
+                      activeOpacity={0.85}
+                    >
+                      <Feather name="message-circle" size={14} color="#fff" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ))
+            )}
+
+            {/* ── Shared the ad ── */}
+            <Text style={[s.sectionLabel, { color: theme.subtleText || "#8c97a8", marginTop: 20 }]}>
+              {t("shared_ad_list_title") || "SHARED THE AD"} ({sharedBy.length})
+            </Text>
+
+            {sharedBy.length === 0 ? (
+              <View style={[s.bcEmptyCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                <Feather name="repeat" size={24} color={theme.subtleText || "#8c97a8"} />
+                <Text style={[s.bcEmptyText, { color: theme.subtleText || "#8c97a8" }]}>
+                  {t("shared_list_empty") || "Nobody has shared this yet."}
+                </Text>
+              </View>
+            ) : (
+              sharedBy.map((s_item, idx) => (
+                <View key={`shared-${idx}`} style={[s.bcCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                  <View style={[s.bcAvatar, { backgroundColor: "#6C63FF20" }]}>
+                    <Feather name="repeat" size={16} color="#6C63FF" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.bcUsername, { color: theme.text }]}>
+                      {s_item.username ? `@${s_item.username}` : "—"}
+                    </Text>
+                    <Text style={[s.bcDate, { color: theme.subtleText || "#8c97a8" }]}>
+                      {fmtDate(s_item.created_at)}
+                    </Text>
+                  </View>
+                  {s_item.username ? (
+                    <TouchableOpacity
+                      style={s.bcMsgBtn}
+                      onPress={() => msgUser(s_item.username)}
                       activeOpacity={0.85}
                     >
                       <Feather name="message-circle" size={14} color="#fff" />

@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 import { posthog } from "../lib/analytics";
 import * as Crypto from "expo-crypto";
 import {
@@ -65,6 +66,7 @@ const looksLikeUuid = (s) =>
 
 export default function BuyModal({ visible, onClose, postId }) {
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
 
   const [loading, setLoading] = useState(false);
   // { title, message, onOk } — replaces all Alert.alert calls
@@ -81,6 +83,14 @@ export default function BuyModal({ visible, onClose, postId }) {
   const [isAgeRestricted, setIsAgeRestricted] = useState(false);
   const [postType, setPostType] = useState(null);
   const [items, setItems] = useState([]);
+
+  // Manual approval + sold-out state
+  const [manuallyApprove, setManuallyApprove] = useState(false);
+  const [approvalInfoPlaceholder, setApprovalInfoPlaceholder] = useState("");
+  const [isSoldOut, setIsSoldOut] = useState(false);
+  // null = not in approval flow, 'form' = showing request form, 'submitted' = done
+  const [approvalStep, setApprovalStep] = useState(null);
+  const [approvalInfo, setApprovalInfo] = useState("");
 
   // auth context
   const [myUsername, setMyUsername] = useState(null);
@@ -163,7 +173,7 @@ export default function BuyModal({ visible, onClose, postId }) {
         let data, fetchError;
         ({ data, error: fetchError } = await supabase
           .from(POSTS_TABLE)
-          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted")
+          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted, manually_approve_attendees, ticket_approval_info, is_ticket_number_fixed, ticket_number, pending_ticket_requests, approved_ticket_buyers")
           .eq("id", postId)
           .maybeSingle());
 
@@ -212,6 +222,37 @@ export default function BuyModal({ visible, onClose, postId }) {
         setProductOptions(pOptions);
         setIsAgeRestricted(!!data.is_age_restricted);
         setPostType(data.type || null);
+
+        // Manual approval — determine initial step based on buyer's status
+        const manApprove = !!data.manually_approve_attendees;
+        setManuallyApprove(manApprove);
+        setApprovalInfoPlaceholder(data.ticket_approval_info || "");
+        setApprovalInfo("");
+
+        if (manApprove && buyerProfile?.username) {
+          const uname = String(buyerProfile.username).toLowerCase();
+          const pendingList = Array.isArray(data.pending_ticket_requests) ? data.pending_ticket_requests : [];
+          const isAlreadyPending = pendingList.some(
+            (r) => String(r?.username || "").toLowerCase() === uname
+          );
+          const approvedList = Array.isArray(data.approved_ticket_buyers) ? data.approved_ticket_buyers : [];
+          const isApproved = approvedList.some(
+            (u) => String(u || "").toLowerCase() === uname
+          );
+          // 'pending' = already submitted awaiting review; 'approved' = can buy normally; null = first time
+          setApprovalStep(isAlreadyPending ? "pending" : isApproved ? "approved" : null);
+        } else {
+          setApprovalStep(null);
+        }
+
+        // Sold-out: check ticket_holders count against ticket_number
+        if (data.is_ticket_number_fixed && data.ticket_number > 0) {
+          const { ev: evData } = await fetchEventForPost(postId);
+          const holdersCount = Array.isArray(evData?.ticket_holders) ? evData.ticket_holders.length : 0;
+          setIsSoldOut(holdersCount >= data.ticket_number);
+        } else {
+          setIsSoldOut(false);
+        }
 
         const baseToggleState = (pBools || []).reduce((acc, label) => {
           acc[label] = false;
@@ -610,8 +651,45 @@ export default function BuyModal({ visible, onClose, postId }) {
     return "Connection error. Please check your internet and try again.";
   };
 
+  const submitApprovalRequest = async () => {
+    if (!myUsername || !postId) return;
+    setLoading(true);
+    try {
+      await supabase.rpc("submit_ticket_request", {
+        p_post_id: postId,
+        p_username: myUsername,
+        p_info: approvalInfo.trim(),
+      });
+      setApprovalStep("submitted");
+    } catch (e) {
+      WARN("submitApprovalRequest error:", e?.message);
+      showFeedback("Error", "Could not submit your request. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handlePay = async () => {
     if (loading) return;
+
+    // If manual approval is required and user hasn't been approved yet, show the request flow
+    if (manuallyApprove && approvalStep !== "approved") {
+      if (approvalStep === "pending") {
+        showFeedback(
+          t("ticket_request_already_pending_title") || "Already submitted",
+          t("ticket_request_already_pending") || "Your request is already pending. The event organizer will get back to you."
+        );
+        return;
+      }
+      // null → show the approval request form
+      setApprovalStep("form");
+      return;
+    }
+
+    if (isSoldOut) {
+      showFeedback("Sold out", "There are no more tickets available for this event.");
+      return;
+    }
 
     const units = buildTicketUnits();
     const err = validateBeforePay(units);
@@ -989,12 +1067,74 @@ export default function BuyModal({ visible, onClose, postId }) {
 
   const showEmpty = !loading && (!types || types.length === 0);
 
+  // Approval request form view
+  const renderApprovalForm = () => (
+    <View style={[styles.card, { backgroundColor: theme.gray }]}>
+      <Text style={[styles.feedbackTitle, { color: theme.text }]}>
+        {t("ticket_request_title") || "Approval required"}
+      </Text>
+      <Text style={[styles.feedbackMessage, { color: theme.text, marginBottom: 16 }]}>
+        {t("ticket_request_body") || "The event organizer has to determine if you are eligible to attend this event."}
+      </Text>
+      <View style={[styles.approvalInputWrap, { borderColor: isDark ? "#444" : "#E0E0E0", backgroundColor: isDark ? "#1E1E1E" : "#FAFAFA" }]}>
+        <TextInput
+          value={approvalInfo}
+          onChangeText={setApprovalInfo}
+          placeholder={approvalInfoPlaceholder || (t("event_approval_info_placeholder_hint") || "e.g. university card number")}
+          placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
+          style={[styles.approvalInput, { color: theme.text }]}
+          multiline
+        />
+      </View>
+      <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+        <TouchableOpacity
+          style={[styles.feedbackOkBtn, { flex: 1, backgroundColor: isDark ? "#333" : "#eee" }]}
+          onPress={() => { setApprovalStep(null); onClose?.(); }}
+        >
+          <Text style={[styles.feedbackOkText, { color: theme.text }]}>Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.feedbackOkBtn, { flex: 1, backgroundColor: "#3D8BFF", opacity: loading ? 0.6 : 1 }]}
+          onPress={submitApprovalRequest}
+          disabled={loading}
+        >
+          {loading
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.feedbackOkText}>{t("ticket_request_submit") || "Submit"}</Text>
+          }
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderApprovalSubmitted = () => (
+    <View style={[styles.feedbackCard, { backgroundColor: theme.gray }]}>
+      <Text style={[styles.feedbackTitle, { color: theme.text }]}>
+        {t("ticket_request_submitted_title") || "Request submitted"}
+      </Text>
+      <Text style={[styles.feedbackMessage, { color: theme.text }]}>
+        {t("ticket_request_submitted_body") || "Your info was submitted and the event organizer will evaluate it."}
+      </Text>
+      <TouchableOpacity
+        style={[styles.feedbackOkBtn, { backgroundColor: "#4EBCFF" }]}
+        onPress={() => { setApprovalStep(null); onClose?.(); }}
+      >
+        <Text style={styles.feedbackOkText}>OK</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <Modal
-      visible={visible || !!feedback}
+      visible={visible || !!feedback || approvalStep === "form" || approvalStep === "submitted"}
       transparent
       animationType="fade"
-      onRequestClose={() => { if (feedback) setFeedback(null); else onClose?.(); }}
+      onRequestClose={() => {
+        if (feedback) { setFeedback(null); return; }
+        if (approvalStep === "form") { setApprovalStep(null); return; }
+        if (approvalStep === "submitted") { setApprovalStep(null); onClose?.(); return; }
+        onClose?.();
+      }}
     >
       <View style={styles.overlay}>
         {feedback ? (
@@ -1008,7 +1148,9 @@ export default function BuyModal({ visible, onClose, postId }) {
               <Text style={styles.feedbackOkText}>OK</Text>
             </TouchableOpacity>
           </View>
-        ) : (
+        ) : approvalStep === "submitted" ? renderApprovalSubmitted()
+        : approvalStep === "form" ? renderApprovalForm()
+        : (
         <View style={[styles.card, { backgroundColor: theme.gray }]}>
           {loading ? (
             <View style={styles.loadingBox}>
@@ -1417,5 +1559,21 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontFamily: "PoppinsBold",
     fontSize: 14,
+    textAlign: "center",
+  },
+
+  approvalInputWrap: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 80,
+    justifyContent: "flex-start",
+  },
+  approvalInput: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    textAlignVertical: "top",
+    minHeight: 60,
   },
 });

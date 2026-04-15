@@ -591,6 +591,72 @@ const STRINGS = {
     event_scan_validating: "Validating…",
     event_scan_scanned: "{n} scanned",
     event_age_restricted: "+18 only event",
+    event_sell_fixed_tickets: "Sell fixed number of tickets",
+    event_ticket_how_many: "How many?",
+    event_manually_approve_buyers: "Manually approve ticket buyers",
+    event_approval_info_label: "Required info to approve buyer",
+    event_approval_info_placeholder_hint: "e.g. university card number",
+
+    /* ---------- Ticket approval flow (BuyModal) ---------- */
+    ticket_request_title: "Approval required",
+    ticket_request_body: "The event organizer has to determine if you are eligible to attend this event.",
+    ticket_request_submit: "Submit",
+    ticket_request_submitted_title: "Request submitted",
+    ticket_request_submitted_body: "Your info was submitted and the event organizer will evaluate it.",
+    ticket_request_already_pending: "Your request is already pending. The event organizer will get back to you.",
+    ticket_request_already_pending_title: "Already submitted",
+
+    /* ---------- Pending ticket requests (EventSettingsScreen) ---------- */
+    pending_ticket_requests_title: "Pending ticket requests",
+    pending_ticket_requests_empty: "No pending requests.",
+
+    /* ---------- Sold out ---------- */
+    actions_sold_out: "Sold out",
+
+    /* ---------- Collaborators ---------- */
+    create_post_collaborators_label: "Collaborators",
+    create_post_collaborators_placeholder: "Search users to collaborate…",
+    collab_remove_menu: "Remove collaboration",
+    collab_others: "{n} others",
+    event_all_day: "All day",
+    event_every_day: "Every day",
+
+    settings_allow_collab: "Allow others to include me as collaborator",
+    settings_allow_collab_sub: "Others can tag you as a collaborator on their posts",
+
+    /* ---------- Share on profile ---------- */
+    share_on_profile: "Share on my profile",
+    share_comment_placeholder: "Say something about this… (optional)",
+    share_search_users_placeholder: "Search people…",
+    share_message_placeholder: "Add a message…",
+    send_button: "Send",
+    share_button: "Share",
+    share_rate_limited: "You already shared this recently. Try again in a few minutes.",
+    share_success: "Post shared!",
+    share_error: "Could not share. Please try again.",
+    shared_an_event: "{user} shared an Event",
+    shared_an_ad: "{user} shared an Ad",
+    shared_an_article: "{user} shared an Article",
+    shared_a_profile_post: "{user} shared a Profile Post",
+    shared_a_product: "{user} shared a Product",
+    shared_a_post: "{user} shared a Post",
+    shared_event_list_title: "Shared the event",
+    shared_ad_list_title: "Shared the ad",
+    shared_list_empty: "Nobody has shared this yet.",
+    share_delete_menu: "Delete share",
+    notif_shared_title: "{user} shared your post",
+    notif_shared_body: "{comment}",
+    notif_follower_shared_title: "{user} shared a post",
+    notif_follower_shared_body: "{comment}",
+
+    /* ---------- Post type labels (localized) ---------- */
+    post_type_label_event: "Event",
+    post_type_label_ad: "Ad",
+    post_type_label_article: "Article",
+    post_type_label_profilePost: "Profile Post",
+    post_type_label_product: "Product",
+    post_type_label_feedPost: "Post",
+    post_type_label_unknown: "Post",
 
     /* ---------- Ad panel ---------- */
     ad_categories: "Ad categories",
@@ -1243,6 +1309,72 @@ const STRINGS = {
     event_scan_validating: "Convalida…",
     event_scan_scanned: "{n} scansionati",
     event_age_restricted: "Evento solo +18",
+    event_sell_fixed_tickets: "Vendi un numero fisso di biglietti",
+    event_ticket_how_many: "Quanti?",
+    event_manually_approve_buyers: "Approva manualmente gli acquirenti",
+    event_approval_info_label: "Info richiesta per l'approvazione",
+    event_approval_info_placeholder_hint: "es. numero tessera universitaria",
+
+    /* ---------- Ticket approval flow (BuyModal) ---------- */
+    ticket_request_title: "Approvazione richiesta",
+    ticket_request_body: "L'organizzatore dell'evento deve verificare se sei idoneo a partecipare.",
+    ticket_request_submit: "Invia",
+    ticket_request_submitted_title: "Richiesta inviata",
+    ticket_request_submitted_body: "Le tue informazioni sono state inviate e l'organizzatore le esaminerà.",
+    ticket_request_already_pending: "La tua richiesta è già in attesa di revisione. L'organizzatore ti risponderà presto.",
+    ticket_request_already_pending_title: "Già inviata",
+
+    /* ---------- Pending ticket requests (EventSettingsScreen) ---------- */
+    pending_ticket_requests_title: "Richieste di biglietto in sospeso",
+    pending_ticket_requests_empty: "Nessuna richiesta in sospeso.",
+
+    /* ---------- Sold out ---------- */
+    actions_sold_out: "Esaurito",
+
+    /* ---------- Collaborators ---------- */
+    create_post_collaborators_label: "Collaboratori",
+    create_post_collaborators_placeholder: "Cerca utenti da aggiungere…",
+    collab_remove_menu: "Rimuovi collaborazione",
+    collab_others: "{n} altri",
+    event_all_day: "Tutto il giorno",
+    event_every_day: "Ogni giorno",
+
+    settings_allow_collab: "Permetti ad altri di includermi come collaboratore",
+    settings_allow_collab_sub: "Gli altri possono aggiungerti come collaboratore ai loro post",
+
+    /* ---------- Share on profile ---------- */
+    share_on_profile: "Condividi sul mio profilo",
+    share_comment_placeholder: "Dì qualcosa su questo… (opzionale)",
+    share_search_users_placeholder: "Cerca persone…",
+    share_message_placeholder: "Aggiungi un messaggio…",
+    send_button: "Invia",
+    share_button: "Condividi",
+    share_rate_limited: "Hai già condiviso questo di recente. Riprova tra qualche minuto.",
+    share_success: "Post condiviso!",
+    share_error: "Impossibile condividere. Riprova.",
+    shared_an_event: "{user} ha condiviso un Evento",
+    shared_an_ad: "{user} ha condiviso un Annuncio",
+    shared_an_article: "{user} ha condiviso un Articolo",
+    shared_a_profile_post: "{user} ha condiviso un Post profilo",
+    shared_a_product: "{user} ha condiviso un Prodotto",
+    shared_a_post: "{user} ha condiviso un Post",
+    shared_event_list_title: "Ha condiviso l'evento",
+    shared_ad_list_title: "Ha condiviso l'annuncio",
+    shared_list_empty: "Nessuno ha ancora condiviso questo.",
+    share_delete_menu: "Elimina condivisione",
+    notif_shared_title: "{user} ha condiviso il tuo post",
+    notif_shared_body: "{comment}",
+    notif_follower_shared_title: "{user} ha condiviso un post",
+    notif_follower_shared_body: "{comment}",
+
+    /* ---------- Post type labels (localized) ---------- */
+    post_type_label_event: "Evento",
+    post_type_label_ad: "Annuncio",
+    post_type_label_article: "Articolo",
+    post_type_label_profilePost: "Post profilo",
+    post_type_label_product: "Prodotto",
+    post_type_label_feedPost: "Post",
+    post_type_label_unknown: "Post",
 
     /* ---------- Ad panel ---------- */
     ad_categories: "Categorie annunci",

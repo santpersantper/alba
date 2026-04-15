@@ -35,10 +35,11 @@ export default function ShareMenu({
   onClose,
   postId,
   thumbnailUrl,   // set by Post.js when sharing a feed video
-  isVideo,        // true when the post contains video — forces __feed_video__ content even if no thumbnail
+  isVideo,        // true when the post contains video — forces __feed_video__ content even if no markdown
   inviteGroup,
   onSent,
   defaultMessage,
+  onShareOnProfile, // called when user taps "Share on my profile"
   t,
 }) {
   const [fontsLoaded] = useFonts({
@@ -91,7 +92,7 @@ export default function ShareMenu({
       return `https://albaappofficial.com/join/group/${inviteGroup.id}`;
     }
     if (postId != null) {
-      return isVideo || thumbnailUrl
+      return isVideo
         ? `https://albaappofficial.com/video/${postId}`
         : `https://albaappofficial.com/post/${postId}`;
     }
@@ -770,6 +771,20 @@ export default function ShareMenu({
               </TouchableOpacity>
             )}
 
+            {/* SHARE ON MY PROFILE */}
+            {!!postId && typeof onShareOnProfile === "function" && (
+              <TouchableOpacity
+                style={[styles.copyLinkRow, { backgroundColor: isDark ? "#1a1a1a" : "#F4F6F9", marginTop: shareLink ? 8 : 0 }]}
+                onPress={() => { onClose(); onShareOnProfile(); }}
+                activeOpacity={0.75}
+              >
+                <Feather name="repeat" size={18} color="#4EBCFF" style={{ marginRight: 10 }} />
+                <Text style={[styles.copyLinkText, { color: theme.text }]}>
+                  {tx("share_on_profile", "Share on my profile")}
+                </Text>
+              </TouchableOpacity>
+            )}
+
             {/* MENU GRID (packed left-to-right) */}
             <View style={[styles.grid, { marginTop: shareLink || isSearching ? 12 : 2 }]}>
               {loadingGrid ? (
@@ -975,7 +990,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 12,
     paddingTop: 16,
-    paddingBottom: 6,
+    paddingBottom: Platform.OS === "android" ? 24 : 6,
   },
   actionBtn: {
     height: 42,

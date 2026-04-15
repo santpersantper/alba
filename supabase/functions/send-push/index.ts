@@ -191,6 +191,189 @@ Deno.serve(async (req) => {
         }
       }
 
+    // ── Path E: Ticket approval notification (direct invocation from client) ──
+    } else if (body.type === "ticket_approved" && body.recipient_username && body.event_title && body.post_id) {
+      const { data: profile } = await supabaseAdmin
+        .from("profiles")
+        .select("push_token")
+        .eq("username", body.recipient_username as string)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        toSend.push({
+          to: profile.push_token,
+          title: "Ticket approved",
+          body: `You can now buy a ticket for ${body.event_title as string}`,
+          data: { type: "ticket_approved", post_id: body.post_id as string },
+        });
+      }
+
+    // ── Path F: Collaborator tagged notification ──────────────────────────────
+    } else if (body.type === "collab_tagged" && body.collaborator_username && body.poster_username && body.post_id) {
+      const { data: collabProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("push_token")
+        .eq("username", body.collaborator_username as string)
+        .maybeSingle();
+
+      if (collabProfile?.push_token) {
+        toSend.push({
+          to: collabProfile.push_token,
+          title: `@${body.poster_username as string} tagged you`,
+          body: `@${body.poster_username as string} tagged you as a collaborator on their new post. Click to review the post.`,
+          data: { type: "collab_tagged", post_id: body.post_id as string },
+        });
+      }
+
+    // ── Path G: New post from collaborator — notify their followers ───────────
+    } else if (body.type === "new_collab_post" && body.collaborator_username && body.post_id) {
+      // Look up collaborator's UUID
+      const { data: collabRow } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("username", body.collaborator_username as string)
+        .maybeSingle();
+
+      if (collabRow?.id) {
+        // Find everyone who follows this collaborator
+        const { data: followers } = await supabaseAdmin
+          .from("profiles")
+          .select("push_token, notif_prefs")
+          .contains("followed_users", [collabRow.id]);
+
+        for (const f of followers ?? []) {
+          if (!f.push_token) continue;
+          const prefs = (f.notif_prefs || {}) as Record<string, boolean>;
+          if (prefs.followed_posts === false) continue;
+          toSend.push({
+            to: f.push_token,
+            title: "New post",
+            body: `New post from @${body.collaborator_username as string}`,
+            data: { type: "new_collab_post", post_id: body.post_id as string },
+          });
+        }
+      }
+
+    // ── Path H: Collaborator removed — DM from alba_mod to poster ────────────
+    } else if (body.type === "collab_removed" && body.collaborator_username && body.poster_username) {
+      const { data: modProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("username", "alba_mod")
+        .maybeSingle();
+
+      const { data: posterProfile } = await supabaseAdmin
+        .from("profiles")
+        .select("id, push_token")
+        .eq("username", body.poster_username as string)
+        .maybeSingle();
+
+      if (modProfile?.id && posterProfile?.id) {
+        const sorted = ["alba_mod", body.poster_username as string].sort();
+        const chatId = `dm_${sorted[0]}_${sorted[1]}`;
+
+        // Ensure chat_threads rows exist for both participants
+        const { data: existingThread } = await supabaseAdmin
+          .from("chat_threads")
+          .select("chat_id")
+          .eq("chat_id", chatId)
+          .eq("owner_id", modProfile.id)
+          .maybeSingle();
+
+        if (!existingThread) {
+          await supabaseAdmin.from("chat_threads").insert([
+            { chat_id: chatId, owner_id: modProfile.id, is_group: false },
+            { chat_id: chatId, owner_id: posterProfile.id, is_group: false },
+          ]);
+        }
+
+        const now = new Date();
+        await supabaseAdmin.from("messages").insert({
+          sender_id: modProfile.id,
+          sender_username: "alba_mod",
+          chat_id: chatId,
+          is_group: false,
+          content: `@${body.collaborator_username as string} removed his collaboration from your post. Do not include people as collaborators without their consent.`,
+          sent_date: now.toISOString().slice(0, 10),
+          sent_time: now.toTimeString().slice(0, 8),
+        });
+
+        if (posterProfile.push_token) {
+          toSend.push({
+            to: posterProfile.push_token,
+            title: "alba_mod",
+            body: `@${body.collaborator_username as string} removed his collaboration from your post.`,
+            data: { type: "dm", chat: chatId, sender_username: "alba_mod" },
+          });
+        }
+      }
+
+    // ── Path I: Post shared — notify original poster + sharer's followers ───────
+    } else if (body.type === "post_shared" && body.original_post_id && body.share_post_id) {
+      // Fetch the share post to get sharer's identity
+      const { data: sharePost } = await supabaseAdmin
+        .from("posts")
+        .select("author_id, username, comment")
+        .eq("id", body.share_post_id as string)
+        .maybeSingle();
+
+      if (sharePost?.author_id) {
+        const sharerUsername: string = sharePost.username ?? "";
+        const shareComment: string = (body.comment as string) || (sharePost.comment as string) || "";
+
+        // Fetch original post author to notify them
+        const { data: originalPost } = await supabaseAdmin
+          .from("posts")
+          .select("author_id")
+          .eq("id", body.original_post_id as string)
+          .maybeSingle();
+
+        if (originalPost?.author_id && originalPost.author_id !== sharePost.author_id) {
+          const { data: origAuthorProfile } = await supabaseAdmin
+            .from("profiles")
+            .select("push_token, notif_prefs")
+            .eq("id", originalPost.author_id)
+            .maybeSingle();
+
+          const origToken = origAuthorProfile?.push_token as string | null;
+          if (origToken) {
+            toSend.push({
+              to: origToken,
+              title: `@${sharerUsername} shared your post`,
+              body: shareComment ? truncate(shareComment) : `@${sharerUsername} shared your post.`,
+              data: { type: "post_shared", post_id: body.share_post_id as string },
+            });
+          }
+        }
+
+        // Notify followers of the sharer who have followed_posts notifications enabled
+        const { data: sharerProfile } = await supabaseAdmin
+          .from("profiles")
+          .select("id")
+          .eq("id", sharePost.author_id)
+          .maybeSingle();
+
+        if (sharerProfile?.id) {
+          const { data: followers } = await supabaseAdmin
+            .from("profiles")
+            .select("push_token, notif_prefs")
+            .contains("followed_users", [sharePost.author_id]);
+
+          for (const follower of (followers || [])) {
+            const prefs = follower.notif_prefs as Record<string, unknown> | null;
+            const wantsFollowedPosts = prefs?.followed_posts !== false;
+            const token = follower.push_token as string | null;
+            if (!token || !wantsFollowedPosts) continue;
+            toSend.push({
+              to: token,
+              title: `@${sharerUsername} shared a post`,
+              body: shareComment ? truncate(shareComment) : `@${sharerUsername} shared a post.`,
+              data: { type: "post_shared", post_id: body.share_post_id as string },
+            });
+          }
+        }
+      }
+
     // ── Path D: diffusion_message_receipts Database Webhook ──────────────────
     } else if (body.record?.recipient_id && body.table === "diffusion_message_receipts") {
       const recipientId = body.record.recipient_id;

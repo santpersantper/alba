@@ -22,6 +22,7 @@ import {
   Platform,
   ActivityIndicator,
   RefreshControl,
+  Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
@@ -41,7 +42,7 @@ import ShareMenu from "../components/ShareMenu";
 
 /* ------------------- schema ------------------- */
 const POSTS_TABLE = "posts";
-const POSTS_COLS = "id, title, description, date, time, end_date, end_time, location, author_id, group_id, actions, postmediauri";
+const POSTS_COLS = "id, title, description, date, time, end_date, end_time, all_day, every_day, location, author_id, group_id, actions, postmediauri, manually_approve_attendees, is_ticket_number_fixed, ticket_number, ticket_approval_info, pending_ticket_requests, approved_ticket_buyers";
 
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
@@ -150,17 +151,29 @@ export default function EventSettingsScreen() {
   const [draftTime, setDraftTime] = useState("");
   const [draftEndDate, setDraftEndDate] = useState("");
   const [draftEndTime, setDraftEndTime] = useState("");
+  const [draftAllDay, setDraftAllDay] = useState(false);
+  const [draftEveryDay, setDraftEveryDay] = useState(false);
   const [draftLocation, setDraftLocation] = useState("");
   const [draftMedia, setDraftMedia] = useState([]); // [{ uri, type, isNew }]
 
   const [purchasesActive, setPurchasesActive] = useState(true);
   const [ticketsPaused, setTicketsPaused] = useState(false);
 
+  // New ticket-control state
+  const [manuallyApprove, setManuallyApprove] = useState(false);
+  const [fixedTicketCount, setFixedTicketCount] = useState(false);
+  const [ticketNumber, setTicketNumber] = useState("");
+  const [pendingRequests, setPendingRequests] = useState([]); // [{username, info, requested_at}]
+  const [pendingRequestsProfiles, setPendingRequestsProfiles] = useState({}); // username -> {name, avatar_url}
+  const [pendingExpanded, setPendingExpanded] = useState(false);
+  const [savingTicketControls, setSavingTicketControls] = useState(false);
+
   const [saving, setSaving] = useState(false);
 
   // lists
   const [ticketUsers, setTicketUsers] = useState([]);
   const [unconfirmedUsers, setUnconfirmedUsers] = useState([]);
+  const [sharedByUsers, setSharedByUsers] = useState([]);
 
   const [selectedTicket, setSelectedTicket] = useState(new Set()); // Set(displayName)
   const [selectedUnconf, setSelectedUnconf] = useState(new Set()); // Set(displayName)
@@ -312,12 +325,14 @@ export default function EventSettingsScreen() {
     setDraftTime((postRow?.time || "").toString().slice(0, 5) || "");
     setDraftEndDate(postRow?.end_date || "");
     setDraftEndTime((postRow?.end_time || "").toString().slice(0, 5) || "");
+    setDraftAllDay(postRow?.all_day ?? false);
+    setDraftEveryDay(postRow?.every_day ?? false);
     setDraftLocation(postRow?.location || "");
     const existingMedia = Array.isArray(postRow?.postmediauri)
       ? postRow.postmediauri.map((uri) => ({ uri, type: isVideoUrl(uri) ? "video" : "image", isNew: false }))
       : [];
     setDraftMedia(existingMedia);
-  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.location, postRow?.postmediauri]);
+  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.all_day, postRow?.every_day, postRow?.location, postRow?.postmediauri]);
 
   useEffect(() => {
     resetDraftsToPost();
@@ -329,9 +344,31 @@ export default function EventSettingsScreen() {
   }, [eventRow?.id, eventRow?.purchases_active]);
 
   useEffect(() => {
+    setManuallyApprove(!!postRow?.manually_approve_attendees);
+    setFixedTicketCount(!!postRow?.is_ticket_number_fixed);
+    setTicketNumber(postRow?.ticket_number != null ? String(postRow.ticket_number) : "");
+    setPendingRequests(Array.isArray(postRow?.pending_ticket_requests) ? postRow.pending_ticket_requests : []);
+  }, [postRow?.id, postRow?.manually_approve_attendees, postRow?.is_ticket_number_fixed, postRow?.ticket_number, postRow?.pending_ticket_requests]);
+
+  useEffect(() => {
     const acts = safeArr(postRow?.actions).map((a) => String(a).toLowerCase());
     setTicketsPaused(!acts.includes("tickets"));
   }, [postRow?.id, postRow?.actions]);
+
+  // Fetch profiles for pending ticket request senders
+  useEffect(() => {
+    const usernames = pendingRequests.map((r) => String(r?.username || "")).filter(Boolean);
+    if (!usernames.length) { setPendingRequestsProfiles({}); return; }
+    let alive = true;
+    (async () => {
+      const { data } = await supabase.from("profiles").select("username, name, avatar_url").in("username", usernames);
+      if (!alive) return;
+      const map = {};
+      (data || []).forEach((p) => { map[p.username] = p; });
+      setPendingRequestsProfiles(map);
+    })();
+    return () => { alive = false; };
+  }, [pendingRequests]);
 
   useEffect(() => {
     let alive = true;
@@ -353,6 +390,30 @@ export default function EventSettingsScreen() {
       alive = false;
     };
   }, [eventRow?.id, eventRow?.ticket_holders, eventRow?.unconfirmed]);
+
+  // Fetch users who shared this event post
+  useEffect(() => {
+    if (!postRow?.id) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data: sharePosts } = await supabase
+          .from(POSTS_TABLE)
+          .select("author_id, username")
+          .eq("shared_post_id", postRow.id);
+        if (!alive || !Array.isArray(sharePosts) || !sharePosts.length) {
+          if (alive) setSharedByUsers([]);
+          return;
+        }
+        const usernames = sharePosts.map((p) => p.username).filter(Boolean);
+        const users = await buildUsersFromUsernames(usernames);
+        if (alive) setSharedByUsers(users);
+      } catch {
+        if (alive) setSharedByUsers([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [postRow?.id]);
 
   /* ---------------- selection ---------------- */
   const toggleSelect = (listKey, displayName) => {
@@ -457,6 +518,70 @@ export default function EventSettingsScreen() {
     }
   };
 
+  /* ---------------- Ticket controls (save to posts) ---------------- */
+  const saveTicketControls = async (patch) => {
+    if (!postRow?.id) return;
+    setSavingTicketControls(true);
+    try {
+      const { error } = await supabase.from(POSTS_TABLE).update(patch).eq("id", postRow.id);
+      if (error) throw error;
+      setModel((prev) => prev ? { ...prev, post: { ...prev.post, ...patch } } : prev);
+    } catch (e) {
+      console.warn("[EventSettings] saveTicketControls error", e);
+      Alert.alert("Error", "Could not save setting.");
+    } finally {
+      setSavingTicketControls(false);
+    }
+  };
+
+  /* ---------------- Pending ticket request: approve / reject ---------------- */
+  const approveTicketRequest = async (username) => {
+    if (!postRow?.id) return;
+    try {
+      const { data: result, error } = await supabase.rpc("approve_ticket_request", {
+        p_post_id: postRow.id,
+        p_username: username,
+      });
+      if (error) throw error;
+
+      // Update local pending list
+      const nextPending = pendingRequests.filter((r) => r?.username !== username);
+      setPendingRequests(nextPending);
+      setModel((prev) => prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev);
+
+      // Send push notification via send-push edge function
+      const eventTitle = result?.title || postRow?.title || "an event";
+      supabase.functions.invoke("send-push", {
+        body: {
+          type: "ticket_approved",
+          recipient_username: username,
+          event_title: eventTitle,
+          post_id: postRow.id,
+        },
+      }).catch((e) => console.warn("[EventSettings] send-push error", e?.message));
+    } catch (e) {
+      console.warn("[EventSettings] approveTicketRequest error", e);
+      Alert.alert("Error", "Could not approve request.");
+    }
+  };
+
+  const rejectTicketRequest = async (username) => {
+    if (!postRow?.id) return;
+    try {
+      const { error } = await supabase.rpc("reject_ticket_request", {
+        p_post_id: postRow.id,
+        p_username: username,
+      });
+      if (error) throw error;
+      const nextPending = pendingRequests.filter((r) => r?.username !== username);
+      setPendingRequests(nextPending);
+      setModel((prev) => prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev);
+    } catch (e) {
+      console.warn("[EventSettings] rejectTicketRequest error", e);
+      Alert.alert("Error", "Could not reject request.");
+    }
+  };
+
   /* ---------------- Save logic ---------------- */
   const isDirty = useMemo(() => {
     const baseTitle = postRow?.title || "";
@@ -481,9 +606,11 @@ export default function EventSettingsScreen() {
       (draftEndDate || "") !== baseEndDate ||
       (draftEndTime || "") !== baseEndTime ||
       (draftLocation || "") !== baseLoc ||
+      (draftAllDay !== (postRow?.all_day ?? false)) ||
+      (draftEveryDay !== (postRow?.every_day ?? false)) ||
       mediaChanged
     );
-  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation, draftMedia]);
+  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation, draftAllDay, draftEveryDay, draftMedia]);
 
   const onSave = async () => {
     if (!postRow?.id) return;
@@ -504,6 +631,8 @@ export default function EventSettingsScreen() {
       const endDateChanged = (draftEndDate || "") !== baseEndDate;
       const endTimeChanged = (draftEndTime || "") !== baseEndTime;
       const locChanged = (draftLocation || "") !== baseLoc;
+      const allDayChanged = draftAllDay !== (postRow?.all_day ?? false);
+      const everyDayChanged = draftEveryDay !== (postRow?.every_day ?? false);
 
       // Upload new media items
       const finalMedia = [];
@@ -525,9 +654,11 @@ export default function EventSettingsScreen() {
       if (titleChanged) postPatch.title = draftTitle;
       if (descChanged) postPatch.description = draftDesc;
       if (dateChanged) postPatch.date = draftDate;
-      if (timeChanged) postPatch.time = draftTime;
+      if (timeChanged || allDayChanged) postPatch.time = draftAllDay ? null : draftTime;
       if (endDateChanged) postPatch.end_date = draftEndDate || null;
-      if (endTimeChanged) postPatch.end_time = draftEndTime || null;
+      if (endTimeChanged || allDayChanged) postPatch.end_time = draftAllDay ? null : (draftEndTime || null);
+      if (allDayChanged) postPatch.all_day = draftAllDay;
+      if (everyDayChanged) postPatch.every_day = draftEveryDay;
       if (locChanged) postPatch.location = draftLocation;
       if (mediaChanged) postPatch.postmediauri = finalMedia;
 
@@ -938,6 +1069,35 @@ export default function EventSettingsScreen() {
               />
             </View>
 
+            {/* All day toggle */}
+            <View style={styles.allDayRow}>
+              <Switch
+                value={draftAllDay}
+                onValueChange={(next) => {
+                  setDraftAllDay(next);
+                  if (next) { setDraftTime(""); setDraftEndTime(""); }
+                }}
+                trackColor={{ false: theme.border, true: "#3D8BFF" }}
+                thumbColor="#fff"
+              />
+              <Text style={[styles.allDayLabel, { color: theme.text }]}>
+                {t("event_all_day") || "All day"}
+              </Text>
+            </View>
+
+            {/* Every day toggle */}
+            <View style={styles.allDayRow}>
+              <Switch
+                value={draftEveryDay}
+                onValueChange={setDraftEveryDay}
+                trackColor={{ false: theme.border, true: "#3D8BFF" }}
+                thumbColor="#fff"
+              />
+              <Text style={[styles.allDayLabel, { color: theme.text }]}>
+                {t("event_every_day") || "Every day"}
+              </Text>
+            </View>
+
             {/* Start date/time */}
             <Text style={[styles.sectionTitle, { color: theme.text }]}>
               {t("change_date_time") || "Start date and time"}
@@ -954,15 +1114,17 @@ export default function EventSettingsScreen() {
                 />
               </View>
 
-              <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
-                <TextInput
-                  value={draftTime}
-                  onChangeText={setDraftTime}
-                  placeholder={(postRow?.time || "").toString().slice(0, 5) || "HH:MM"}
-                  placeholderTextColor={theme.subtleText || "#8c97a8"}
-                  style={[styles.pillInput, { color: theme.text }]}
-                />
-              </View>
+              {!draftAllDay && (
+                <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
+                  <TextInput
+                    value={draftTime}
+                    onChangeText={setDraftTime}
+                    placeholder={(postRow?.time || "").toString().slice(0, 5) || "HH:MM"}
+                    placeholderTextColor={theme.subtleText || "#8c97a8"}
+                    style={[styles.pillInput, { color: theme.text }]}
+                  />
+                </View>
+              )}
             </View>
 
             {/* End date/time */}
@@ -981,15 +1143,17 @@ export default function EventSettingsScreen() {
                 />
               </View>
 
-              <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
-                <TextInput
-                  value={draftEndTime}
-                  onChangeText={setDraftEndTime}
-                  placeholder={(postRow?.end_time || "").toString().slice(0, 5) || "HH:MM"}
-                  placeholderTextColor={theme.subtleText || "#8c97a8"}
-                  style={[styles.pillInput, { color: theme.text }]}
-                />
-              </View>
+              {!draftAllDay && (
+                <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
+                  <TextInput
+                    value={draftEndTime}
+                    onChangeText={setDraftEndTime}
+                    placeholder={(postRow?.end_time || "").toString().slice(0, 5) || "HH:MM"}
+                    placeholderTextColor={theme.subtleText || "#8c97a8"}
+                    style={[styles.pillInput, { color: theme.text }]}
+                  />
+                </View>
+              )}
             </View>
 
             <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
@@ -1129,6 +1293,150 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             )}
 
+            {/* Manually approve attendees toggle */}
+            {isAdmin && (
+              <TouchableOpacity
+                style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  if (!postRow?.id) return;
+                  const next = !manuallyApprove;
+                  setManuallyApprove(next);
+                  await saveTicketControls({ manually_approve_attendees: next });
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                    {t("event_manually_approve_buyers") || "Manually approve ticket buyers"}
+                  </Text>
+                  <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
+                    {t("event_approval_info_label") || "Required info to approve buyer"}
+                    {postRow?.ticket_approval_info ? `: ${postRow.ticket_approval_info}` : ""}
+                  </Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: manuallyApprove ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: manuallyApprove ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {/* Fixed ticket count toggle + input */}
+            {isAdmin && (
+              <TouchableOpacity
+                style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  if (!postRow?.id) return;
+                  const next = !fixedTicketCount;
+                  setFixedTicketCount(next);
+                  if (!next) {
+                    await saveTicketControls({ is_ticket_number_fixed: false, ticket_number: null });
+                  } else {
+                    await saveTicketControls({ is_ticket_number_fixed: true });
+                  }
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                    {t("event_sell_fixed_tickets") || "Sell fixed number of tickets"}
+                  </Text>
+                  {fixedTicketCount && (
+                    <TextInput
+                      value={ticketNumber}
+                      onChangeText={setTicketNumber}
+                      keyboardType="numeric"
+                      placeholder={t("event_ticket_how_many") || "How many?"}
+                      placeholderTextColor={theme.subtleText || "#8c97a8"}
+                      style={[styles.toggleSub, { color: theme.text, marginTop: 4 }]}
+                      onEndEditing={async () => {
+                        const n = parseInt(ticketNumber, 10);
+                        if (Number.isFinite(n) && n > 0 && postRow?.id) {
+                          await saveTicketControls({ ticket_number: n });
+                        }
+                      }}
+                      onPress={(e) => e.stopPropagation?.()}
+                    />
+                  )}
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: fixedTicketCount ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: fixedTicketCount ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {/* Pending ticket requests */}
+            {isAdmin && manuallyApprove && (
+              <View style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card, flexDirection: "column", alignItems: "stretch" }]}>
+                <TouchableOpacity
+                  style={{ flexDirection: "row", alignItems: "center" }}
+                  activeOpacity={0.7}
+                  onPress={() => setPendingExpanded((v) => !v)}
+                >
+                  <Text style={[styles.toggleLabel, { color: theme.text, flex: 1 }]}>
+                    {t("pending_ticket_requests_title") || "Pending ticket requests"}
+                    {pendingRequests.length > 0 ? ` (${pendingRequests.length})` : ""}
+                  </Text>
+                  <Feather
+                    name={pendingExpanded ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={theme.subtleText || "#8c97a8"}
+                  />
+                </TouchableOpacity>
+
+                {pendingExpanded && (
+                  <View style={{ marginTop: 10 }}>
+                    {pendingRequests.length === 0 ? (
+                      <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8", paddingVertical: 8 }]}>
+                        {t("pending_ticket_requests_empty") || "No pending requests."}
+                      </Text>
+                    ) : pendingRequests.map((req) => {
+                      const uname = req?.username || "";
+                      const info = req?.info || "";
+                      const prof = pendingRequestsProfiles[uname];
+                      return (
+                        <View key={uname} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
+                          {prof?.avatar_url ? (
+                            <Image source={{ uri: prof.avatar_url }} style={styles.memberAvatar} />
+                          ) : (
+                            <View style={[styles.memberAvatar, { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" }]}>
+                              <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>
+                                {(prof?.name || uname).charAt(0).toUpperCase()}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={{ flex: 1, marginLeft: 10 }}>
+                            <Text style={[styles.memberName, { color: theme.text }]}>
+                              {prof?.name || uname}
+                            </Text>
+                            {!!uname && (
+                              <Text style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>@{uname}</Text>
+                            )}
+                            {!!info && (
+                              <Text style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>{info}</Text>
+                            )}
+                          </View>
+                          <View style={{ flexDirection: "row", gap: 8 }}>
+                            <TouchableOpacity
+                              style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
+                              onPress={() => approveTicketRequest(uname)}
+                            >
+                              <Feather name="check" size={16} color="#fff" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
+                              onPress={() => rejectTicketRequest(uname)}
+                            >
+                              <Feather name="x" size={16} color="#fff" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            )}
+
             {/* ✅ Scanner button */}
             <View style={{ marginTop: 14 }}>
               <TouchableOpacity
@@ -1190,6 +1498,23 @@ export default function EventSettingsScreen() {
               <Feather name="message-circle" size={15} color="#fff" />
               <Text style={styles.dmWholeText}>{t("dm_whole_list") || "DM whole list"}</Text>
             </TouchableOpacity>
+
+            {/* Shared the event */}
+            <View style={[styles.listHeaderRow, { marginTop: 16 }]}>
+              <Text style={[styles.listTitle, { color: theme.text }]}>{t("shared_event_list_title") || "Shared the event"}</Text>
+              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>{sharedByUsers.length}</Text>
+            </View>
+            <View style={[styles.membersList, { borderColor: theme.border, backgroundColor: theme.card }]}>
+              <ScrollView nestedScrollEnabled contentContainerStyle={{ paddingBottom: 4 }}>
+                {sharedByUsers.length === 0 ? (
+                  <Text style={{ fontFamily: "Poppins", fontSize: 13, color: theme.subtleText || theme.text, padding: 12 }}>
+                    {t("shared_list_empty") || "Nobody has shared this yet."}
+                  </Text>
+                ) : (
+                  sharedByUsers.map((u) => renderUserRow("shared", u, new Set()))
+                )}
+              </ScrollView>
+            </View>
 
             {/* Invite from previous */}
             <TouchableOpacity style={[styles.outlineButton, { marginTop: 14 }]} onPress={onInviteFromPrevious}>
@@ -1379,6 +1704,8 @@ const styles = StyleSheet.create({
   input: { fontFamily: "Poppins", fontSize: 14 },
 
   dateTimeRow: { flexDirection: "row", gap: 12 },
+  allDayRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  allDayLabel: { fontFamily: "Poppins", fontSize: 14, marginLeft: 10 },
   pill: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   pillInput: { fontFamily: "Poppins", fontSize: 14 },
 
@@ -1507,6 +1834,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   memberMenuButton: { paddingHorizontal: 4, paddingVertical: 4 },
+
+  pendingIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   dmWholeBtn: {
     alignSelf: "center",

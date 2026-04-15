@@ -186,7 +186,9 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
   const linking = {
     prefixes: ["alba://", "https://albaappofficial.com", "https://www.albaappofficial.com"],
     config: {
+      initialRouteName: "MainTabs",
       screens: {
+        MainTabs: {},
         SinglePost: "post/:postId",
         SingleFeedVideo: "video/:postId",
         GroupChat: "join/group/:groupId",
@@ -546,13 +548,8 @@ export default function AppNavigator() {
       } catch (e) {
         console.warn("[DeepLink] join group error:", e?.message);
       }
-    } else if (path.startsWith("/post/")) {
-      const postId = path.replace("/post/", "").replace(/\/$/, "").trim();
-      if (postId) nav.navigate("SinglePost", { postId });
-    } else if (path.startsWith("/video/")) {
-      const postId = path.replace("/video/", "").replace(/\/$/, "").trim();
-      if (postId) nav.navigate("SingleFeedVideo", { postId });
     }
+    // /post/ and /video/ are handled by React Navigation's linking config — no manual navigate needed
   }, []);
 
   useEffect(() => {
@@ -583,6 +580,12 @@ export default function AppNavigator() {
         nav.navigate("GroupChat", { groupId: data.chat });
       } else if (data?.type === "follow" && data.username) {
         nav.navigate("Profile", { username: data.username });
+      } else if (data?.type === "ticket_approved" && data.post_id) {
+        nav.navigate("SinglePost", { postId: data.post_id });
+      } else if ((data?.type === "collab_tagged" || data?.type === "new_collab_post") && data.post_id) {
+        nav.navigate("SinglePost", { postId: data.post_id });
+      } else if (data?.type === "post_shared" && data.post_id) {
+        nav.navigate("SinglePost", { postId: data.post_id });
       }
     });
     return unsub;
