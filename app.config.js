@@ -64,7 +64,7 @@ export default {
         "com.apple.security.application-groups": ["group.com.alba.app.screentime"],
         "com.apple.developer.in-app-payments": ["merchant.com.alba.app"],
         "com.apple.developer.applesignin": ["Default"],
-        "com.apple.developer.associated-domains": ["applinks:albaappofficial.com"],
+        "com.apple.developer.associated-domains": ["applinks:albaappofficial.com", "applinks:www.albaappofficial.com"],
       },
     },
     android: {
