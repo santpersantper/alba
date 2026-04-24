@@ -125,18 +125,46 @@ export default function MyEvents({ navigation }) {
           return;
         }
 
-        const { data, error } = await supabase
-          .from("posts")
-          .select("id, title, type, date, time, location, user, group_id")
-          .eq("user", username)
-          .eq("type", "Event")
-          .order("date", { ascending: false })
-          .order("time", { ascending: false })
-          .limit(100);
+        const [ownedRes, collabRes] = await Promise.all([
+          supabase
+            .from("posts")
+            .select("id, title, type, date, time, location, user, group_id")
+            .eq("user", username)
+            .eq("type", "Event")
+            .is("shared_post_id", null)
+            .order("date", { ascending: false })
+            .order("time", { ascending: false })
+            .limit(100),
+          supabase
+            .from("posts")
+            .select("id, title, type, date, time, location, user, group_id")
+            .contains("collaborators", [username])
+            .eq("type", "Event")
+            .is("shared_post_id", null)
+            .order("date", { ascending: false })
+            .order("time", { ascending: false })
+            .limit(100),
+        ]);
 
-        if (error) throw error;
+        if (ownedRes.error) throw ownedRes.error;
+        if (collabRes.error) throw collabRes.error;
 
-        const mapped = (data || []).map((p) => {
+        const seen = new Set();
+        const merged = [];
+        for (const p of [...(ownedRes.data || []), ...(collabRes.data || [])]) {
+          if (!seen.has(p.id)) {
+            seen.add(p.id);
+            merged.push(p);
+          }
+        }
+        merged.sort((a, b) => {
+          const da = a.date || "";
+          const db = b.date || "";
+          if (db !== da) return db.localeCompare(da);
+          return (b.time || "").localeCompare(a.time || "");
+        });
+
+        const mapped = merged.map((p) => {
           const dateStr = p?.date ? String(p.date) : "TBD";
           const timeStr = p?.time ? String(p.time).slice(0, 5) : "—";
           const when = `${dateStr}, ${timeStr}`;
@@ -152,7 +180,6 @@ export default function MyEvents({ navigation }) {
 
         if (alive) setRows(mapped);
       } catch (e) {
-        console.warn("MyEvents load error:", e);
         if (alive) setRows([]);
       } finally {
         if (alive) setLoading(false);

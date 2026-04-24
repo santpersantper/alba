@@ -104,17 +104,13 @@ export default function SharePostModal({
   const handleShare = async () => {
     if (submitting) return;
     setSubmitting(true);
-    console.log("[SharePost] handleShare called — postId:", postId, "comment:", comment.trim() || null);
     try {
-      console.log("[SharePost] calling share_post RPC...");
       const { data, error } = await supabase.rpc("share_post", {
         p_original_post_id: postId,
         p_comment: comment.trim() || null,
       });
-      console.log("[SharePost] RPC result — data:", data, "error:", error);
 
       if (error) {
-        console.warn("[SharePost] RPC error — code:", error.code, "message:", error.message, "details:", error.details, "hint:", error.hint);
         if (error.message?.includes("rate_limited")) {
           Alert.alert("", t("share_rate_limited") || "You already shared this recently. Try again in a few minutes.");
         } else {
@@ -125,7 +121,6 @@ export default function SharePostModal({
 
       // fire-and-forget notifications
       const newSharePostId = data;
-      console.log("[SharePost] success — newSharePostId:", newSharePostId);
       supabase.functions.invoke("send-push", {
         body: {
           type: "post_shared",
@@ -133,13 +128,12 @@ export default function SharePostModal({
           share_post_id: newSharePostId,
           comment: comment.trim() || null,
         },
-      }).catch((e) => console.warn("[SharePost] send-push error:", e?.message));
+      }).catch(() => {});
 
       onShared?.(newSharePostId);
       onClose();
       Alert.alert("", t("share_success") || "Post shared!");
     } catch (e) {
-      console.error("[SharePost] caught exception:", e?.message, e);
       Alert.alert("", t("share_error") || "Could not share. Please try again.");
     } finally {
       setSubmitting(false);

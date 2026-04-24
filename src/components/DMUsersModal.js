@@ -134,7 +134,6 @@ export default function DMUsersModal({
           p_peer_username: username,
         });
         if (chatErr || !chatId) {
-          console.warn("[DMUsersModal] could not resolve chat_id for", username, chatErr?.message);
           continue;
         }
 

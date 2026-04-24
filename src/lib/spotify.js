@@ -27,7 +27,6 @@ export const SPOTIFY_SCOPES = ['user-top-read'];
  */
 export function useSpotifyAuth(clientId) {
   if (!clientId) {
-    console.warn('Spotify clientId missing!');
     throw new Error('Missing SPOTIFY_CLIENT_ID');
   }
 

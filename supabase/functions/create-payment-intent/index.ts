@@ -37,7 +37,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { amount, currency = "eur", type, userId, eventId } = body;
+    const { amount, currency = "eur", type, userId, eventId, captureMethod } = body;
 
     // ── Subscription flow (Ad-Free / Traveler Mode) ───────────────────────────
     if (type && SUBSCRIPTION_TYPES.has(type)) {
@@ -158,6 +158,7 @@ serve(async (req) => {
       currency,
       metadata,
       automatic_payment_methods: { enabled: true },
+      ...(captureMethod ? { capture_method: captureMethod } : {}),
     };
 
     if (connectedAccountId) {

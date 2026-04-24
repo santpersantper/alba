@@ -60,7 +60,6 @@ export async function warmAuthCache() {
     await getUserIdFast();
     await getMyProfileCached();
   } catch (e) {
-    console.warn("[authFast] warmAuthCache error:", e?.message || e);
   }
 }
 

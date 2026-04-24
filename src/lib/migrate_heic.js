@@ -56,7 +56,6 @@ export async function migrateHeicForPost(postRow) {
 
       changed = true;
     } catch (e) {
-      console.warn("HEIC migrate failed for", id, e);
       // keep the original URL so you don't lose media
       newMedia.push(url);
     }

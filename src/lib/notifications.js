@@ -62,7 +62,6 @@ export async function registerForPushNotifications() {
     const result = await Notifications.getExpoPushTokenAsync({ projectId });
     return result.data ?? null;
   } catch (e) {
-    console.warn("[Push] registerForPushNotifications failed:", e?.message);
     return null;
   }
 }
@@ -83,7 +82,6 @@ export async function savePushToken(token) {
     if (!auth?.user?.id) return;
     await supabase.from("profiles").update({ push_token: token }).eq("id", auth.user.id);
   } catch (e) {
-    console.warn("[Push] savePushToken failed:", e?.message);
   }
 }
 
@@ -111,6 +109,5 @@ export async function saveNotifPrefs(prefs) {
       .update({ notif_prefs })
       .eq("id", auth.user.id);
   } catch (e) {
-    console.warn("[Push] saveNotifPrefs failed:", e?.message);
   }
 }

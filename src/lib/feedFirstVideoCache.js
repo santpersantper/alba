@@ -3,7 +3,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const DBG = true;
-const log = (...a) => DBG && console.log("[FirstFeedCache]", ...a);
 
 const KEY = "alba_feed_first_v1";
 

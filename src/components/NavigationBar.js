@@ -88,7 +88,6 @@ export default function NavigationBar({ state, navigation }) {
         goTo("CreatePost");
       }
     } catch (e) {
-      console.warn("Create gate error:", e?.message || e);
       navigation.navigate("PreFaceRecognition");
     }
   };

@@ -5,7 +5,6 @@ import * as Crypto from "expo-crypto";
 import { preloadProfileData } from "./profileCache";
 
 const DBG = true;
-const log = (...a) => DBG && console.log(...a);
 
 const CACHE_KEY = "alba_firstpost_override_v3"; // bump to invalidate older extensionless files
 const MAX_AGE_MS = 1000 * 60 * 60 * 24 * 3; // 3 days

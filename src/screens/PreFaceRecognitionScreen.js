@@ -59,7 +59,6 @@ export default function PreFaceRecognitionScreen() {
 
         setHasAvatar(!!prof?.avatar_url);
       } catch (e) {
-        console.warn("PreFaceRecognition load error:", e?.message || e);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -107,7 +106,6 @@ export default function PreFaceRecognitionScreen() {
         name: firstName,
       });
     } catch (e) {
-      console.warn("Go to profile from PreFace error:", e?.message || e);
       navigation.navigate("Start");
     }
   };

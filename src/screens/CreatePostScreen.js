@@ -96,7 +96,7 @@ const normalizeRequiredInfoInput = (text) => {
 
 /* ── Mention helpers ─────────────────────────────────────────────── */
 function getActiveMention(text) {
-  const m = text.match(/@(\w*)$/);
+  const m = text.match(/@([\w.]*)$/);
   return m ? m[1] : null;
 }
 function applyMention(text, query, username) {
@@ -144,7 +144,9 @@ export default function CreatePost() {
   const mentionDebounceRef = useRef(null);
 
   // Collaborators
-  const [collaborators,       setCollaborators]       = useState([]); // array of usernames
+  const [collaborators,       setCollaborators]       = useState(
+    Array.isArray(editPost?.collaborators) ? editPost.collaborators : []
+  ); // array of usernames
   const [collabInput,         setCollabInput]         = useState("");
   const [collabResults,       setCollabResults]       = useState([]);
   const collabDebounceRef = useRef(null);
@@ -185,6 +187,7 @@ export default function CreatePost() {
   const [showEndTimePicker,  setShowEndTimePicker]  = useState(false);
   const [allDay,          setAllDay]          = useState(editPost?.all_day ?? false);
   const [everyDay,        setEveryDay]        = useState(editPost?.every_day ?? false);
+  const [isOnline,        setIsOnline]        = useState(editPost?.online ?? false);
 
   const [locationText,        setLocationText]        = useState(editPost?.location ?? "");
   const [locationSuggestions, setLocationSuggestions] = useState([]);
@@ -589,7 +592,6 @@ export default function CreatePost() {
               const { data: embedData } = await supabase.functions.invoke("embed-text", { body: { text: caption } });
               if (embedData?.embedding) await supabase.from("feed_videos").update({ caption_embedding: embedData.embedding }).eq("id", feedRow.id);
             } catch (e) {
-              console.warn("[CreatePost] embed-text failed for feed video:", e);
             }
           })();
         }
@@ -749,9 +751,11 @@ export default function CreatePost() {
           end_time: selectedEndTime || null,
           all_day: allDay,
           every_day: everyDay,
+          online: isOnline,
           location: locationLabel,
           postmediauri: finalMediaUrls,
           tagged_usernames: taggedUsernames,
+          collaborators: collaborators.length > 0 ? collaborators : null,
         }).eq("id", editPost.id);
         if (upErr) throw upErr;
         resetForm();
@@ -764,7 +768,7 @@ export default function CreatePost() {
         title, description: finalDesc, user: username, author_id: uid, userpicuri: null,
         type: typeLabel, date: dateStr, time: timeStr,
         end_date: selectedEndDate || null, end_time: selectedEndTime || null,
-        all_day: allDay, every_day: everyDay,
+        all_day: allDay, every_day: everyDay, online: isOnline,
         location: locationLabel,
         actions, isticketable, is_age_restricted,
         product_types, product_prices, required_info,
@@ -819,7 +823,6 @@ export default function CreatePost() {
             const { data: embedData } = await supabase.functions.invoke("embed-text", { body: { text: textToEmbed } });
             if (embedData?.embedding) await supabase.from("posts").update({ caption_embedding: embedData.embedding }).eq("id", postId);
           } catch (e) {
-            console.warn("[CreatePost] embed-text failed for post:", e);
           }
         })();
       }
@@ -865,7 +868,6 @@ export default function CreatePost() {
       resetForm();
       setSuccessModal({ visible: true, title: t("create_post_success_title"), message: t("create_post_success_message") });
     } catch (e) {
-      console.warn(e);
       // Show the actual message for validation errors we throw ourselves;
       // fall back to a generic message for Supabase/network errors (which have a `code` field).
       const userMsg = e.code
@@ -1101,6 +1103,25 @@ export default function CreatePost() {
                   />
                   <Text style={[cs.allDayLabel, { color: theme.text }]}>
                     {t("event_every_day") || "Every day"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Online toggle */}
+              {isEvent && (
+                <TouchableOpacity
+                  style={cs.allDayRow}
+                  activeOpacity={0.7}
+                  onPress={() => setIsOnline((p) => !p)}
+                >
+                  <Switch
+                    value={isOnline}
+                    onValueChange={setIsOnline}
+                    trackColor={{ false: isDark ? "#444" : "#d0d7e2", true: "#3D8BFF" }}
+                    thumbColor="#fff"
+                  />
+                  <Text style={[cs.allDayLabel, { color: theme.text }]}>
+                    {t("event_online") || "Online"}
                   </Text>
                 </TouchableOpacity>
               )}

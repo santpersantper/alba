@@ -67,13 +67,11 @@ const sendTextRow = async ({ chatId, text, sender_id, senderUsername, pendingRev
   const sent_date = now.toISOString().slice(0, 10);
   const sent_time = now.toTimeString().slice(0, 8);
   const payload = { sender_id, chat_id: chatId, is_group: true, sender_username: senderUsername || "me", content: text, sent_date, sent_time, pending_review: pendingReview };
-  console.log("[GroupChat][SEND] sendTextRow payload:", JSON.stringify(payload));
   const { data, error } = await supabase
     .from("messages")
     .insert([payload])
     .select("*")
     .single();
-  console.log("[GroupChat][SEND] sendTextRow result — data:", data?.id, "error:", error?.message, "code:", error?.code, "details:", error?.details);
   if (error) throw error;
   return data;
 };
@@ -123,14 +121,12 @@ const sendLocationRow = async ({ chatId, locationData, senderUsername, sender_id
 };
 
 const subscribeChatChanges = (chatId, onInsert, onDelete, onUpdate) => {
-  console.log("[GroupChat][RT] subscribeChatChanges — channel:", `messages-${chatId}`);
   const channel = supabase
     .channel(`messages-${chatId}`)
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
       (payload) => {
-        console.log("[GroupChat][RT] messages INSERT received, chat_id:", payload.new?.chat_id, "sender:", payload.new?.sender_username);
         onInsert?.(payload.new);
       }
     )
@@ -138,7 +134,6 @@ const subscribeChatChanges = (chatId, onInsert, onDelete, onUpdate) => {
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
       (payload) => {
-        console.log("[GroupChat][RT] messages UPDATE received, id:", payload.new?.id, "pending_review:", payload.new?.pending_review);
         onUpdate?.(payload.new);
       }
     )
@@ -146,13 +141,10 @@ const subscribeChatChanges = (chatId, onInsert, onDelete, onUpdate) => {
       "postgres_changes",
       { event: "DELETE", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
       (payload) => {
-        console.log("[GroupChat][RT] messages DELETE received, id:", payload.old?.id);
         onDelete?.(payload.old?.id);
       }
     )
     .subscribe((status, err) => {
-      console.log("[GroupChat][RT] messages subscribe status:", status, err ? err.message : "");
-      if (err) console.warn("[GroupChat realtime] error:", err.message);
     });
   return () => supabase.removeChannel(channel);
 };
@@ -290,7 +282,6 @@ export default function GroupChatScreen({ navigation, route }) {
               .eq("chat_id", chatId).eq("owner_id", myUserId);
           }
         } catch (e) {
-          console.warn("[GroupChat] thread repair failed", e?.message);
         }
       })();
     }
@@ -543,7 +534,6 @@ export default function GroupChatScreen({ navigation, route }) {
   // on both iOS and Android even when the messages-table subscription misses them.
   useEffect(() => {
     if (!chatId || !myUserId) return () => {};
-    console.log("[GroupChat][RT] chat_threads supplement setup — chatId:", chatId, "myUserId:", myUserId);
 
     const channel = supabase
       .channel(`chat-threads-group-${chatId}-${myUserId}`)
@@ -552,25 +542,19 @@ export default function GroupChatScreen({ navigation, route }) {
         { event: "*", schema: "public", table: "chat_threads" },
         async (payload) => {
           const row = payload.new;
-          console.log("[GroupChat][RT] chat_threads event received — event:", payload.eventType, "owner_id:", row?.owner_id, "chat_id:", row?.chat_id, "myUserId:", myUserId, "chatId:", chatId);
           if (!row || row.owner_id !== myUserId || row.chat_id !== chatId) {
-            console.log("[GroupChat][RT] chat_threads filtered out");
             return;
           }
-          console.log("[GroupChat][RT] chat_threads match — fetching fresh messages");
           const fresh = await fetchGroupMessagesEnriched(chatId, 50, myUserId);
           const filtered = (fresh || []).filter((it) => !isJoinBannerItem(it));
-          console.log("[GroupChat][RT] chat_threads fetch returned", filtered?.length, "items");
           setItems((prev) => {
             const freshIds = new Set(filtered.map((m) => String(m.id)));
             const existingIds = new Set(prev.map((m) => String(m.id)));
             const newItems = filtered.filter((m) => !existingIds.has(String(m.id)));
             const removedCount = prev.filter((m) => !freshIds.has(String(m.id))).length;
             if (newItems.length === 0 && removedCount === 0) {
-              console.log("[GroupChat][RT] chat_threads — no changes");
               return prev;
             }
-            console.log("[GroupChat][RT] chat_threads — adding", newItems.length, "new, removing", removedCount);
             const reconciled = [...prev.filter((m) => freshIds.has(String(m.id))), ...newItems];
             setCachedGroupMessages(chatId, reconciled).catch(() => {});
             return reconciled;
@@ -579,7 +563,6 @@ export default function GroupChatScreen({ navigation, route }) {
         }
       )
       .subscribe((status, err) => {
-        console.log("[GroupChat][RT] chat_threads subscribe status:", status, err ? err.message : "");
       });
 
     return () => supabase.removeChannel(channel);
@@ -621,7 +604,6 @@ export default function GroupChatScreen({ navigation, route }) {
         setDeletedModal(true);
       })
       .subscribe((status, err) => {
-        if (err) console.warn("[GroupChat group-updates realtime] error:", err.message);
       });
 
     return () => supabase.removeChannel(channel);
@@ -740,7 +722,6 @@ export default function GroupChatScreen({ navigation, route }) {
         const sender_id = await getUserId();
         await sendTextRow({ chatId, text: msg, sender_id, senderUsername: myUsername, pendingReview: true });
       } catch (e) {
-        console.error("[GroupChat][SEND] pending link text FAILED:", e?.message);
         setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
       }
       return;
@@ -803,10 +784,8 @@ export default function GroupChatScreen({ navigation, route }) {
 
     try {
       const sender_id = await getUserId();
-      console.log("[GroupChat][SEND] text — chatId:", chatId, "sender_id:", sender_id, "myUsername:", myUsername);
       await sendTextRow({ chatId, text: msg, sender_id, senderUsername: myUsername });
     } catch (e) {
-      console.error("[GroupChat][SEND] text FAILED:", e?.message, e?.code, e?.details, e?.hint);
       setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
     }
   }, [chatId, text, pendingImage, myUsername]);

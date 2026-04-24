@@ -190,7 +190,6 @@ export default function GroupInfoScreen() {
         const username = profile?.username || user.user_metadata?.username || user.email || user.id;
         setMyUsername(username);
       } catch (e) {
-        console.error("auth getUser error", e);
       }
     })();
   }, []);
@@ -211,11 +210,9 @@ export default function GroupInfoScreen() {
 
 
       if (error) {
-        console.error("loadGroup error:", error);
         return;
       }
       if (!data) {
-        console.warn("Group not found for name:", resolvedGroupName);
         return;
       }
 
@@ -228,7 +225,6 @@ export default function GroupInfoScreen() {
       setPendingMembers(Array.isArray(data.pending_members) ? data.pending_members : []);
       setReviewLinks(!!data.review_links);
     } catch (e) {
-      console.error("loadGroup unexpected:", e);
     }
   }, [resolvedGroupName]);
 
@@ -264,7 +260,6 @@ export default function GroupInfoScreen() {
       .eq("pending_review", true)
       .order("sent_date", { ascending: true })
       .order("sent_time", { ascending: true });
-    if (error) { console.warn("[GroupInfo] loadPendingMessages error:", error.message); return; }
 
     // Enrich with profile display names
     const usernames = [...new Set((data || []).map((m) => m.sender_username).filter(Boolean))];
@@ -307,13 +302,11 @@ export default function GroupInfoScreen() {
 
 
       if (error) {
-        console.error("loadSubgroups error:", error);
         setSubgroups([]);
         return;
       }
       setSubgroups(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.error("loadSubgroups unexpected:", e);
       setSubgroups([]);
     } finally {
       setLoadingSubgroups(false);
@@ -376,7 +369,6 @@ export default function GroupInfoScreen() {
 
 
       if (error) {
-        console.error("loadMembers error:", error);
         return;
       }
 
@@ -396,7 +388,6 @@ export default function GroupInfoScreen() {
 
       setMembers([...rows, ...fallbackMembers]);
     } catch (e) {
-      console.error("loadMembers unexpected:", e);
     }
   }, [membersUsernames]);
 
@@ -472,7 +463,6 @@ export default function GroupInfoScreen() {
       // (a) Navigate to ChatListScreen
       navigation.navigate("Chat");
     } catch (e) {
-      console.error("Unexpected error exiting group:", e);
       Alert.alert("Error", "Could not exit the group.");
     } finally {
       setExiting(false);
@@ -542,10 +532,8 @@ export default function GroupInfoScreen() {
       if (!asset?.uri) return;
 
       const publicUrl = await uploadGroupImageToAlbaMedia(asset.uri);
-      console.log("DEBUG uploaded group avatar publicUrl =", publicUrl);
 
       if (!groupId) {
-        console.log("DEBUG handleChangeAvatar: missing groupId");
         Alert.alert("Error", "Group row not found.");
         return;
       }
@@ -555,17 +543,14 @@ export default function GroupInfoScreen() {
         .update({ group_pic_link: publicUrl })
         .eq("id", groupId);
 
-      console.log("DEBUG update group_pic_link error =", error);
 
       if (error) {
-        console.error("update group_pic_link error", error);
         Alert.alert("Error", "Could not update group picture.");
         return;
       }
 
       setGroupAvatarUrl(publicUrl);
     } catch (e) {
-      console.error("Unexpected error uploading avatar:", e);
       Alert.alert("Error", "Could not upload image.");
     }
   };
@@ -585,7 +570,6 @@ export default function GroupInfoScreen() {
 
     setMemberMenuVisible(false);
 
-    console.log("DEBUG navigate to SingleChat with username =", uname);
 
     navigation.navigate("SingleChat", {
       username: uname,
@@ -607,7 +591,6 @@ export default function GroupInfoScreen() {
         .eq("id", groupId);
 
       if (error) {
-        console.error("make admin error", error);
         Alert.alert("Error", "Could not make admin.");
         return;
       }
@@ -615,7 +598,6 @@ export default function GroupInfoScreen() {
       setGroupAdmins(nextAdmins);
       setMemberMenuVisible(false);
     } catch (e) {
-      console.error("make admin unexpected", e);
       Alert.alert("Error", "Could not make admin.");
     }
   };
@@ -634,7 +616,6 @@ export default function GroupInfoScreen() {
         .eq("id", groupId);
 
       if (error) {
-        console.error("remove admin error", error);
         Alert.alert("Error", "Could not remove admin.");
         return;
       }
@@ -642,7 +623,6 @@ export default function GroupInfoScreen() {
       setGroupAdmins(nextAdmins);
       setMemberMenuVisible(false);
     } catch (e) {
-      console.error("remove admin unexpected", e);
       Alert.alert("Error", "Could not remove admin.");
     }
   };
@@ -664,17 +644,9 @@ export default function GroupInfoScreen() {
         .eq("id", groupId);
 
       if (error) {
-        console.error("delete member error", error);
         Alert.alert("Error", "Could not remove member.");
         return;
-      }
-
-      console.log(
-        "DEBUG delete member, nextMembers =",
-        nextMembers,
-        "nextAdmins =",
-        nextAdmins
-      );
+      }
 
       setMembersUsernames(nextMembers);
       setGroupAdmins(nextAdmins);
@@ -684,7 +656,6 @@ export default function GroupInfoScreen() {
       );
       setMemberMenuVisible(false);
     } catch (e) {
-      console.error("delete member unexpected", e);
       Alert.alert("Error", "Could not remove member.");
     }
   };
@@ -708,7 +679,6 @@ export default function GroupInfoScreen() {
         .eq("id", groupId);
 
       if (gErr) {
-        console.error("delete group row error", gErr);
         Alert.alert("Error", "Could not delete group.");
         return;
       }
@@ -723,7 +693,6 @@ export default function GroupInfoScreen() {
 
       navigation.navigate("Chat");
     } catch (e) {
-      console.error("delete group unexpected", e);
       Alert.alert("Error", "Could not delete group.");
     }
   };
@@ -768,7 +737,6 @@ export default function GroupInfoScreen() {
         .maybeSingle();
 
       if (error) {
-        console.error("join subgroup error", error);
         Alert.alert("Error", "Could not join subgroup.");
         return;
       }
@@ -781,7 +749,6 @@ export default function GroupInfoScreen() {
 
       navigation.navigate("GroupInfoScreen", { groupName: updated.groupname });
     } catch (e) {
-      console.error("join subgroup unexpected", e);
       Alert.alert("Error", "Could not join subgroup.");
     }
   };
@@ -832,7 +799,6 @@ export default function GroupInfoScreen() {
         .single();
 
       if (error) {
-        console.error("create subgroup error", error);
         Alert.alert("Error", "Could not create subgroup.");
         return;
       }
@@ -841,7 +807,6 @@ export default function GroupInfoScreen() {
         prev.map((g) => (g.id === tempId ? data : g))
       );
     } catch (e) {
-      console.error("create subgroup unexpected", e);
       Alert.alert("Error", "Could not create subgroup.");
     } finally {
       setEditingSubgroupId(null);
@@ -1460,7 +1425,6 @@ export default function GroupInfoScreen() {
                             style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
                             onPress={async () => {
                               const { error } = await supabase.rpc("approve_pending_message", { p_message_id: msg.id });
-                              if (error) { console.warn("[GroupInfo] approve error:", error.message); return; }
                               setPendingMessages((prev) => prev.filter((m) => m.id !== msg.id));
                             }}
                           >
@@ -1470,7 +1434,6 @@ export default function GroupInfoScreen() {
                             style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
                             onPress={async () => {
                               const { error } = await supabase.rpc("deny_pending_message", { p_message_id: msg.id });
-                              if (error) { console.warn("[GroupInfo] deny error:", error.message); return; }
                               setPendingMessages((prev) => prev.filter((m) => m.id !== msg.id));
                             }}
                           >

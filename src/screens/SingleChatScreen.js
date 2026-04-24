@@ -100,7 +100,6 @@ const sendTextRow = async ({ chatId, text, senderUsername, sender_id }) => {
   const sent_time = now.toTimeString().slice(0, 8);
 
   const payload = { sender_id, chat_id: chatId, is_group: false, sender_username: senderUsername || "me", content: text, sent_date, sent_time };
-  console.log("[SingleChat][SEND] sendTextRow payload:", JSON.stringify(payload));
 
   const { data, error } = await supabase
     .from("messages")
@@ -108,7 +107,6 @@ const sendTextRow = async ({ chatId, text, senderUsername, sender_id }) => {
     .select("*")
     .single();
 
-  console.log("[SingleChat][SEND] sendTextRow result — data:", data?.id, "error:", error?.message, "code:", error?.code, "details:", error?.details);
   if (error) throw error;
   return data;
 };
@@ -158,14 +156,12 @@ const sendLocationRow = async ({ chatId, locationData, senderUsername, sender_id
 
 const subscribeChatChanges = (chatId, onInsert, onDelete) => {
   if (!chatId) return () => {};
-  console.log("[SingleChat][RT] subscribeChatChanges — channel:", `messages-${chatId}`);
   const channel = supabase
     .channel(`messages-${chatId}`)
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
       (payload) => {
-        console.log("[SingleChat][RT] messages INSERT received, chat_id:", payload.new?.chat_id, "sender:", payload.new?.sender_username);
         onInsert?.(payload.new);
       }
     )
@@ -173,13 +169,10 @@ const subscribeChatChanges = (chatId, onInsert, onDelete) => {
       "postgres_changes",
       { event: "DELETE", schema: "public", table: "messages", filter: `chat_id=eq.${chatId}` },
       (payload) => {
-        console.log("[SingleChat][RT] messages DELETE received — full payload:", JSON.stringify(payload));
         onDelete?.(payload.old?.id);
       }
     )
     .subscribe((status, err) => {
-      console.log("[SingleChat][RT] messages subscribe status:", status, err ? err.message : "");
-      if (err) console.warn("[SingleChat realtime] error:", err.message);
     });
   return () => supabase.removeChannel(channel);
 };
@@ -332,14 +325,12 @@ export default function SingleChatScreen({ navigation, route }) {
         .eq("id", uid)
         .maybeSingle();
       if (profErr) {
-        console.log("[SingleChat][BLOCKED] profiles error", profErr.message);
         return [];
       }
       const arr = Array.isArray(prof?.blocked_users) ? prof.blocked_users : [];
       setBlockedUsers(arr);
       return arr;
     } catch (e) {
-      console.log("[SingleChat][BLOCKED] exception", safeErr(e));
       return [];
     }
   }, []);
@@ -389,7 +380,6 @@ export default function SingleChatScreen({ navigation, route }) {
               .eq("chat_id", chatId).eq("owner_id", myUid);
           }
         } catch (e) {
-          console.warn("[SingleChat] thread repair failed", e?.message);
         }
       })();
     }
@@ -402,7 +392,6 @@ export default function SingleChatScreen({ navigation, route }) {
     if (!peerUsername) return;
     let alive = true;
 
-    console.log("[SingleChat][RESOLVE] start", { peerUsername });
 
     (async () => {
       try {
@@ -413,17 +402,14 @@ export default function SingleChatScreen({ navigation, route }) {
         if (!alive) return;
 
         if (error || !chatIdResult) {
-          console.log("[SingleChat][RESOLVE] fail", { err: error?.message || null });
           Alert.alert("Chat unavailable", "User not found.");
           navigation.goBack();
           return;
         }
 
-        console.log("[SingleChat][RESOLVE] ok", { peerUsername, chatId: chatIdResult });
         setChatId(chatIdResult);
       } catch (e) {
         if (!alive) return;
-        console.log("[SingleChat][RESOLVE] exception", safeErr(e));
         Alert.alert("Chat unavailable", "Could not open this conversation.");
         navigation.goBack();
       }
@@ -454,13 +440,11 @@ export default function SingleChatScreen({ navigation, route }) {
           setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
         }
       } catch (e) {
-        console.log("", { runId, ...safeErr(e) });
       }
 
       // 2) auth
       const uid = await getSessionUid();
       if (!uid) {
-        console.log("", { runId });
         if (mounted) {
           setBooting(false);
           setLoadingMsgs(false);
@@ -543,7 +527,6 @@ export default function SingleChatScreen({ navigation, route }) {
   // on both iOS and Android even when the messages-table subscription misses them.
   useEffect(() => {
     if (!chatId || !myUserId) return () => {};
-    console.log("[SingleChat][RT] chat_threads supplement setup — chatId:", chatId, "myUserId:", myUserId);
 
     const channel = supabase
       .channel(`chat-threads-dm-${chatId}-${myUserId}`)
@@ -552,24 +535,18 @@ export default function SingleChatScreen({ navigation, route }) {
         { event: "*", schema: "public", table: "chat_threads" },
         async (payload) => {
           const row = payload.new;
-          console.log("[SingleChat][RT] chat_threads event received — event:", payload.eventType, "owner_id:", row?.owner_id, "chat_id:", row?.chat_id, "myUserId:", myUserId, "chatId:", chatId);
           if (!row || row.owner_id !== myUserId || row.chat_id !== chatId) {
-            console.log("[SingleChat][RT] chat_threads filtered out");
             return;
           }
-          console.log("[SingleChat][RT] chat_threads match — fetching fresh messages");
           const fresh = await fetchSingleMessagesDirect(chatId, 50, myUserId);
-          console.log("[SingleChat][RT] chat_threads fetch returned", fresh?.length, "items");
           setItems((prev) => {
             const freshIds = new Set(fresh.map((m) => String(m.id)));
             const existingIds = new Set(prev.map((m) => String(m.id)));
             const newItems = fresh.filter((m) => !existingIds.has(String(m.id)));
             const removedCount = prev.filter((m) => !freshIds.has(String(m.id))).length;
             if (newItems.length === 0 && removedCount === 0) {
-              console.log("[SingleChat][RT] chat_threads — no changes");
               return prev;
             }
-            console.log("[SingleChat][RT] chat_threads — adding", newItems.length, "new, removing", removedCount);
             const reconciled = [...prev.filter((m) => freshIds.has(String(m.id))), ...newItems].sort((a, b) =>
               (a.minuteKey || "") < (b.minuteKey || "") ? -1 : 1
             );
@@ -580,7 +557,6 @@ export default function SingleChatScreen({ navigation, route }) {
         }
       )
       .subscribe((status, err) => {
-        console.log("[SingleChat][RT] chat_threads subscribe status:", status, err ? err.message : "");
       });
 
     return () => supabase.removeChannel(channel);
@@ -589,7 +565,6 @@ export default function SingleChatScreen({ navigation, route }) {
   // focus: mark read + refresh blocked + refresh peer display name + refetch messages
   useFocusEffect(
     useCallback(() => {
-      console.log("[SingleChat][FOCUS] focus", { chatId, peerUsername });
 
       (async () => {
         const uid = await getSessionUid();
@@ -600,7 +575,6 @@ export default function SingleChatScreen({ navigation, route }) {
         try {
           await loadBlockedUsers(uid);
         } catch (e) {
-          console.log("[SingleChat][FOCUS] blocked error", safeErr(e));
         }
 
         // Refresh peer display name so header reflects any name/username changes
@@ -625,7 +599,6 @@ export default function SingleChatScreen({ navigation, route }) {
             setItems(fresh);
             setCachedSingleMessagesLocal({ chatId, peerUsername, items: fresh }).catch(() => {});
           } catch (e) {
-            console.log("[SingleChat][FOCUS] refetch error", safeErr(e));
           }
         }
       })();
@@ -659,7 +632,6 @@ export default function SingleChatScreen({ navigation, route }) {
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 150);
       setTimeout(() => listRef.current?.scrollToEnd?.({ animated: false }), 700);
     } catch (e) {
-      console.log("[SingleChat][UNBLOCK] refresh error", safeErr(e));
     }
     setLoadingMsgs(false);
   };
@@ -762,11 +734,9 @@ export default function SingleChatScreen({ navigation, route }) {
 
     try {
       const sender_id = await getSessionUid();
-      console.log("[SingleChat][SEND] text — chatId:", chatId, "sender_id:", sender_id, "myUsername:", myUsername);
       if (!sender_id) throw new Error("Not authenticated");
       await sendTextRow({ chatId, text, senderUsername: myUsername, sender_id });
     } catch (e) {
-      console.error("[SingleChat][SEND] text FAILED:", e?.message, e?.code, e?.details, e?.hint);
       setItems((p) => p.map((m) => m.id === optimistic.id ? { ...m, failed: true } : m));
     } finally {
       sendingTextRef.current = false;

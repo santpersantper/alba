@@ -202,18 +202,15 @@ export default function AdPublisherScreen() {
       try {
         const { data } = await supabase.auth.getUser();
         const user = data?.user;
-        console.log("[AdPublisher] auth user:", user?.id ?? "null");
         if (!user || !alive) return;
         const { data: prof, error: profErr } = await supabase
           .from("profiles")
           .select("username")
           .eq("id", user.id)
           .maybeSingle();
-        console.log("[AdPublisher] profile:", prof?.username ?? "null", "error:", profErr?.message ?? "none");
         if (!alive) return;
         setMyUsername(prof?.username || user.user_metadata?.username || null);
       } catch (e) {
-        console.warn("[AdPublisher] auth error:", e?.message);
       }
     })();
     return () => { alive = false; };
@@ -222,10 +219,8 @@ export default function AdPublisherScreen() {
   /* ── load ads ── */
   const loadAds = useCallback(async () => {
     if (!myUsername) {
-      console.log("[AdPublisher] loadAds skipped — no username yet");
       return;
     }
-    console.log("[AdPublisher] loadAds — username:", myUsername);
     try {
       setLoading(true);
       let data, error;
@@ -237,7 +232,6 @@ export default function AdPublisherScreen() {
         .order("date", { ascending: false })
         .order("time", { ascending: false })
         .limit(100));
-      console.log("[AdPublisher] posts query — rows:", data?.length ?? 0, "error:", error?.message ?? "none");
       if (error) {
         if (error.code === "PGRST204" || error.message?.includes("column") || error.message?.includes("schema")) {
           ({ data, error } = await supabase
@@ -247,7 +241,6 @@ export default function AdPublisherScreen() {
             .eq("type", "Ad")
             .order("date", { ascending: false })
             .limit(100));
-          console.log("[AdPublisher] posts fallback — rows:", data?.length ?? 0, "error:", error?.message ?? "none");
           if (error) throw error;
         } else {
           throw error;
@@ -261,19 +254,16 @@ export default function AdPublisherScreen() {
           .from("ad_stats")
           .select("post_id, views, purchases, contacts")
           .in("post_id", ids);
-        console.log("[AdPublisher] ad_stats — rows:", stats?.length ?? 0, "error:", statsErr?.message ?? "none");
         (stats || []).forEach((s) => { statsMap[s.post_id] = s; });
       }
       const enriched = adList.map((a) => ({
         ...a,
         stats: statsMap[a.id] || { views: 0, purchases: 0, contacts: 0 },
       }));
-      console.log("[AdPublisher] enriched ads:", enriched.map(a => ({ id: a.id, title: a.title, stats: a.stats })));
       setAds(enriched);
       setSelectedAdId((prev) => prev || enriched[0]?.id || null);
       setBcAdId((prev) => prev || enriched[0]?.id || null);
     } catch (e) {
-      console.warn("[AdPublisher] load error", e?.message ?? e);
     } finally {
       setLoading(false);
     }
@@ -295,7 +285,6 @@ export default function AdPublisherScreen() {
   const loadBuyersContacts = useCallback(async (adId) => {
     if (!adId) return;
     setBcLoading(true);
-    console.log("[AdPublisher] loadBuyersContacts — adId:", adId);
     try {
       const [{ data: buyerData, error: buyErr }, { data: contactData, error: contactErr }] = await Promise.all([
         supabase
@@ -309,8 +298,6 @@ export default function AdPublisherScreen() {
           .eq("post_id", adId)
           .order("contacted_at", { ascending: false }),
       ]);
-      console.log("[AdPublisher] buyers:", buyerData?.length ?? 0, "error:", buyErr?.message ?? "none");
-      console.log("[AdPublisher] contacts:", contactData?.length ?? 0, "error:", contactErr?.message ?? "none");
       setBuyers(buyerData || []);
 
       // Fetch users who shared this ad post
@@ -339,7 +326,6 @@ export default function AdPublisherScreen() {
       }
       setContacts(enrichedContacts);
     } catch (e) {
-      console.warn("[AdPublisher] bc load error", e?.message ?? e);
     } finally {
       setBcLoading(false);
     }
@@ -504,7 +490,6 @@ export default function AdPublisherScreen() {
     setAds((prev) => prev.map((a) => a.id === ad.id ? { ...a, actions: nextActions } : a));
     const { error } = await supabase.from(POSTS_TABLE).update({ actions: nextActions }).eq("id", ad.id);
     if (error) {
-      console.warn("[AdPublisher] toggleSelling error", error.message);
       setAds((prev) => prev.map((a) => a.id === ad.id ? { ...a, actions: currentActions } : a));
     }
   };

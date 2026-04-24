@@ -30,6 +30,8 @@ const STRINGS = {
     profile_visible_to_all: "Make your profile visible to anyone",
     allow_dms_anyone: "Allow DMs from anyone",
     saved_posts_button: "See my saved posts",
+    hidden_posts_button: "See my hidden posts",
+    hidden_posts_title: "Hidden Posts",
 
     language_section_title: "Language",
     language_en: "English",
@@ -84,6 +86,8 @@ const STRINGS = {
     menu_saved: "Saved",
     menu_delete: "Delete",
     menu_edit: "Edit",
+    menu_hide: "Hide",
+    menu_show_post: "Show post",
     confirm_delete_title: "Are you sure you want to delete your post?",
     confirm_yes: "Yes",
     confirm_no: "No",
@@ -605,13 +609,38 @@ const STRINGS = {
     ticket_request_submitted_body: "Your info was submitted and the event organizer will evaluate it.",
     ticket_request_already_pending: "Your request is already pending. The event organizer will get back to you.",
     ticket_request_already_pending_title: "Already submitted",
+    ticket_request_take_photo: "Take a photo",
+    ticket_request_pick_photo: "Upload from gallery",
+    ticket_request_photo_attached: "Photo attached",
+    ticket_request_remove_photo: "Remove photo",
+    ticket_request_uploading_photo: "Uploading…",
 
     /* ---------- Pending ticket requests (EventSettingsScreen) ---------- */
     pending_ticket_requests_title: "Pending ticket requests",
     pending_ticket_requests_empty: "No pending requests.",
+    pending_request_open_image: "Open to see sent image",
+    get_ticket_button: "Get ticket",
+    ticket_registered_title: "You're registered!",
+    ticket_registered_body: "Thanks for registering! Once @{organizer} approves it, your ticket will be available on My tickets.",
 
     /* ---------- Sold out ---------- */
     actions_sold_out: "Sold out",
+
+    /* ---------- EventSettings – info expand ---------- */
+    no_info_available: "No info available",
+
+    /* ---------- EventSettings – Google Forms integration ---------- */
+    integrate_google_forms: "Integrate Google Forms",
+    google_form_connected: "Google Form connected: {name}",
+    disconnect_google_form: "Disconnect",
+    google_forms_modal_title: "Select a Google Form",
+    google_forms_select: "Select",
+    google_forms_cancel: "Cancel",
+    google_forms_no_forms: "No Google Forms found in your account",
+    google_forms_syncing: "Syncing…",
+    google_forms_disconnect_confirm: "Disconnect Google Forms? All imported respondents will be removed from the ticket holders list.",
+    google_forms_connect_error: "Could not connect to Google. Please try again.",
+    google_forms_sync_error: "Could not sync Google Forms responses.",
 
     /* ---------- Collaborators ---------- */
     create_post_collaborators_label: "Collaborators",
@@ -620,9 +649,22 @@ const STRINGS = {
     collab_others: "{n} others",
     event_all_day: "All day",
     event_every_day: "Every day",
+    event_online: "Online",
 
     settings_allow_collab: "Allow others to include me as collaborator",
     settings_allow_collab_sub: "Others can tag you as a collaborator on their posts",
+
+    settings_display_full_name: "Show full name on profile",
+    settings_display_full_name_sub: "Display your full name instead of just your first name in your profile header",
+    settings_is_organization: "I'm running this account as an organization",
+    settings_is_organization_sub: "Tap to learn how to get your account verified as an organization",
+    settings_is_organization_active: "Your account is marked as an organization.",
+    settings_no_following: "You're not following anyone yet.",
+
+    org_modal_title: "Organization account",
+    org_modal_body1: "Please contact",
+    org_modal_body2: "with information that proves your link to the organization. It is enough to show that your email",
+    org_modal_body3: "is publicly associated with the organization you represent, on their website or other social media.",
 
     /* ---------- Share on profile ---------- */
     share_on_profile: "Share on my profile",
@@ -743,6 +785,8 @@ const STRINGS = {
     profile_visible_to_all: "Rendi il tuo profilo visibile a tutti",
     allow_dms_anyone: "Permetti messaggi privati da chiunque",
     saved_posts_button: "Vedi i miei post salvati",
+    hidden_posts_button: "Vedi i miei post nascosti",
+    hidden_posts_title: "Post nascosti",
 
     language_section_title: "Lingua",
     language_en: "Inglese",
@@ -798,6 +842,8 @@ const STRINGS = {
     menu_saved: "Salvato",
     menu_delete: "Elimina",
     menu_edit: "Modifica",
+    menu_hide: "Nascondi",
+    menu_show_post: "Mostra post",
     confirm_delete_title: "Sei sicuro di voler eliminare il post?",
     confirm_yes: "Sì",
     confirm_no: "No",
@@ -1323,13 +1369,38 @@ const STRINGS = {
     ticket_request_submitted_body: "Le tue informazioni sono state inviate e l'organizzatore le esaminerà.",
     ticket_request_already_pending: "La tua richiesta è già in attesa di revisione. L'organizzatore ti risponderà presto.",
     ticket_request_already_pending_title: "Già inviata",
+    ticket_request_take_photo: "Scatta una foto",
+    ticket_request_pick_photo: "Carica dalla galleria",
+    ticket_request_photo_attached: "Foto allegata",
+    ticket_request_remove_photo: "Rimuovi foto",
+    ticket_request_uploading_photo: "Caricamento…",
 
     /* ---------- Pending ticket requests (EventSettingsScreen) ---------- */
     pending_ticket_requests_title: "Richieste di biglietto in sospeso",
     pending_ticket_requests_empty: "Nessuna richiesta in sospeso.",
+    pending_request_open_image: "Apri per vedere l'immagine inviata",
+    get_ticket_button: "Ottieni biglietto",
+    ticket_registered_title: "Sei registrato!",
+    ticket_registered_body: "Grazie per la registrazione! Una volta che @{organizer} approva la richiesta, il tuo biglietto sarà disponibile su I miei biglietti.",
 
     /* ---------- Sold out ---------- */
     actions_sold_out: "Esaurito",
+
+    /* ---------- EventSettings – info expand ---------- */
+    no_info_available: "Nessuna informazione disponibile",
+
+    /* ---------- EventSettings – Google Forms integration ---------- */
+    integrate_google_forms: "Integra Google Forms",
+    google_form_connected: "Google Form connesso: {name}",
+    disconnect_google_form: "Disconnetti",
+    google_forms_modal_title: "Seleziona un Google Form",
+    google_forms_select: "Seleziona",
+    google_forms_cancel: "Annulla",
+    google_forms_no_forms: "Nessun Google Form trovato nel tuo account",
+    google_forms_syncing: "Sincronizzazione…",
+    google_forms_disconnect_confirm: "Disconnettere Google Forms? Tutti i partecipanti importati verranno rimossi dalla lista dei biglietti.",
+    google_forms_connect_error: "Impossibile connettersi a Google. Riprova.",
+    google_forms_sync_error: "Impossibile sincronizzare le risposte di Google Forms.",
 
     /* ---------- Collaborators ---------- */
     create_post_collaborators_label: "Collaboratori",
@@ -1338,9 +1409,22 @@ const STRINGS = {
     collab_others: "{n} altri",
     event_all_day: "Tutto il giorno",
     event_every_day: "Ogni giorno",
+    event_online: "Online",
 
     settings_allow_collab: "Permetti ad altri di includermi come collaboratore",
     settings_allow_collab_sub: "Gli altri possono aggiungerti come collaboratore ai loro post",
+
+    settings_display_full_name: "Mostra nome completo sul profilo",
+    settings_display_full_name_sub: "Visualizza il tuo nome completo invece del solo nome nell'intestazione del profilo",
+    settings_is_organization: "Gestisco questo account come un'organizzazione",
+    settings_is_organization_sub: "Tocca per scoprire come far verificare il tuo account come organizzazione",
+    settings_is_organization_active: "Il tuo account è contrassegnato come organizzazione.",
+    settings_no_following: "Non stai seguendo nessuno.",
+
+    org_modal_title: "Account organizzazione",
+    org_modal_body1: "Contatta",
+    org_modal_body2: "con informazioni che dimostrino il tuo legame con l'organizzazione. È sufficiente dimostrare che la tua email",
+    org_modal_body3: "è pubblicamente associata all'organizzazione che rappresenti, sul loro sito web o altri social media.",
 
     /* ---------- Share on profile ---------- */
     share_on_profile: "Condividi sul mio profilo",
@@ -1473,7 +1557,6 @@ export const LanguageProvider = ({ children }) => {
         setLanguageState(deviceLang);
         AsyncStorage.setItem(STORAGE_KEY, deviceLang).catch(() => {});
       } catch (e) {
-        console.warn("Language load error", e);
         const deviceLang = detectDeviceLanguage();
         if (mounted) setLanguageState(deviceLang);
       }
@@ -1486,9 +1569,7 @@ export const LanguageProvider = ({ children }) => {
 
   // Persist whenever language changes
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEY, language).catch((e) =>
-      console.warn("Language save error", e)
-    );
+    AsyncStorage.setItem(STORAGE_KEY, language).catch(() => {});
   }, [language]);
 
   const setLanguage = (next) => {

@@ -6,7 +6,6 @@ const CACHE_DIR = `${FileSystem.cacheDirectory}alba_media_cache/`;
 
 // ✅ LOGGING
 const DBG = true;
-const log = (...a) => DBG && console.log("[MediaCache]", ...a);
 
 async function ensureDir(dir) {
   try {

@@ -21,7 +21,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const DBG = false;
-const log = (...a) => DBG && console.log("[FeedVideoCache]", ...a);
+const log = () => {};
 
 const CACHE_KEY = "alba_feed_video_cache_v2";
 const MAX_VIDEOS = 10;

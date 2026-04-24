@@ -54,7 +54,6 @@ export default function AdSettings({ navigation }) {
                 .eq("id", userId);
               setPayoutStatus("not_started");
             } catch (e) {
-              console.warn("Stripe disconnect error:", e);
             }
           },
         },
@@ -86,7 +85,6 @@ export default function AdSettings({ navigation }) {
         }
       }, 3000);
     } catch (e) {
-      console.warn("Ad payout onboarding error:", e.message);
       Alert.alert("Error", e.message || "Could not start payout setup. Please try again.");
     } finally {
       setPayoutLoading(false);
@@ -115,7 +113,6 @@ export default function AdSettings({ navigation }) {
         // Load payout status — pass u.id directly (userId state not yet updated)
         if (mounted) await fetchPayoutStatus(u.id);
       } catch (e) {
-        console.warn("AdSettings load error", e);
       }
     })();
     return () => {
@@ -159,7 +156,6 @@ export default function AdSettings({ navigation }) {
       .update({ ad_tags: nextAdTags, event_tags: nextEventTags })
       .eq("id", userId)
       .then(({ error }) => {
-        if (error) console.warn("AdSettings save error", error);
       });
   };
 
@@ -172,7 +168,6 @@ export default function AdSettings({ navigation }) {
       .update({ ad_tags: nextAdTags })
       .eq("id", userId)
       .then(({ error }) => {
-        if (error) console.warn("AdSettings remove error", error);
       });
   };
 

@@ -208,7 +208,6 @@ export default function ChatListScreen({ navigation }) {
       setMaxDistanceKm(typeof fresh.maxDistanceKm === "number" ? fresh.maxDistanceKm : 50);
       setMyUsername(fresh.myUsername || null);
     } catch (e) {
-      console.warn("[ChatList] refreshInBackground failed:", e?.message);
     }
   }, []);
 
@@ -263,7 +262,6 @@ export default function ChatListScreen({ navigation }) {
         }
       )
       .subscribe((status, err) => {
-        if (err) console.warn("[ChatList realtime] error:", err.message);
       });
   }, [hydrateFromCacheFast, refreshInBackground]);
 
@@ -446,32 +444,13 @@ export default function ChatListScreen({ navigation }) {
     setSearchLoading(true);
     try {
       const safeTerm = term.replace(/%/g, "");
-      const radiusMeters = Math.max(1, Math.round(maxDistanceKm * 1000));
-      const loc = await ensureLocation();
 
-      if (!loc) {
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("id, username, name, avatar_url")
-          .or(`username.ilike.%${safeTerm}%,name.ilike.%${safeTerm}%`)
-          .not("username", "is", null)
-          .limit(25);
-
-        if (error) return setSearchResults([]);
-
-        let profiles = Array.isArray(data) ? data : [];
-        if (currentUserId) profiles = profiles.filter((p) => p.id !== currentUserId);
-        profiles = profiles.filter((p) => p.username && !blockedUsers.includes(p.username));
-        setSearchResults(profiles);
-        return;
-      }
-
-      const { data, error } = await supabase.rpc("nearby_profiles", {
-        dist: radiusMeters,
-        lat: loc.lat,
-        long: loc.lng,
-        search_term: safeTerm,
-      });
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, username, name, avatar_url")
+        .or(`username.ilike.%${safeTerm}%,name.ilike.%${safeTerm}%`)
+        .not("username", "is", null)
+        .limit(25);
 
       if (error) return setSearchResults([]);
 
@@ -605,7 +584,6 @@ export default function ChatListScreen({ navigation }) {
       refreshInBackground(currentUserId);
     } catch (e) {
       Alert.alert("Error", "Could not create group. Please try again.");
-      console.warn("[NewGroup] create error:", e?.message);
     } finally {
       setNewGroupCreating(false);
     }

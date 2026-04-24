@@ -191,9 +191,9 @@ const normalizeTime = (raw) => {
 // Renders text with @mentions styled bold + coloured and tappable
 function parseMentionText(text, isDark, onMentionPress) {
   if (!text || !text.includes("@")) return text;
-  const parts = text.split(/(@\w+)/g);
+  const parts = text.split(/(@\w+(?:\.\w+)*)/g);
   return parts.map((part, i) => {
-    if (/^@\w+$/.test(part)) {
+    if (/^@\w+(?:\.\w+)*$/.test(part)) {
       const username = part.slice(1);
       return (
         <Text
@@ -285,7 +285,6 @@ function VideoSlide({ uri, width, height, index, autoPlay }) {
       if (autoPlay) player.play();
       else player.pause();
     } catch (e) {
-      console.log("video control error", e);
     }
   }, [autoPlay, loaded]);
 
@@ -346,7 +345,7 @@ function getLocalizedTypeLabel(type, t) {
 }
 
 /* ---------- main component ---------- */
-export default function Post(props) {
+function Post(props) {
   const {
     title,
     description,
@@ -376,6 +375,8 @@ export default function Post(props) {
     initialSaved = false,
     onToggleSave,
     isActive = false,
+    isOnHiddenList = false,
+    onToggleHidden,
 
     postMediaUriHint,
     isNestedShare = false, // prevents share-of-share infinite nesting
@@ -605,15 +606,10 @@ export default function Post(props) {
             .then(({ error: viewErr }) => {
               if (!viewErr) {
                 supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "views" })
-                  .then(({ error }) => { if (error) console.warn("[Post] increment views error:", error.message); else console.log("[Post] view tracked:", effectivePostId); })
-                  .catch((e) => console.warn("[Post] increment views catch:", e?.message));
               } else if (viewErr.code === "23505") {
-                console.log("[Post] view already counted:", effectivePostId);
               } else {
-                console.warn("[Post] ad_views insert error:", viewErr.message);
               }
             })
-            .catch((e) => console.warn("[Post] ad_views insert catch:", e?.message));
         }
       } catch {
         if (mounted) {
@@ -736,8 +732,6 @@ export default function Post(props) {
               p_group_id: groupRow.id,
               p_username: myUname,
             });
-            if (pendingErr) console.warn("[Post] request_to_join_group error:", pendingErr.message);
-            else console.log("[Post] join request sent:", myUname, "→", groupRow.id);
           }
           setJoinPendingModal(true);
           return;
@@ -776,10 +770,8 @@ export default function Post(props) {
                 p_post_id: effectivePostId,
                 p_username: myUname,
               });
-              if (upU) console.warn("[Post join] add_to_unconfirmed error:", upU.message);
             }
           } catch (e) {
-            console.warn("[Post join] events.unconfirmed update failed:", e?.message || e);
           }
         }
 
@@ -813,7 +805,6 @@ export default function Post(props) {
         myUsername: myUname,
       });
     } catch (e) {
-      console.warn("[joinGroupAndOpenChat] error:", e);
       Alert.alert("Couldn’t join group", e?.message || "Please try again.");
     }
   };
@@ -974,11 +965,8 @@ export default function Post(props) {
           const postTypeStr = String(props.type || basePost.type || "").toLowerCase();
           if (postTypeStr === "ad" && effectivePostId) {
             supabase.rpc("increment_ad_stat", { p_post_id: effectivePostId, p_field: "contacts" })
-              .then(({ error }) => { if (error) console.warn("[Post] increment contacts error:", error.message); else console.log("[Post] contact tracked:", effectivePostId); })
-              .catch((e) => console.warn("[Post] increment contacts catch:", e?.message));
             supabase.auth.getUser().then(({ data: authData }) => {
               const cid = authData?.user?.id;
-              if (!cid) { console.warn("[Post] contact upsert skipped — no user id"); return; }
               supabase.from("profiles").select("username, avatar_url").eq("id", cid).maybeSingle()
                 .then(({ data: prof }) => {
                   supabase.from("ad_contacts").insert({
@@ -987,11 +975,9 @@ export default function Post(props) {
                     contacter_username: prof?.username || null,
                     contacter_avatar: prof?.avatar_url || null,
                   }).then(({ error }) => {
-                    if (error && error.code !== "23505") console.warn("[Post] ad_contacts insert error:", error.message);
-                    else console.log("[Post] ad_contacts insert ok");
-                  }).catch((e) => console.warn("[Post] ad_contacts insert catch:", e?.message));
-                }).catch((e) => console.warn("[Post] profiles fetch catch:", e?.message));
-            }).catch((e) => console.warn("[Post] getUser catch:", e?.message));
+                  }).catch(() => {});
+                }).catch(() => {});
+              }).catch(() => {});
           }
           posthog.capture('message_seller_tapped', { post_id: postId });
           if (onPressMessage) onPressMessage();
@@ -1013,7 +999,6 @@ export default function Post(props) {
       if (error) throw error;
       onDeleted?.(effectivePostId);
     } catch (e) {
-      console.warn("Delete failed:", e?.message || e);
     } finally {
       setDeleting(false);
       setConfirmOpen(false);
@@ -1059,8 +1044,10 @@ export default function Post(props) {
     ? `${prettyTime} to ${prettyEndTime}`
     : prettyTime || prettyEndTime || null;
 
+  const isOnlinePost = !!(props.online ?? basePost.online);
+
   const subtitle = isEventPost
-    ? [prettyDateRange, timeRange, rawLocation].filter(Boolean).join(", ")
+    ? [prettyDateRange, timeRange, isOnlinePost ? null : rawLocation].filter(Boolean).join(", ")
     : [rawLocation].filter(Boolean).join(", ");
 
   // ── shared post rendering ──────────────────────────────────────────────────
@@ -1131,47 +1118,65 @@ export default function Post(props) {
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
-            <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
-              <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
-            </TouchableOpacity>
-            {(() => {
-              const collabs = Array.isArray(basePost.collaborators) ? basePost.collaborators.filter(Boolean) : [];
-              if (collabs.length === 0) return null;
-              if (collabs.length === 1) {
-                return (
-                  <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
-                    {" "}and{" "}
-                    <ThemedText
-                      style={[styles.handleLine]}
-                      onPress={() => navigation.navigate("Profile", { username: collabs[0] })}
-                    >
-                      @{collabs[0]}
+          {(() => {
+            const rawCollabs = props.collaborators ?? basePost.collaborators;
+            const collabs = Array.isArray(rawCollabs) ? rawCollabs.filter(Boolean) : [];
+            return (
+              <>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
+                  <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
+                    <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
+                  </TouchableOpacity>
+                  {collabs.length === 1 && (
+                    <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
+                      {" "}and{" "}
+                      <ThemedText
+                        style={[styles.handleLine]}
+                        onPress={() => navigation.navigate("Profile", { username: collabs[0] })}
+                      >
+                        @{collabs[0]}
+                      </ThemedText>
                     </ThemedText>
-                  </ThemedText>
-                );
-              }
-              return (
-                <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
-                  {" "}and{" "}
-                  <ThemedText
-                    style={[styles.handleLine, { color: isDark ? "#59A7FF" : "#1a6fd4" }]}
-                    onPress={() => setCollabModalOpen(true)}
-                  >
-                    {(t("collab_others") || "{n} others").replace("{n}", String(collabs.length))}
-                  </ThemedText>
-                </ThemedText>
-              );
-            })()}
-          </View>
-          {(isEventPost ? (prettyDateRange || timeRange || rawLocation) : rawLocation) && (
+                  )}
+                  {collabs.length > 1 && (
+                    <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
+                      {" "}and{" "}
+                      <ThemedText
+                        style={[styles.handleLine, { color: isDark ? "#59A7FF" : "#1a6fd4" }]}
+                        onPress={() => setCollabModalOpen((v) => !v)}
+                      >
+                        {(t("collab_others") || "{n} others").replace("{n}", String(collabs.length))}
+                      </ThemedText>
+                    </ThemedText>
+                  )}
+                </View>
+                {collabModalOpen && collabs.length > 1 && (
+                  <ThemedView style={[styles.collabDropdown, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+                    {collabs.map((u) => (
+                      <TouchableOpacity
+                        key={u}
+                        style={styles.collabDropdownItem}
+                        onPress={() => { setCollabModalOpen(false); navigation.navigate("Profile", { username: u }); }}
+                      >
+                        <Feather name="user" size={13} color={isDark ? "#aaa" : "#555"} style={{ marginRight: 7 }} />
+                        <ThemedText style={{ fontFamily: "Poppins", fontSize: 13 }}>@{u}</ThemedText>
+                      </TouchableOpacity>
+                    ))}
+                  </ThemedView>
+                )}
+              </>
+            );
+          })()}
+          {(isEventPost ? (prettyDateRange || timeRange || rawLocation || isOnlinePost) : rawLocation) && (
             <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" }}>
               {isEventPost && (prettyDateRange || timeRange) && (
                 <ThemedText style={styles.subtitle}>
-                  {[prettyDateRange, timeRange].filter(Boolean).join(", ")}{rawLocation ? ",\u00A0" : ""}
+                  {[prettyDateRange, timeRange].filter(Boolean).join(", ")}{(rawLocation || isOnlinePost) ? ",\u00A0" : ""}
                 </ThemedText>
               )}
-              {!!rawLocation && (
+              {isEventPost && isOnlinePost ? (
+                <ThemedText style={styles.subtitle}>{t("event_online") || "Online"}</ThemedText>
+              ) : (!!rawLocation && (
                 <TouchableOpacity
                   activeOpacity={0.7}
                   onPress={() => {
@@ -1184,7 +1189,7 @@ export default function Post(props) {
                 >
                   <ThemedText style={[styles.subtitle, { color: isDark ? "#AAAAAA" : "#0D2B6B" }]}>{rawLocation}</ThemedText>
                 </TouchableOpacity>
-              )}
+              ))}
             </View>
           )}
         </View>
@@ -1405,7 +1410,6 @@ export default function Post(props) {
                         },
                       }).catch(() => {});
                     } catch (e) {
-                      console.warn("[Post] remove_collaborator error:", e?.message);
                     }
                   }}
                 >
@@ -1434,14 +1438,43 @@ export default function Post(props) {
                       time: rawTime || null,
                       endDate: rawEndDate || null,
                       endTime: rawEndTime || null,
+                      all_day: basePost.all_day ?? false,
+                      every_day: basePost.every_day ?? false,
+                      online: basePost.online ?? false,
                       location: rawLocation || null,
                       mediaUrls: mediaArr,
+                      collaborators: Array.isArray(props.collaborators ?? basePost.collaborators) ? (props.collaborators ?? basePost.collaborators) : [],
                     },
                   });
                 }}
               >
                 <Feather name="edit-2" size={16} color={isDark ? "#FFFFFF" : "#333333"} style={{ marginRight: 8 }} />
                 <ThemedText style={styles.menuText}>{t("menu_edit") || "Edit"}</ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {canDelete && (
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={async () => {
+                  setMenuOpen(false);
+                  const newHidden = !isOnHiddenList;
+                  try {
+                    await supabase.from("posts").update({ hidden: newHidden }).eq("id", effectivePostId);
+                    if (onToggleHidden) onToggleHidden(effectivePostId, newHidden);
+                  } catch (e) {
+                  }
+                }}
+              >
+                <Feather
+                  name={isOnHiddenList ? "eye" : "eye-off"}
+                  size={16}
+                  color={isDark ? "#FFFFFF" : "#333333"}
+                  style={{ marginRight: 8 }}
+                />
+                <ThemedText style={styles.menuText}>
+                  {isOnHiddenList ? (t("menu_show_post") || "Show post") : (t("menu_hide") || "Hide")}
+                </ThemedText>
               </TouchableOpacity>
             )}
 
@@ -1461,34 +1494,6 @@ export default function Post(props) {
         </View>
       )}
 
-      {/* Collaborator list modal (when "X others" is tapped) */}
-      {collabModalOpen && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setCollabModalOpen(false)}>
-          <View style={styles.menuBackdrop}>
-            <ThemedView style={[styles.menuCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff", padding: 20, margin: 32, borderRadius: 16 }]}>
-              <ThemedText style={{ fontFamily: "PoppinsBold", fontSize: 15, marginBottom: 14 }}>
-                Collaborators
-              </ThemedText>
-              {(Array.isArray(basePost.collaborators) ? basePost.collaborators.filter(Boolean) : []).map((u) => (
-                <TouchableOpacity
-                  key={u}
-                  style={{ paddingVertical: 8, flexDirection: "row", alignItems: "center" }}
-                  onPress={() => { setCollabModalOpen(false); navigation.navigate("Profile", { username: u }); }}
-                >
-                  <Feather name="user" size={14} color={isDark ? "#aaa" : "#555"} style={{ marginRight: 8 }} />
-                  <ThemedText style={{ fontFamily: "Poppins", fontSize: 14 }}>@{u}</ThemedText>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity
-                style={{ marginTop: 14, backgroundColor: "#3D8BFF", borderRadius: 10, paddingVertical: 10, alignItems: "center" }}
-                onPress={() => setCollabModalOpen(false)}
-              >
-                <ThemedText style={{ color: "#fff", fontFamily: "PoppinsBold" }}>Close</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          </View>
-        </Modal>
-      )}
 
       <Modal visible={reportOpen} transparent animationType="fade" onRequestClose={() => setReportOpen(false)}>
         <View style={styles.reportOverlay}>
@@ -1632,6 +1637,8 @@ const styles = StyleSheet.create({
   menuItem: { paddingVertical: 10, paddingHorizontal: 12, flexDirection: "row", alignItems: "center" },
   menuText: { fontFamily: "Poppins", fontSize: 14 },
   menuDivider: { height: 1, backgroundColor: "#eceff3", marginVertical: 2 },
+  collabDropdown: { marginTop: 4, marginBottom: 2, borderRadius: 8, paddingVertical: 4, paddingHorizontal: 4, shadowColor: "#000", shadowOpacity: 0.10, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  collabDropdownItem: { flexDirection: "row", alignItems: "center", paddingVertical: 7, paddingHorizontal: 6 },
 
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center" },
   modalOverlayTouch: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
@@ -1651,3 +1658,5 @@ const styles = StyleSheet.create({
   reportCardBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
   reportCardBtnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
 });
+
+export default React.memo(Post);

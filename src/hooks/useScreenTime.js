@@ -56,17 +56,12 @@ export function useScreenTime() {
       setUsageData({ ...MOCK_DATA, lastUpdated: new Date().toISOString() });
       return;
     }
-    console.log("[ScreenTime] refreshUsageData: calling native module");
     try {
       const method = AlbaScreenTimeModule.refreshReport ?? AlbaScreenTimeModule.getUsageData;
-      console.log("[ScreenTime] method:", AlbaScreenTimeModule.refreshReport ? "refreshReport" : "getUsageData");
       const raw = await method.call(AlbaScreenTimeModule);
-      console.log("[ScreenTime] raw:", typeof raw === "string" ? raw.slice(0, 300) : JSON.stringify(raw)?.slice(0, 300));
       const data = typeof raw === "string" ? JSON.parse(raw) : raw;
-      console.log("[ScreenTime] today.apps:", JSON.stringify(data?.today?.apps));
       setUsageData(data);
     } catch (e) {
-      console.error("[ScreenTime] refreshUsageData ERROR:", e?.message, e);
       setError(e?.message ?? "Failed to read usage data");
     }
   }, []);
@@ -86,10 +81,8 @@ export function useScreenTime() {
       try {
         const raw = await AlbaScreenTimeModule.getUsageData();
         const data = typeof raw === "string" ? JSON.parse(raw) : raw;
-        console.log("[ScreenTime] poll getUsageData lastUpdated:", data?.lastUpdated);
         setUsageData(data);
       } catch (e) {
-        console.error("[ScreenTime] poll ERROR:", e?.message);
       }
     }, 60_000);
   }, []);
@@ -97,7 +90,6 @@ export function useScreenTime() {
   // ── Start DeviceActivity monitoring (midnight → 23:59) ───────────────────
   const startMonitoring = useCallback(async () => {
     if (!IS_NATIVE_AVAILABLE) return;
-    console.log("[ScreenTime] startMonitoring called");
     try {
       await AlbaScreenTimeModule.startMonitoring({
         startHour: 0,
@@ -105,7 +97,6 @@ export function useScreenTime() {
         endHour: 23,
         endMinute: 59,
       });
-      console.log("[ScreenTime] startMonitoring done");
     } catch (e) {
       setError(e?.message ?? "Failed to start monitoring");
     }
@@ -129,7 +120,6 @@ export function useScreenTime() {
     try {
       await AlbaScreenTimeModule.presentUsageReport();
     } catch (e) {
-      console.error("[ScreenTime] presentReport ERROR:", e?.message);
     }
   }, []);
 
@@ -142,7 +132,6 @@ export function useScreenTime() {
     try {
       await AlbaScreenTimeModule.setReportStyle(JSON.stringify(styleData));
     } catch (e) {
-      console.error("[ScreenTime] setReportStyle ERROR:", e?.message);
     }
   }, []);
 
@@ -151,10 +140,8 @@ export function useScreenTime() {
     if (!IS_NATIVE_AVAILABLE) return true; // no-op on mock path
     try {
       const result = await AlbaScreenTimeModule.requestAppSelection();
-      console.log("[ScreenTime] requestAppSelection result:", JSON.stringify(result));
       return true;
     } catch (e) {
-      console.log("[ScreenTime] requestAppSelection ERROR:", e?.code, e?.message);
       setError(e?.message ?? "App selection failed");
       return false;
     }
@@ -167,7 +154,6 @@ export function useScreenTime() {
       const raw = await AlbaScreenTimeModule.getInstalledApps();
       return typeof raw === "string" ? JSON.parse(raw) : raw;
     } catch (e) {
-      console.error("[ScreenTime] getInstalledApps ERROR:", e?.message);
       return [];
     }
   }, []);
@@ -178,7 +164,6 @@ export function useScreenTime() {
     try {
       await AlbaScreenTimeModule.setTrackedApps(packages);
     } catch (e) {
-      console.error("[ScreenTime] setTrackedApps ERROR:", e?.message);
     }
   }, []);
 
@@ -193,7 +178,6 @@ export function useScreenTime() {
     try {
       setLoading(true);
       const authResult = await AlbaScreenTimeModule.requestAuthorization();
-      console.log("[ScreenTime] requestAuthorization result:", JSON.stringify(authResult));
       // On iOS the authorization dialog is synchronous — granted by the time we resume.
       // On Android the native call opens Settings and resolves immediately; the AppState
       // listener in the mount effect handles re-checking when the user returns.
@@ -233,7 +217,6 @@ export function useScreenTime() {
 
       try {
         const result = await AlbaScreenTimeModule.getAuthorizationStatus();
-        console.log("[ScreenTime] getAuthorizationStatus result:", JSON.stringify(result));
         const isAuth = result?.authorized === true;
         if (!mounted) return;
         setAuthorized(isAuth);

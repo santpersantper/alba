@@ -14,6 +14,7 @@ import {
   Modal,
   TextInput,
   RefreshControl,
+  Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import Post from "../components/Post";
@@ -79,7 +80,7 @@ async function fetchProfileById(id) {
   if (!id) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name")
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
@@ -91,7 +92,7 @@ async function fetchProfileByUsername(username) {
   const uname = asAt(username);
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name")
     .eq("username", uname)
     .maybeSingle();
   if (error) throw error;
@@ -128,6 +129,38 @@ async function uploadImageToAlbaMedia(localUri, pathPrefix = "profiles") {
 
   const { data: publicData } = supabase.storage.from("alba-media").getPublicUrl(data.path);
   return publicData.publicUrl;
+}
+
+const BIO_URL_RE = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)*\.(?:com|net|org|io|app|it|co|dev|me|eu|info|biz|edu|uk|de|fr|es|pt|nl|be|ch|at|se|no|dk|fi|pl|ru|jp|au|ca|br|mx)(?:\/[^\s]*)?/g;
+
+function renderBioWithLinks(text, baseStyle) {
+  const segments = [];
+  let last = 0;
+  let match;
+  BIO_URL_RE.lastIndex = 0;
+  while ((match = BIO_URL_RE.exec(text)) !== null) {
+    if (match.index > last) segments.push({ type: "text", value: text.slice(last, match.index) });
+    segments.push({ type: "link", value: match[0] });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) segments.push({ type: "text", value: text.slice(last) });
+
+  return segments.map((seg, i) =>
+    seg.type === "link" ? (
+      <Text
+        key={i}
+        style={[baseStyle, { color: "#59A7FF" }]}
+        onPress={() => {
+          const url = seg.value.startsWith("http") ? seg.value : `https://${seg.value}`;
+          Linking.openURL(url).catch(() => {});
+        }}
+      >
+        {seg.value}
+      </Text>
+    ) : (
+      <Text key={i} style={baseStyle}>{seg.value}</Text>
+    )
+  );
 }
 
 export default function ProfileScreen({ navigation, route }) {
@@ -208,36 +241,22 @@ export default function ProfileScreen({ navigation, route }) {
     useCallback(() => {
       let alive = true;
 
-      // 1) cache-first UI (instant)
-      (async () => {
-        try {
-          const cached = await getCachedProfile({ userId: wantUserId, username: wantUsername, isMe });
-          if (!alive) return;
-
-          if (cached) {
-            setFetched((prev) => ({
-              ...(prev || {}),
-              ...cached,
-              username: cached.username ?? wantUsername ?? prev?.username ?? null,
-            }));
-          }
-          setBooting(false);
-        } catch {
-          if (!alive) return;
-          setBooting(false);
-        }
-      })();
-
-      // 2) background refresh + also warms image cache in profileCache
+      // fetch directly from DB — no cache
       (async () => {
         try {
           const me = await getMe().catch(() => null);
           if (alive && me?.id) setAuthId(me.id);
 
-          const row = await preloadProfileData({ userId: wantUserId, username: wantUsername, isMe });
+          let row = null;
+          if (wantUserId) row = await fetchProfileById(wantUserId);
+          else if (wantUsername) row = await fetchProfileByUsername(wantUsername);
+          else if (me?.id) row = await fetchProfileById(me.id);
           if (!alive) return;
           if (row) setFetched(row);
-        } catch {}
+        } catch {
+        } finally {
+          if (alive) setBooting(false);
+        }
       })();
 
       return () => {
@@ -249,12 +268,14 @@ export default function ProfileScreen({ navigation, route }) {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const row = await preloadProfileData({ userId: wantUserId, username: wantUsername, isMe });
+      let row = null;
+      if (wantUserId) row = await fetchProfileById(wantUserId);
+      else if (wantUsername) row = await fetchProfileByUsername(wantUsername);
       if (row) setFetched(row);
     } finally {
       setRefreshing(false);
     }
-  }, [wantUserId, wantUsername, isMe]);
+  }, [wantUserId, wantUsername]);
 
   // blocked + followed users (background, runs when authId is known)
   useEffect(() => {
@@ -337,6 +358,7 @@ export default function ProfileScreen({ navigation, route }) {
 
       email: fetched?.email ?? null,
       isVerified: fetched?.is_verified ?? false,
+      displayFullName: fetched?.display_full_name ?? false,
     };
   }, [fetched, params]);
 
@@ -344,8 +366,9 @@ export default function ProfileScreen({ navigation, route }) {
   const targetUsername = asAt(display.username);
   const isBlocked = !isSelf && !!targetUsername && blockedUsers.includes(targetUsername);
 
-  const firstName =
-    display?.name && display.name !== "User"
+  const firstName = fetched?.display_full_name
+    ? (fetched.name || display?.username || "User")
+    : display?.name && display.name !== "User"
       ? String(display.name).split(" ")[0]
       : display?.username
       ? `@${display.username}`
@@ -557,7 +580,6 @@ export default function ProfileScreen({ navigation, route }) {
       try {
         // Don’t show other users’ posts if blocked (optional, but consistent with your UI state)
         if (isBlocked) {
-          console.log("[Profile][Posts] blocked -> skipping posts load", { targetUsername });
           if (alive) setPosts([]);
           return;
         }
@@ -565,18 +587,7 @@ export default function ProfileScreen({ navigation, route }) {
         const authorId = display?.id || null;
         const uname = asAt(display?.username) || null;
 
-        console.log("[Profile][Posts] start", {
-          isMe,
-          isSelf,
-          authId,
-          authorId,
-          uname,
-          wantUserId,
-          wantUsername,
-        });
-
         if (!authorId && !uname) {
-          console.log("[Profile][Posts] no authorId/username yet -> wait");
           return;
         }
 
@@ -595,16 +606,9 @@ export default function ProfileScreen({ navigation, route }) {
         const { data, error } = await q;
 
         if (error) {
-          console.log("[Profile][Posts] ERROR", {
-            message: error.message,
-            details: error.details,
-            hint: error.hint,
-            code: error.code,
-          });
           throw error;
         }
 
-        console.log("[Profile][Posts] ok", { count: data?.length || 0 });
 
         let allPosts = Array.isArray(data) ? data : [];
 
@@ -643,6 +647,9 @@ export default function ProfileScreen({ navigation, route }) {
           } catch {}
         }
 
+        // Filter out hidden posts
+        allPosts = allPosts.filter((p) => !p.hidden);
+
         // Sort merged array by date/time descending
         allPosts = allPosts.sort((a, b) => {
           const da = String(a.date || ""), db = String(b.date || "");
@@ -655,7 +662,6 @@ export default function ProfileScreen({ navigation, route }) {
         setPosts(allPosts);
       } catch (e) {
         if (!alive) return;
-        console.log("[Profile][Posts] catch", e?.message || e);
         setPosts([]);
       } finally {
         if (alive) setPostsLoading(false);
@@ -972,11 +978,10 @@ export default function ProfileScreen({ navigation, route }) {
                   {bioText ? (
                     <Text
                       style={[styles.bio, { color: theme.secondaryText, marginTop: 0, flex: 1 }]}
-                      onPress={() => shouldShowReadMore && setShowFullBio((v) => !v)}
                     >
-                      {displayedBio}
+                      {renderBioWithLinks(displayedBio, { color: theme.secondaryText })}
                       {!showFullBio && shouldShowReadMore && (
-                        <Text style={[styles.readMore, { color: theme.text }]}>{" "}{t("profile_bio_read_more")}</Text>
+                        <Text style={[styles.readMore, { color: theme.text }]} onPress={() => setShowFullBio(true)}>{" "}{t("profile_bio_read_more")}</Text>
                       )}
                     </Text>
                   ) : (
@@ -997,11 +1002,10 @@ export default function ProfileScreen({ navigation, route }) {
               !!bioText && (
                 <Text
                   style={[styles.bio, { color: theme.secondaryText }]}
-                  onPress={() => shouldShowReadMore && setShowFullBio((v) => !v)}
                 >
-                  {displayedBio}
+                  {renderBioWithLinks(displayedBio, { color: theme.secondaryText })}
                   {!showFullBio && shouldShowReadMore && (
-                    <Text style={[styles.readMore, { color: theme.text }]}>{" "}{t("profile_bio_read_more")}</Text>
+                    <Text style={[styles.readMore, { color: theme.text }]} onPress={() => setShowFullBio(true)}>{" "}{t("profile_bio_read_more")}</Text>
                   )}
                 </Text>
               )
@@ -1057,6 +1061,9 @@ export default function ProfileScreen({ navigation, route }) {
                   postId={item.id}
                   authorId={item.author_id}
                   onDeleted={(id) => setPosts((prev) => prev.filter((p) => p.id !== id))}
+                  onToggleHidden={(id, newHidden) => {
+                    if (newHidden) setPosts((prev) => prev.filter((p) => p.id !== id));
+                  }}
                 />
               </View>
             ))

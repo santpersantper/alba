@@ -14,10 +14,6 @@ const SUPABASE_ANON_KEY =
   Constants?.expoConfig?.extra?.expoPublic?.SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.warn(
-    '[Supabase] Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY. ' +
-    'Check app.json/app.config and EAS/Expo env. Requests will fail.'
-  );
 }
 
 // expo-secure-store has a 2 KB per-key limit. Supabase stores the session as a

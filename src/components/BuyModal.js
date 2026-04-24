@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   View,
@@ -9,7 +9,12 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  Image,
 } from "react-native";
+import { Feather } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import { decode } from "base-64";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
@@ -48,7 +53,6 @@ const fieldIsGender = (f) => {
   return k === "gender" || k === "sex";
 };
 
-// Returns the pre-fill value from the user's profile for a given required info field name
 const profileValueForField = (f, profile) => {
   if (!profile) return "";
   const k = normKey(f);
@@ -69,7 +73,6 @@ export default function BuyModal({ visible, onClose, postId }) {
   const { t } = useAlbaLanguage();
 
   const [loading, setLoading] = useState(false);
-  // { title, message, onOk } — replaces all Alert.alert calls
   const [feedback, setFeedback] = useState(null);
   const showFeedback = (title, message, onOk) =>
     setFeedback({ title, message, onOk: onOk || null });
@@ -84,27 +87,29 @@ export default function BuyModal({ visible, onClose, postId }) {
   const [postType, setPostType] = useState(null);
   const [items, setItems] = useState([]);
 
-  // Manual approval + sold-out state
+  // Manual approval state
   const [manuallyApprove, setManuallyApprove] = useState(false);
   const [approvalInfoPlaceholder, setApprovalInfoPlaceholder] = useState("");
-  const [isSoldOut, setIsSoldOut] = useState(false);
-  // null = not in approval flow, 'form' = showing request form, 'submitted' = done
-  const [approvalStep, setApprovalStep] = useState(null);
   const [approvalInfo, setApprovalInfo] = useState("");
+  const [approvalPhoto, setApprovalPhoto] = useState(null);
+  const [hasPendingRequest, setHasPendingRequest] = useState(false);
+  const [organizerUser, setOrganizerUser] = useState(null);
+  const [freeConfirmationVisible, setFreeConfirmationVisible] = useState(false);
+
+  const [isSoldOut, setIsSoldOut] = useState(false);
 
   // auth context
   const [myUsername, setMyUsername] = useState(null);
   const [myProfile, setMyProfile] = useState(null);
 
-  const LOG = (...args) => console.log("[BuyModal]", ...args);
-  const WARN = (...args) => console.warn("[BuyModal]", ...args);
+
+  const LOG = () => {};
+  const WARN = () => {};
 
   const { isPlatformPaySupported, confirmPlatformPayPayment } = usePlatformPay();
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const [platformPayAvailable, setPlatformPayAvailable] = useState(false);
 
-  // Check once on mount whether Apple Pay / Google Pay is available on this device.
-  // TODO: re-enable Android once Google Pay merchant approval is complete.
   useEffect(() => {
     if (Platform.OS === "android") return;
     isPlatformPaySupported()
@@ -146,7 +151,6 @@ export default function BuyModal({ visible, onClose, postId }) {
       try {
         setLoading(true);
 
-        // Also (re-)fetch buyer's profile to ensure auto-fill has fresh data
         let buyerProfile = myProfile;
         const { data: authData } = await supabase.auth.getUser();
         const buyerUid = authData?.user?.id;
@@ -163,23 +167,15 @@ export default function BuyModal({ visible, onClose, postId }) {
           }
         }
 
-        LOG("OPEN fetch post", {
-          postId,
-          postId_type: typeof postId,
-          looksLikeUuid: looksLikeUuid(String(postId)),
-        });
-
-        // Try full query with new columns first; fall back if schema cache hasn't refreshed yet
         let data, fetchError;
         ({ data, error: fetchError } = await supabase
           .from(POSTS_TABLE)
-          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted, manually_approve_attendees, ticket_approval_info, is_ticket_number_fixed, ticket_number, pending_ticket_requests, approved_ticket_buyers")
+          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted, manually_approve_attendees, ticket_approval_info, is_ticket_number_fixed, ticket_number, pending_ticket_requests, user")
           .eq("id", postId)
           .maybeSingle());
 
         if (fetchError) {
           if (fetchError.code === "PGRST204" || fetchError.message?.includes("column") || fetchError.message?.includes("schema")) {
-            // New columns not yet visible in PostgREST schema cache — fall back to basic query
             let basicErr;
             ({ data, error: basicErr } = await supabase
               .from(POSTS_TABLE)
@@ -194,7 +190,6 @@ export default function BuyModal({ visible, onClose, postId }) {
 
         if (cancelled || !data) return;
 
-        // Filter out empty product type names
         const rawTypes = data.product_types || [];
         const rawPrices = data.product_prices || [];
         const rawBools = data.product_booleans || [];
@@ -202,7 +197,6 @@ export default function BuyModal({ visible, onClose, postId }) {
         const rawReqInfo = Array.isArray(data.product_required_info) ? data.product_required_info : [];
         const rawOptions = Array.isArray(data.product_options) ? data.product_options : [];
 
-        // Build filtered index to remove unnamed types
         const validIndices = rawTypes.map((t, i) => ({ t, i })).filter(({ t }) => String(t || "").trim());
         const pTypes  = validIndices.map(({ t }) => t);
         const pPrices = validIndices.map(({ i }) => rawPrices[i] ?? 0);
@@ -223,11 +217,13 @@ export default function BuyModal({ visible, onClose, postId }) {
         setIsAgeRestricted(!!data.is_age_restricted);
         setPostType(data.type || null);
 
-        // Manual approval — determine initial step based on buyer's status
         const manApprove = !!data.manually_approve_attendees;
         setManuallyApprove(manApprove);
         setApprovalInfoPlaceholder(data.ticket_approval_info || "");
         setApprovalInfo("");
+        setApprovalPhoto(null);
+        setFreeConfirmationVisible(false);
+        setOrganizerUser(data.user || null);
 
         if (manApprove && buyerProfile?.username) {
           const uname = String(buyerProfile.username).toLowerCase();
@@ -235,17 +231,11 @@ export default function BuyModal({ visible, onClose, postId }) {
           const isAlreadyPending = pendingList.some(
             (r) => String(r?.username || "").toLowerCase() === uname
           );
-          const approvedList = Array.isArray(data.approved_ticket_buyers) ? data.approved_ticket_buyers : [];
-          const isApproved = approvedList.some(
-            (u) => String(u || "").toLowerCase() === uname
-          );
-          // 'pending' = already submitted awaiting review; 'approved' = can buy normally; null = first time
-          setApprovalStep(isAlreadyPending ? "pending" : isApproved ? "approved" : null);
+          setHasPendingRequest(isAlreadyPending);
         } else {
-          setApprovalStep(null);
+          setHasPendingRequest(false);
         }
 
-        // Sold-out: check ticket_holders count against ticket_number
         if (data.is_ticket_number_fixed && data.ticket_number > 0) {
           const { ev: evData } = await fetchEventForPost(postId);
           const holdersCount = Array.isArray(evData?.ticket_holders) ? evData.ticket_holders.length : 0;
@@ -259,7 +249,6 @@ export default function BuyModal({ visible, onClose, postId }) {
           return acc;
         }, {});
 
-        // Pre-fill "for me" extra fields from the buyer's profile
         const makePrefilledDetails = (typeIndex) => {
           const details = {};
           const rInfo = [...(rawReqInfo[typeIndex] ?? []), ...(reqInfo ?? [])];
@@ -366,13 +355,11 @@ export default function BuyModal({ visible, onClose, postId }) {
     );
   };
 
-  // per-unit Alba @username (stored under __alba_username)
   const changeAlbaUsername = (index, unitIndex, value) => {
     const cleaned = cleanUsername(value);
     changeDetail(index, unitIndex, "__alba_username", cleaned);
   };
 
-  // for-me extra fields
   const changeMeExtra = (index, field, value) => {
     const key = `ME__${field}`;
     setItems((prev) =>
@@ -382,7 +369,45 @@ export default function BuyModal({ visible, onClose, postId }) {
     );
   };
 
-  const handleCancel = () => onClose?.();
+  const uploadApprovalPhoto = async (localUri) => {
+    const ext = (localUri.split(".").pop()?.split("?")[0] || "jpg").toLowerCase();
+    const mimeType = ext === "png" ? "image/png" : "image/jpeg";
+    const key = `ticket-approvals/${postId}/${myUsername}_${Date.now()}.${ext}`;
+    const base64 = await FileSystem.readAsStringAsync(localUri, { encoding: "base64" });
+    const binary = decode(base64);
+    const buffer = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+    const { error } = await supabase.storage
+      .from("alba-media")
+      .upload(key, buffer, { upsert: false, contentType: mimeType });
+    if (error) throw error;
+    const { data: pub } = supabase.storage.from("alba-media").getPublicUrl(key);
+    return pub.publicUrl;
+  };
+
+  const handleTakePhoto = async () => {
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (asset?.uri) setApprovalPhoto(asset.uri);
+  };
+
+  const handlePickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: true,
+    });
+    if (result.canceled) return;
+    const asset = result.assets?.[0];
+    if (asset?.uri) setApprovalPhoto(asset.uri);
+  };
+
+  const handleCancel = () => { setApprovalPhoto(null); onClose?.(); };
 
   const formatPrice = (p) => {
     if (p == null) return "";
@@ -398,6 +423,20 @@ export default function BuyModal({ visible, onClose, postId }) {
     return "ticket";
   })();
   const capitalKind = kindWord.charAt(0).toUpperCase() + kindWord.slice(1);
+
+  // Compute total for currently selected items — used to decide button type
+  const selectedTotalCents = useMemo(() => {
+    return items.reduce((sum, state, idx) => {
+      if (!state.checked) return sum;
+      const priceEuros = Number(prices[idx]) || 0;
+      const qty = state.forMeOnly ? 1 : parseInt(state.quantity, 10) || 0;
+      const opts = productOptions[idx] || [];
+      const optExtra = (state.selectedOptions || []).reduce((s, optIdx) => {
+        return s + (Number(opts[optIdx]?.extraCost) || 0);
+      }, 0);
+      return sum + (Math.round(priceEuros * 100) + Math.round(optExtra * 100)) * qty;
+    }, 0);
+  }, [items, prices, productOptions]);
 
   const buildTicketUnits = () => {
     const units = [];
@@ -440,7 +479,6 @@ export default function BuyModal({ visible, onClose, postId }) {
         const details = state.details || {};
         const rInfo = getRequiredInfoForIndex(productIndex);
 
-        // key is `${unitIdx}__${field}` where field="__alba_username" → 4 underscores total
         const usernameVal = details[`${unitIdx}____alba_username`] || "";
         const manual = {};
         rInfo.forEach((field) => {
@@ -487,7 +525,6 @@ export default function BuyModal({ visible, onClose, postId }) {
     return Number.isFinite(n) ? n : null;
   };
 
-  // Get effective required info for a specific product/ticket index
   const getRequiredInfoForIndex = (idx) => {
     const perType = Array.isArray(productRequiredInfo) ? productRequiredInfo[idx] : null;
     if (Array.isArray(perType) && perType.length > 0) return perType;
@@ -582,7 +619,6 @@ export default function BuyModal({ visible, onClose, postId }) {
       }
     }
 
-    // Validate extra fields per unit
     for (const u of units) {
       if (!u.isMe) continue;
       const rInfo = getRequiredInfoForIndex(u.productIndex);
@@ -601,9 +637,6 @@ export default function BuyModal({ visible, onClose, postId }) {
   };
 
   const fetchEventForPost = async (postIdValue) => {
-    // Attempt #1: eq(post_id, postId as-is)
-    LOG("EVENT lookup attempt #1", { postId: postIdValue, looksLikeUuid: looksLikeUuid(String(postIdValue)) });
-
     const q1 = await supabase
       .from(EVENTS_TABLE)
       .select("id, post_id, ticket_holders, attendees_info")
@@ -611,22 +644,13 @@ export default function BuyModal({ visible, onClose, postId }) {
       .maybeSingle();
 
     if (!q1.error && q1.data?.id) {
-      LOG("EVENT lookup success #1", { eventId: q1.data.id, post_id: q1.data.post_id });
       return { ev: q1.data, evErr: null, attempt: 1 };
     }
 
-    if (q1.error) {
-      WARN("EVENT lookup #1 error", q1.error);
-    } else {
-      LOG("EVENT lookup #1 returned no row");
-    }
-
-    // Attempt #2: if postId is numeric-ish, try bigint
     const maybeNum = parseInt(String(postIdValue), 10);
     const numericOk = Number.isFinite(maybeNum) && String(maybeNum) === String(postIdValue).trim();
 
     if (numericOk) {
-      LOG("EVENT lookup attempt #2 (numeric)", { postId_num: maybeNum });
       const q2 = await supabase
         .from(EVENTS_TABLE)
         .select("id, post_id, ticket_holders, attendees_info")
@@ -634,11 +658,9 @@ export default function BuyModal({ visible, onClose, postId }) {
         .maybeSingle();
 
       if (!q2.error && q2.data?.id) {
-        LOG("EVENT lookup success #2", { eventId: q2.data.id, post_id: q2.data.post_id });
         return { ev: q2.data, evErr: null, attempt: 2 };
       }
       if (q2.error) WARN("EVENT lookup #2 error", q2.error);
-      else LOG("EVENT lookup #2 returned no row");
     }
 
     return { ev: null, evErr: q1.error || null, attempt: numericOk ? 2 : 1 };
@@ -651,38 +673,30 @@ export default function BuyModal({ visible, onClose, postId }) {
     return "Connection error. Please check your internet and try again.";
   };
 
-  const submitApprovalRequest = async () => {
-    if (!myUsername || !postId) return;
-    setLoading(true);
+  const generateTicketId = () => {
     try {
-      await supabase.rpc("submit_ticket_request", {
-        p_post_id: postId,
-        p_username: myUsername,
-        p_info: approvalInfo.trim(),
+      if (typeof Crypto.randomUUID === "function") return Crypto.randomUUID();
+      const b = Crypto.getRandomBytes(16);
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+      return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+    } catch (_e) {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0;
+        return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
       });
-      setApprovalStep("submitted");
-    } catch (e) {
-      WARN("submitApprovalRequest error:", e?.message);
-      showFeedback("Error", "Could not submit your request. Please try again.");
-    } finally {
-      setLoading(false);
     }
   };
 
   const handlePay = async () => {
     if (loading) return;
 
-    // If manual approval is required and user hasn't been approved yet, show the request flow
-    if (manuallyApprove && approvalStep !== "approved") {
-      if (approvalStep === "pending") {
-        showFeedback(
-          t("ticket_request_already_pending_title") || "Already submitted",
-          t("ticket_request_already_pending") || "Your request is already pending. The event organizer will get back to you."
-        );
-        return;
-      }
-      // null → show the approval request form
-      setApprovalStep("form");
+    if (hasPendingRequest) {
+      showFeedback(
+        t("ticket_request_already_pending_title") || "Already submitted",
+        t("ticket_request_already_pending") || "Your request is already pending. The event organizer will get back to you."
+      );
       return;
     }
 
@@ -710,7 +724,6 @@ export default function BuyModal({ visible, onClose, postId }) {
         return;
       }
 
-      // Calculate total in cents using integers to avoid floating-point errors
       const totalCents = items.reduce((sum, state, idx) => {
         if (!state.checked) return sum;
         const priceEuros = Number(prices[idx]) || 0;
@@ -809,89 +822,181 @@ export default function BuyModal({ visible, onClose, postId }) {
         }
       }
 
-      // === STRIPE PAYMENT GATE (skipped automatically for free events) ===
-      if (totalCents > 0) {
-        // 1. Create a PaymentIntent on the backend
-        let clientSecret;
-        try {
-          const { data: fnData, error: fnError } = await supabase.functions.invoke(
-            "create-payment-intent",
-            { body: { amount: totalCents, currency: "eur", eventId: String(postId), userId: uid } }
-          );
-          if (fnError || !fnData?.clientSecret)
-            throw new Error(fnData?.error || fnError?.message || "Payment setup failed");
-          clientSecret = fnData.clientSecret;
-        } catch (e) {
-          WARN("create-payment-intent error:", e?.message);
-          showFeedback(
-            "Error",
-            "Connection error. Please check your internet and try again."
-          );
-          return;
-        }
+      // ── Build ticket data (needed for both approval storage and direct issuance) ──
+      let ticketsToInsert = [];
+      let attendeesEntries = [];
+      let additions = [];
 
-        // 2. Confirm payment via Apple Pay / Google Pay — or card sheet on unsupported devices
-        if (platformPayAvailable) {
-          const cartItems = items
-            .map((state, idx) => {
-              if (!state.checked) return null;
-              const qty = state.forMeOnly
-                ? 1
-                : parseInt(state.quantity, 10) || 0;
-              if (qty <= 0) return null;
-              const opts = productOptions[idx] || [];
-              const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(opts[oIdx]?.extraCost) || 0), 0);
-              const unitPrice = (Number(prices[idx]) || 0) + optExtra;
-              return {
-                label: types[idx] || "Ticket",
-                amount: String((unitPrice * qty).toFixed(2)),
-                paymentType: "Immediate",
-              };
-            })
-            .filter(Boolean);
+      if (postType !== "Ad" && ev) {
+        const neededUsernamesSet = new Set();
+        units.forEach((u) => {
+          if (u.isMe && myUsername) neededUsernamesSet.add(cleanUsername(myUsername));
+          if (!u.isMe && u.usernameHint) neededUsernamesSet.add(cleanUsername(u.usernameHint));
+        });
 
-          const { error: payError } = await confirmPlatformPayPayment(
-            clientSecret,
-            {
-              applePay: {
-                cartItems,
-                merchantCountryCode: "IT",
-                currencyCode: "EUR",
-              },
-              googlePay: {
-                merchantCountryCode: "IT",
-                currencyCode: "EUR",
-                testEnv: false,
-              },
+        const neededUsernames = Array.from(neededUsernamesSet);
+        const profRows = await loadProfilesByUsernames(neededUsernames);
+        const profileByUsername = {};
+        neededUsernames.forEach((u, i) => {
+          const row = profRows[i];
+          if (row?.username) profileByUsername[u.toLowerCase()] = row;
+        });
+
+        if (isAgeRestricted) {
+          for (const u of units) {
+            const info = resolvePersonInfo(u, profileByUsername);
+            if (info.age != null && Number(info.age) < 18) {
+              const who = info.name || info.username || (u.isMe ? "You" : "One of the attendees");
+              showFeedback("Age restriction", `${who} must be 18 or older to attend this event.`);
+              return;
             }
-          );
-
-          if (payError?.code === "Canceled") return; // user dismissed — silent, no error
-          if (payError) {
-            showFeedback("Payment failed", mapStripeError(payError.code));
-            return;
-          }
-        } else {
-          // Card fallback via Stripe Payment Sheet
-          const { error: initError } = await initPaymentSheet({
-            paymentIntentClientSecret: clientSecret,
-            merchantDisplayName: "Alba",
-          });
-          if (initError) {
-            showFeedback("Error", "Payment setup failed.");
-            return;
-          }
-          const { error: presentError } = await presentPaymentSheet();
-          if (presentError?.code === "Canceled") return; // user dismissed — silent
-          if (presentError) {
-            showFeedback("Payment failed", mapStripeError(presentError.code));
-            return;
+            const rInfo = getRequiredInfoForIndex(u.productIndex);
+            if (rInfo.find(fieldIsAge) && info.age == null) {
+              showFeedback("Age required", "Please provide the age for each attendee.");
+              return;
+            }
           }
         }
-      }
-      // === END PAYMENT GATE — proceed with ticket issuance ===
 
-      // Ad purchase — no event row
+        for (const u of units) {
+          const info = resolvePersonInfo(u, profileByUsername);
+          const holderId = info.username || info.name || null;
+          if (holderId) additions.push(holderId);
+
+          const ticketId = generateTicketId();
+
+          attendeesEntries.push({
+            post_id: postId,
+            event_id: ev.id,
+            product_type: u.productLabel,
+            purchased_by: myUsername || null,
+            username: info.username || null,
+            name: info.name || null,
+            age: info.age ?? null,
+            gender: info.gender || null,
+            extra: info.extra || {},
+            toggles: u.toggles || {},
+            created_at: new Date().toISOString(),
+          });
+
+          ticketsToInsert.push({
+            id: ticketId,
+            event_id: ev.id,
+            post_id: postId,
+            owner_id: uid,
+            holder_display: String(holderId || ""),
+            product_type: u.productLabel || null,
+            qr_payload: String(ticketId),
+          });
+        }
+
+        // Deduplicate additions
+        const seenAdds = new Set();
+        additions = additions.filter((a) => {
+          const k = String(a).toLowerCase();
+          if (seenAdds.has(k)) return false;
+          seenAdds.add(k);
+          return true;
+        });
+      }
+
+      // === MANUAL APPROVAL PATH ===
+      if (manuallyApprove && postType !== "Ad") {
+        let paymentIntentId = null;
+
+        if (totalCents > 0) {
+          // Authorize payment with capture_method: manual (money held, not captured yet)
+          let clientSecret;
+          try {
+            const { data: fnData, error: fnError } = await supabase.functions.invoke(
+              "create-payment-intent",
+              { body: { amount: totalCents, currency: "eur", eventId: String(postId), userId: uid, captureMethod: "manual" } }
+            );
+            if (fnError || !fnData?.clientSecret)
+              throw new Error(fnData?.error || fnError?.message || "Payment setup failed");
+            clientSecret = fnData.clientSecret;
+          } catch (e) {
+            WARN("create-payment-intent error:", e?.message);
+            showFeedback("Error", "Connection error. Please check your internet and try again.");
+            return;
+          }
+
+          paymentIntentId = clientSecret.split("_secret_")[0];
+
+          if (platformPayAvailable) {
+            const cartItems = items
+              .map((state, idx) => {
+                if (!state.checked) return null;
+                const qty = state.forMeOnly ? 1 : parseInt(state.quantity, 10) || 0;
+                if (qty <= 0) return null;
+                const opts = productOptions[idx] || [];
+                const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(opts[oIdx]?.extraCost) || 0), 0);
+                const unitPrice = (Number(prices[idx]) || 0) + optExtra;
+                return {
+                  label: types[idx] || "Ticket",
+                  amount: String((unitPrice * qty).toFixed(2)),
+                  paymentType: "Immediate",
+                };
+              })
+              .filter(Boolean);
+
+            const { error: payError } = await confirmPlatformPayPayment(
+              clientSecret,
+              {
+                applePay: { cartItems, merchantCountryCode: "IT", currencyCode: "EUR" },
+                googlePay: { merchantCountryCode: "IT", currencyCode: "EUR", testEnv: false },
+              }
+            );
+
+            if (payError?.code === "Canceled") return;
+            if (payError) {
+              showFeedback("Payment failed", mapStripeError(payError.code));
+              return;
+            }
+          } else {
+            const { error: initError } = await initPaymentSheet({
+              paymentIntentClientSecret: clientSecret,
+              merchantDisplayName: "Alba",
+            });
+            if (initError) { showFeedback("Error", "Payment setup failed."); return; }
+            const { error: presentError } = await presentPaymentSheet();
+            if (presentError?.code === "Canceled") return;
+            if (presentError) { showFeedback("Payment failed", mapStripeError(presentError.code)); return; }
+          }
+        }
+
+        // Upload photo if present
+        let photoUrl = null;
+        if (approvalPhoto) {
+          try {
+            photoUrl = await uploadApprovalPhoto(approvalPhoto);
+          } catch (e) {
+            WARN("photo upload error:", e?.message);
+          }
+        }
+
+        // Store full ticket data in the request so the edge function can issue the ticket on approval
+        const { error: rpcErr } = await supabase.rpc("submit_ticket_request", {
+          p_post_id: postId,
+          p_username: myUsername,
+          p_info: approvalInfo.trim(),
+          p_photo_url: photoUrl,
+          p_payment_intent_id: paymentIntentId,
+          p_buyer_uid: uid,
+          p_event_id: ev?.id || null,
+          p_tickets_to_insert: ticketsToInsert.length > 0 ? ticketsToInsert : null,
+          p_ticket_holders_to_add: additions.length > 0 ? additions : null,
+          p_attendees_to_add: attendeesEntries.length > 0 ? attendeesEntries : null,
+        });
+        if (rpcErr) throw rpcErr;
+
+        setApprovalPhoto(null);
+        setHasPendingRequest(true);
+        setFreeConfirmationVisible(true);
+        return;
+      }
+
+      // === AD PURCHASE (no approval) ===
       if (postType === "Ad") {
         supabase.rpc("increment_ad_stat", { p_post_id: postId, p_field: "purchases" }).catch(() => {});
         const purchaseRows = units.map((u) => ({
@@ -913,131 +1018,81 @@ export default function BuyModal({ visible, onClose, postId }) {
         return;
       }
 
-      // ev was already fetched and duplicate-checked before payment
-      const ticketsToInsert = [];
+      // === REGULAR TICKET PURCHASE (no approval) ===
 
-      // 2) determine which usernames we need to fetch from profiles
-      const neededUsernamesSet = new Set();
-      units.forEach((u) => {
-        if (u.isMe && myUsername) neededUsernamesSet.add(cleanUsername(myUsername));
-        if (!u.isMe && u.usernameHint) neededUsernamesSet.add(cleanUsername(u.usernameHint));
-      });
-
-      const neededUsernames = Array.from(neededUsernamesSet);
-      LOG("neededUsernames", neededUsernames);
-
-      const profRows = await loadProfilesByUsernames(neededUsernames);
-
-      const profileByUsername = {};
-      neededUsernames.forEach((u, i) => {
-        const row = profRows[i];
-        if (row?.username) profileByUsername[u.toLowerCase()] = row;
-      });
-
-      // 3) build ticket_holders additions + attendees_info entries
-      const additions = [];
-      const attendeesEntries = [];
-
-      // Age restriction check
-      if (isAgeRestricted) {
-        for (const u of units) {
-          const info = resolvePersonInfo(u, profileByUsername);
-          if (info.age != null && Number(info.age) < 18) {
-            const who = info.name || info.username || (u.isMe ? "You" : "One of the attendees");
-            showFeedback("Age restriction", `${who} must be 18 or older to attend this event.`);
-            return;
-          }
-          // If age is required and not provided, block
-          const rInfo = getRequiredInfoForIndex(u.productIndex);
-          if (rInfo.find(fieldIsAge) && info.age == null) {
-            showFeedback("Age required", "Please provide the age for each attendee.");
-            return;
-          }
-        }
-      }
-
-      for (const u of units) {
-        const info = resolvePersonInfo(u, profileByUsername);
-
-        const holderId = info.username || info.name || null;
-        if (holderId) additions.push(holderId);
-
-        let ticketId;
+      // Stripe payment gate
+      if (totalCents > 0) {
+        let clientSecret;
         try {
-          ticketId = typeof Crypto.randomUUID === "function"
-            ? Crypto.randomUUID()
-            : Crypto.getRandomBytes(16) && (() => {
-                const b = Crypto.getRandomBytes(16);
-                b[6] = (b[6] & 0x0f) | 0x40;
-                b[8] = (b[8] & 0x3f) | 0x80;
-                const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
-                return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
-              })();
-        } catch (_e) {
-          // fallback: Math.random-based UUID v4
-          ticketId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-            const r = Math.random() * 16 | 0;
-            return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
-          });
+          const { data: fnData, error: fnError } = await supabase.functions.invoke(
+            "create-payment-intent",
+            { body: { amount: totalCents, currency: "eur", eventId: String(postId), userId: uid } }
+          );
+          if (fnError || !fnData?.clientSecret)
+            throw new Error(fnData?.error || fnError?.message || "Payment setup failed");
+          clientSecret = fnData.clientSecret;
+        } catch (e) {
+          WARN("create-payment-intent error:", e?.message);
+          showFeedback("Error", "Connection error. Please check your internet and try again.");
+          return;
         }
 
-        const qrPayload = String(ticketId);
+        if (platformPayAvailable) {
+          const cartItems = items
+            .map((state, idx) => {
+              if (!state.checked) return null;
+              const qty = state.forMeOnly ? 1 : parseInt(state.quantity, 10) || 0;
+              if (qty <= 0) return null;
+              const opts = productOptions[idx] || [];
+              const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(opts[oIdx]?.extraCost) || 0), 0);
+              const unitPrice = (Number(prices[idx]) || 0) + optExtra;
+              return {
+                label: types[idx] || "Ticket",
+                amount: String((unitPrice * qty).toFixed(2)),
+                paymentType: "Immediate",
+              };
+            })
+            .filter(Boolean);
 
-        attendeesEntries.push({
-          post_id: postId,
-          event_id: ev.id,
-          product_type: u.productLabel,
-          purchased_by: myUsername || null,
-          username: info.username || null,
-          name: info.name || null,
-          age: info.age ?? null,
-          gender: info.gender || null,
-          extra: info.extra || {},
-          toggles: u.toggles || {},
-          created_at: new Date().toISOString(),
-        });
+          const { error: payError } = await confirmPlatformPayPayment(
+            clientSecret,
+            {
+              applePay: { cartItems, merchantCountryCode: "IT", currencyCode: "EUR" },
+              googlePay: { merchantCountryCode: "IT", currencyCode: "EUR", testEnv: false },
+            }
+          );
 
-        ticketsToInsert.push({
-          id: ticketId,
-          event_id: ev.id,
-          post_id: postId,
-          owner_id: uid,
-          holder_display: String(holderId || ""),
-          product_type: u.productLabel || null,
-          qr_payload: qrPayload,
-        });
+          if (payError?.code === "Canceled") return;
+          if (payError) { showFeedback("Payment failed", mapStripeError(payError.code)); return; }
+        } else {
+          const { error: initError } = await initPaymentSheet({
+            paymentIntentClientSecret: clientSecret,
+            merchantDisplayName: "Alba",
+          });
+          if (initError) { showFeedback("Error", "Payment setup failed."); return; }
+          const { error: presentError } = await presentPaymentSheet();
+          if (presentError?.code === "Canceled") return;
+          if (presentError) { showFeedback("Payment failed", mapStripeError(presentError.code)); return; }
+        }
       }
 
-      // dedupe ticket_holders
+      // Issue ticket
       const current = Array.isArray(ev.ticket_holders) ? ev.ticket_holders : [];
       const seen = new Set(current.map((x) => String(x).toLowerCase()));
       const nextTicketHolders = [...current];
       additions.forEach((a) => {
         const k = String(a).toLowerCase();
-        if (!seen.has(k)) {
-          seen.add(k);
-          nextTicketHolders.push(a);
-        }
+        if (!seen.has(k)) { seen.add(k); nextTicketHolders.push(a); }
       });
 
       const curInfo = Array.isArray(ev.attendees_info) ? ev.attendees_info : [];
       const nextInfo = [...curInfo, ...attendeesEntries];
 
-      LOG("EVENT update payload", {
-        eventId: ev.id,
-        add_ticket_holders: additions,
-        nextTicketHolders_len: nextTicketHolders.length,
-        attendees_added: attendeesEntries.length,
-        ticketsToInsert_len: ticketsToInsert.length,
-      });
-
-      // Use SECURITY DEFINER RPC — direct UPDATE on events is blocked by RLS for non-owners
       const { error: upErr } = await supabase.rpc("add_event_attendee", {
         p_event_id: ev.id,
         p_ticket_holders: nextTicketHolders,
         p_attendees_info: nextInfo,
       });
-
       if (upErr) throw upErr;
 
       if (ticketsToInsert.length) {
@@ -1045,12 +1100,10 @@ export default function BuyModal({ visible, onClose, postId }) {
         if (tErr) throw tErr;
       }
 
-      // DB operations succeeded
       ticketSuccess = true;
       posthog.capture('ticket_purchased', { post_id: postId });
       showFeedback("Success", "Tickets bought successfully!", () => { setFeedback(null); onClose?.(); });
 
-      // Remove newly confirmed ticket holders from events.unconfirmed (fire-and-forget)
       if (additions.length > 0) {
         supabase.rpc("remove_from_unconfirmed", {
           p_post_id: postId,
@@ -1067,57 +1120,18 @@ export default function BuyModal({ visible, onClose, postId }) {
 
   const showEmpty = !loading && (!types || types.length === 0);
 
-  // Approval request form view
-  const renderApprovalForm = () => (
-    <View style={[styles.card, { backgroundColor: theme.gray }]}>
-      <Text style={[styles.feedbackTitle, { color: theme.text }]}>
-        {t("ticket_request_title") || "Approval required"}
-      </Text>
-      <Text style={[styles.feedbackMessage, { color: theme.text, marginBottom: 16 }]}>
-        {t("ticket_request_body") || "The event organizer has to determine if you are eligible to attend this event."}
-      </Text>
-      <View style={[styles.approvalInputWrap, { borderColor: isDark ? "#444" : "#E0E0E0", backgroundColor: isDark ? "#1E1E1E" : "#FAFAFA" }]}>
-        <TextInput
-          value={approvalInfo}
-          onChangeText={setApprovalInfo}
-          placeholder={approvalInfoPlaceholder || (t("event_approval_info_placeholder_hint") || "e.g. university card number")}
-          placeholderTextColor={isDark ? "#8C96A5" : "#AEAEAE"}
-          style={[styles.approvalInput, { color: theme.text }]}
-          multiline
-        />
-      </View>
-      <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
-        <TouchableOpacity
-          style={[styles.feedbackOkBtn, { flex: 1, backgroundColor: isDark ? "#333" : "#eee" }]}
-          onPress={() => { setApprovalStep(null); onClose?.(); }}
-        >
-          <Text style={[styles.feedbackOkText, { color: theme.text }]}>Cancel</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.feedbackOkBtn, { flex: 1, backgroundColor: "#3D8BFF", opacity: loading ? 0.6 : 1 }]}
-          onPress={submitApprovalRequest}
-          disabled={loading}
-        >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.feedbackOkText}>{t("ticket_request_submit") || "Submit"}</Text>
-          }
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-
-  const renderApprovalSubmitted = () => (
+  const renderConfirmation = () => (
     <View style={[styles.feedbackCard, { backgroundColor: theme.gray }]}>
       <Text style={[styles.feedbackTitle, { color: theme.text }]}>
-        {t("ticket_request_submitted_title") || "Request submitted"}
+        {t("ticket_registered_title") || "You're registered!"}
       </Text>
       <Text style={[styles.feedbackMessage, { color: theme.text }]}>
-        {t("ticket_request_submitted_body") || "Your info was submitted and the event organizer will evaluate it."}
+        {(t("ticket_registered_body") || "Thanks for registering! Once @{organizer} approves it, your ticket will be available on My tickets.")
+          .replace("{organizer}", organizerUser || "the organizer")}
       </Text>
       <TouchableOpacity
         style={[styles.feedbackOkBtn, { backgroundColor: "#4EBCFF" }]}
-        onPress={() => { setApprovalStep(null); onClose?.(); }}
+        onPress={() => { setFreeConfirmationVisible(false); onClose?.(); }}
       >
         <Text style={styles.feedbackOkText}>OK</Text>
       </TouchableOpacity>
@@ -1126,13 +1140,12 @@ export default function BuyModal({ visible, onClose, postId }) {
 
   return (
     <Modal
-      visible={visible || !!feedback || approvalStep === "form" || approvalStep === "submitted"}
+      visible={visible || !!feedback || freeConfirmationVisible}
       transparent
       animationType="fade"
       onRequestClose={() => {
         if (feedback) { setFeedback(null); return; }
-        if (approvalStep === "form") { setApprovalStep(null); return; }
-        if (approvalStep === "submitted") { setApprovalStep(null); onClose?.(); return; }
+        if (freeConfirmationVisible) { setFreeConfirmationVisible(false); onClose?.(); return; }
         onClose?.();
       }}
     >
@@ -1148,8 +1161,7 @@ export default function BuyModal({ visible, onClose, postId }) {
               <Text style={styles.feedbackOkText}>OK</Text>
             </TouchableOpacity>
           </View>
-        ) : approvalStep === "submitted" ? renderApprovalSubmitted()
-        : approvalStep === "form" ? renderApprovalForm()
+        ) : freeConfirmationVisible ? renderConfirmation()
         : (
         <View style={[styles.card, { backgroundColor: theme.gray }]}>
           {loading ? (
@@ -1174,7 +1186,6 @@ export default function BuyModal({ visible, onClose, postId }) {
                   const typeExtraFields = typeReqInfo.filter((f) => !BASIC_KEYS.has(normKey(f)));
                   const showMeExtra = typeExtraFields.length > 0 && (state.forMeOnly || state.forMeUnit1);
 
-                  // Price including selected options
                   const optExtra = (state.selectedOptions || []).reduce((s, oIdx) => s + (Number(typeOptions[oIdx]?.extraCost) || 0), 0);
                   const displayPrice = (Number(price) || 0) + optExtra;
 
@@ -1376,11 +1387,76 @@ export default function BuyModal({ visible, onClose, postId }) {
                   );
                 })
               )}
+
+              {/* Approval info section — shown inline when organizer requires manual approval */}
+              {manuallyApprove && postType !== "Ad" && (
+                <View style={styles.approvalSection}>
+                  {!!approvalInfoPlaceholder && (
+                    <Text style={[styles.approvalSectionHint, { color: isDark ? "#8C96A5" : "#888" }]}>
+                      {approvalInfoPlaceholder}
+                    </Text>
+                  )}
+                  <View style={[styles.approvalInputWrap, { borderColor: isDark ? "#444" : "#E0E0E0", backgroundColor: isDark ? "#1E1E1E" : "#FAFAFA" }]}>
+                    <TextInput
+                      value={approvalInfo}
+                      onChangeText={setApprovalInfo}
+                      style={[styles.approvalInput, { color: theme.text }]}
+                      multiline
+                    />
+                    <View style={styles.approvalPhotoButtons}>
+                      <TouchableOpacity
+                        onPress={handleTakePhoto}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel={t("ticket_request_take_photo") || "Take a photo"}
+                      >
+                        <Feather name="camera" size={20} color={isDark ? "#8C96A5" : "#AEAEAE"} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={handlePickPhoto}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel={t("ticket_request_pick_photo") || "Upload from gallery"}
+                      >
+                        <Feather name="image" size={20} color={isDark ? "#8C96A5" : "#AEAEAE"} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {approvalPhoto && (
+                    <View style={styles.approvalPhotoPreviewRow}>
+                      <View>
+                        <Image source={{ uri: approvalPhoto }} style={styles.approvalPhotoPreview} />
+                        <TouchableOpacity
+                          style={styles.approvalPhotoRemoveBtn}
+                          onPress={() => setApprovalPhoto(null)}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          accessibilityLabel={t("ticket_request_remove_photo") || "Remove photo"}
+                        >
+                          <Feather name="x" size={10} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={[styles.approvalPhotoLabel, { color: isDark ? "#9CA3AF" : "#888" }]}>
+                        {t("ticket_request_photo_attached") || "Photo attached"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </ScrollView>
           )}
 
           <View style={styles.bottomRow}>
-            {platformPayAvailable && Platform.OS !== "android" ? (
+            {selectedTotalCents === 0 ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.payBtn, { opacity: loading ? 0.6 : 1 }]}
+                onPress={handlePay}
+                disabled={loading}
+              >
+                {loading
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={[styles.actionText, { color: "#fff" }]}>{t("get_ticket_button") || "Get ticket"}</Text>
+                }
+              </TouchableOpacity>
+            ) : platformPayAvailable && Platform.OS !== "android" ? (
               <PlatformPayButton
                 onPress={handlePay}
                 type="buy"
@@ -1562,18 +1638,61 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  approvalSection: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(128,128,128,0.15)",
+  },
+  approvalSectionHint: {
+    fontFamily: "Poppins",
+    fontSize: 13,
+    marginBottom: 8,
+  },
   approvalInputWrap: {
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     minHeight: 80,
-    justifyContent: "flex-start",
   },
   approvalInput: {
     fontFamily: "Poppins",
     fontSize: 14,
     textAlignVertical: "top",
     minHeight: 60,
+  },
+  approvalPhotoButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 14,
+    paddingTop: 6,
+  },
+  approvalPhotoPreviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 10,
+  },
+  approvalPhotoPreview: {
+    width: 58,
+    height: 58,
+    borderRadius: 8,
+  },
+  approvalPhotoRemoveBtn: {
+    position: "absolute",
+    top: -5,
+    right: -5,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  approvalPhotoLabel: {
+    fontFamily: "Poppins",
+    fontSize: 12,
+    flex: 1,
   },
 });

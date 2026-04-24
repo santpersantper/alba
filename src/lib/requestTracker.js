@@ -12,17 +12,10 @@ export function trackRequest(label) {
   if (_active > _peak) {
     _peak = _active;
   }
-  const warn = _active >= 5;
-  console.log(
-    `[REQ${warn ? " ⚠️" : ""}] START  active=${_active} peak=${_peak}  ${label}`
-  );
   const t0 = Date.now();
 
   return function done() {
     _active = Math.max(0, _active - 1);
-    console.log(
-      `[REQ] END    active=${_active}  ${label}  (${Date.now() - t0}ms)`
-    );
   };
 }
 

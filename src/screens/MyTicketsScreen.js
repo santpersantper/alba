@@ -137,8 +137,7 @@ export default function MyTicketsScreen({ navigation }) {
             location: p.location,
           };
         })
-        .filter(Boolean)
-        .filter((e) => isTodayOrFuture(e.date));
+        .filter(Boolean);
 
       const initialCollapsed = {};
       merged.forEach((e) => (initialCollapsed[e.event_id] = true));
@@ -175,7 +174,6 @@ export default function MyTicketsScreen({ navigation }) {
       setCancelModalVisible(false);
       setCancelEventId(null);
     } catch (e) {
-      console.warn("confirmCancel error:", e?.message ?? e);
       setCancelError("Could not cancel registration. Please try again.");
     } finally {
       setCancelling(false);
@@ -217,7 +215,6 @@ export default function MyTicketsScreen({ navigation }) {
       setDeleteTicketId(null);
       setDeleteTicketEventId(null);
     } catch (e) {
-      console.warn("confirmDeleteTicket error:", e?.message ?? e);
       setDeleteTicketError("Could not delete ticket. Please try again.");
     } finally {
       setDeletingTicket(false);

@@ -195,7 +195,6 @@ export default function PostMessage({
   };
 
   const submitReport = () => {
-    console.log("REPORT post message", { messageId: id, postId, reason: reportText });
     setReportText("");
     setReportVisible(false);
     Alert.alert("", "Thanks for your report.");
@@ -218,7 +217,6 @@ export default function PostMessage({
       setConfirmVisible(false);
       onDeleted?.(id);
     } catch (e) {
-      console.warn("Post delete failed", e?.message || e);
       Alert.alert("Error", "Could not delete this message.");
     } finally {
       setDeleting(false);

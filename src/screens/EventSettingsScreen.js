@@ -1,9 +1,8 @@
-// screens/EventSettingsScreen.js — DROP-IN
-// Adds: "Scan ticket QR" button (admin only) + camera scanner modal
-// Flow: scan QR -> fetch tickets by id/qr_payload -> validate event -> mark as used by adding username to events.scanned
-// Notes:
-// - events.scanned is text[] (usernames). If the scanned ticket holder has no username, we store holder_display as fallback.
-// - tickets table is assumed: public.tickets (id uuid, event_id uuid, post_id uuid, owner_id uuid, holder_display text, qr_payload text)
+// screens/EventSettingsScreen.js
+// Features:
+// 1. Togglable info expand on ticket-holder, unconfirmed and pending-request rows
+// 2. Google Forms integration (OAuth, form selection modal, auto-sync, disconnect)
+// 3. isAdmin now respects the collaborators→organizers trigger added in the migration
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,7 +11,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  FlatList,
   Image,
   Alert,
   Modal,
@@ -32,6 +30,9 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { decode } from "base-64";
+import * as Google from "expo-auth-session/providers/google";
+import { ResponseType } from "expo-auth-session";
+import * as WebBrowser from "expo-web-browser";
 
 import ThemedView from "../theme/ThemedView";
 import { useAlbaTheme } from "../theme/ThemeContext";
@@ -40,20 +41,36 @@ import { supabase } from "../lib/supabase";
 import DMUsersModal from "../components/DMUsersModal";
 import ShareMenu from "../components/ShareMenu";
 
-/* ------------------- schema ------------------- */
+/* ─── Google OAuth ──────────────────────────────────────────────────────── */
+WebBrowser.maybeCompleteAuthSession();
+
+const GOOGLE_IOS_CLIENT_ID =
+  "1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi.apps.googleusercontent.com";
+const GOOGLE_ANDROID_CLIENT_ID =
+  "1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq.apps.googleusercontent.com";
+
+// Google requires the redirect URI to be the reversed client ID scheme for native apps.
+// expo-auth-session auto-computes the app scheme (alba://) which Google rejects.
+const GOOGLE_REDIRECT_URI =
+  Platform.OS === "ios"
+    ? "com.googleusercontent.apps.1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi:/oauth2redirect"
+    : "com.googleusercontent.apps.1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq:/oauth2redirect";
+
+/* ─── Schema ────────────────────────────────────────────────────────────── */
 const POSTS_TABLE = "posts";
-const POSTS_COLS = "id, title, description, date, time, end_date, end_time, all_day, every_day, location, author_id, group_id, actions, postmediauri, manually_approve_attendees, is_ticket_number_fixed, ticket_number, ticket_approval_info, pending_ticket_requests, approved_ticket_buyers";
+const POSTS_COLS =
+  "id, title, description, date, time, end_date, end_time, all_day, every_day, location, author_id, group_id, actions, postmediauri, manually_approve_attendees, is_ticket_number_fixed, ticket_number, ticket_approval_info, pending_ticket_requests";
 
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
-  "id, title, post_id, unconfirmed, ticket_holders, organizers, attendees_info, scanned, purchases_active";
+  "id, title, post_id, unconfirmed, ticket_holders, organizers, attendees_info, scanned, purchases_active, google_integration, google_forms_respondent_ids";
 
 const GROUPS_TABLE = "groups";
 const GROUPS_COLS = "id, members, group_admin, groupname, group_desc";
 
 const TICKETS_TABLE = "tickets";
-/* ---------------------------------------------- */
 
+/* ─── Helpers ───────────────────────────────────────────────────────────── */
 function safeObj(x) {
   return x && typeof x === "object" && !Array.isArray(x) ? x : {};
 }
@@ -74,19 +91,16 @@ const uniqCI = (arr) => {
   });
   return out;
 };
-
 const isVideoUrl = (url) => {
   if (!url) return false;
   const l = String(url).toLowerCase();
   return l.includes(".mp4") || l.includes(".mov") || l.includes(".m4v");
 };
 
-// usernames in ticket_holders/unconfirmed -> fetch profiles -> build rows
 async function buildUsersFromUsernames(usernames) {
   const list = safeArr(usernames)
     .map((u) => stripAt(u))
     .filter(Boolean);
-
   if (!list.length) return [];
 
   const { data: profs, error } = await supabase
@@ -95,7 +109,6 @@ async function buildUsersFromUsernames(usernames) {
     .in("username", list);
 
   if (error) {
-    console.warn("[EventSettings] profiles fetch error", error);
     return list.map((u) => ({
       id: `u:${u}`,
       name: u,
@@ -122,6 +135,57 @@ async function buildUsersFromUsernames(usernames) {
   });
 }
 
+/* ─── Google API helpers (outside component for clarity) ────────────────── */
+async function gFetchForms(accessToken) {
+  const resp = await fetch(
+    "https://www.googleapis.com/drive/v3/files" +
+      "?q=mimeType%3D'application%2Fvnd.google-apps.form'" +
+      "&fields=files(id%2Cname)&orderBy=modifiedTime+desc&pageSize=50",
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  if (!resp.ok) throw new Error(`Drive API ${resp.status}`);
+  const data = await resp.json();
+  return safeArr(data.files);
+}
+
+async function gRefreshToken(refreshToken) {
+  const clientId =
+    Platform.OS === "ios" ? GOOGLE_IOS_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: [
+      `client_id=${encodeURIComponent(clientId)}`,
+      `refresh_token=${encodeURIComponent(refreshToken)}`,
+      `grant_type=refresh_token`,
+    ].join("&"),
+  });
+  const data = await resp.json();
+  return data.access_token || null;
+}
+
+async function gExchangeCode(code, codeVerifier, redirectUri) {
+  const clientId =
+    Platform.OS === "ios" ? GOOGLE_IOS_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: [
+      `code=${encodeURIComponent(code)}`,
+      `client_id=${encodeURIComponent(clientId)}`,
+      `redirect_uri=${encodeURIComponent(redirectUri)}`,
+      `grant_type=authorization_code`,
+      `code_verifier=${encodeURIComponent(codeVerifier)}`,
+    ].join("&"),
+  });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error(data.error || "Token exchange failed");
+  return data; // { access_token, refresh_token, ... }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COMPONENT
+═══════════════════════════════════════════════════════════════════════════ */
 export default function EventSettingsScreen() {
   const navigation = useNavigation();
   const route = useRoute();
@@ -136,15 +200,17 @@ export default function EventSettingsScreen() {
     PoppinsBold: require("../../assets/fonts/Poppins-Bold.ttf"),
   });
 
+  /* ── auth ── */
   const [meId, setMeId] = useState(null);
   const [myUsername, setMyUsername] = useState(null);
 
+  /* ── data model ── */
   const [model, setModel] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const eventRow = model?.event || null;
   const postRow = model?.post || null;
 
-  // drafts (for Save)
+  /* ── event drafts ── */
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDesc, setDraftDesc] = useState("");
   const [draftDate, setDraftDate] = useState("");
@@ -154,56 +220,81 @@ export default function EventSettingsScreen() {
   const [draftAllDay, setDraftAllDay] = useState(false);
   const [draftEveryDay, setDraftEveryDay] = useState(false);
   const [draftLocation, setDraftLocation] = useState("");
-  const [draftMedia, setDraftMedia] = useState([]); // [{ uri, type, isNew }]
+  const [draftMedia, setDraftMedia] = useState([]);
 
+  /* ── ticket controls ── */
   const [purchasesActive, setPurchasesActive] = useState(true);
   const [ticketsPaused, setTicketsPaused] = useState(false);
-
-  // New ticket-control state
   const [manuallyApprove, setManuallyApprove] = useState(false);
   const [fixedTicketCount, setFixedTicketCount] = useState(false);
   const [ticketNumber, setTicketNumber] = useState("");
-  const [pendingRequests, setPendingRequests] = useState([]); // [{username, info, requested_at}]
-  const [pendingRequestsProfiles, setPendingRequestsProfiles] = useState({}); // username -> {name, avatar_url}
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [pendingRequestsProfiles, setPendingRequestsProfiles] = useState({});
   const [pendingExpanded, setPendingExpanded] = useState(false);
   const [savingTicketControls, setSavingTicketControls] = useState(false);
 
+  /* ── save ── */
   const [saving, setSaving] = useState(false);
 
-  // lists
+  /* ── lists ── */
   const [ticketUsers, setTicketUsers] = useState([]);
   const [unconfirmedUsers, setUnconfirmedUsers] = useState([]);
   const [sharedByUsers, setSharedByUsers] = useState([]);
 
-  const [selectedTicket, setSelectedTicket] = useState(new Set()); // Set(displayName)
-  const [selectedUnconf, setSelectedUnconf] = useState(new Set()); // Set(displayName)
+  const [selectedTicket, setSelectedTicket] = useState(new Set());
+  const [selectedUnconf, setSelectedUnconf] = useState(new Set());
 
-  // 3-dot menu
+  /* ── expand / collapse ── */
+  // keyed by `user.id?.toString() || displayName` for ticket/unconf rows
+  const [expandedUserInfo, setExpandedUserInfo] = useState(new Set());
+  // keyed by pending request username
+  const [expandedPendingInfo, setExpandedPendingInfo] = useState(new Set());
+
+  /* ── menus / modals ── */
   const [menuVisible, setMenuVisible] = useState(false);
-  const [menuCtx, setMenuCtx] = useState(null); // { listKey, user }
-
-  // DM modal
+  const [menuCtx, setMenuCtx] = useState(null);
   const [dmVisible, setDmVisible] = useState(false);
   const [dmUsers, setDmUsers] = useState([]);
   const [dmTitle, setDmTitle] = useState("Message");
-
-  // remove confirm
   const [removeVisible, setRemoveVisible] = useState(false);
-  const [removeCtx, setRemoveCtx] = useState(null); // { users:[...] }
-
-  // delete confirm modal
+  const [removeCtx, setRemoveCtx] = useState(null);
   const [deleteVisible, setDeleteVisible] = useState(false);
-
-  // ShareMenu (Invite users)
   const [shareVisible, setShareVisible] = useState(false);
 
-  // ✅ Scanner
+  /* ── QR scanner ── */
   const [scanVisible, setScanVisible] = useState(false);
   const [scanBusy, setScanBusy] = useState(false);
   const [lastScanValue, setLastScanValue] = useState(null);
   const [permission, requestPermission] = useCameraPermissions();
   const scanLockRef = useRef(false);
 
+  /* ── Google Forms ── */
+  const [googleIntegration, setGoogleIntegration] = useState(null);
+  const [formsModalVisible, setFormsModalVisible] = useState(false);
+  const [availableForms, setAvailableForms] = useState([]);
+  const [selectedFormIdInModal, setSelectedFormIdInModal] = useState(null);
+  const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
+  const [formsSyncing, setFormsSyncing] = useState(false);
+  const tempTokensRef = useRef(null);
+
+  /* ── Google OAuth hook (must be at top level) ── */
+  const [googleRequest, googleResponse, googlePromptAsync] = Google.useAuthRequest({
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+    redirectUri: GOOGLE_REDIRECT_URI,
+    scopes: [
+      "openid",
+      "profile",
+      "email",
+      "https://www.googleapis.com/auth/forms.responses.readonly",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+    ],
+    responseType: ResponseType.Code,
+    usePKCE: true,
+    extraParams: { access_type: "offline", prompt: "consent" },
+  });
+
+  /* ── derived ── */
   const isAdmin = useMemo(() => {
     const orgs = Array.isArray(eventRow?.organizers) ? eventRow.organizers : [];
     if (myUsername && orgs.includes(myUsername)) return true;
@@ -213,111 +304,65 @@ export default function EventSettingsScreen() {
 
   const notOnAlbaLabel = t("not_on_alba_yet") || "Not on Alba yet";
 
-  /* ---------------- auth ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     AUTH
+  ══════════════════════════════════════════════════════════════════════ */
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data } = await supabase.auth.getUser();
         const user = data?.user;
-        if (error || !user) return;
-        if (!alive) return;
+        if (!user || !alive) return;
         setMeId(user.id);
-
         const { data: prof } = await supabase
           .from("profiles")
           .select("username")
           .eq("id", user.id)
           .maybeSingle();
-
         if (!alive) return;
         setMyUsername(prof?.username || user.user_metadata?.username || user.email || null);
       } catch {}
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
-  /* ---------------- load: event + post ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     LOAD EVENT + POST
+  ══════════════════════════════════════════════════════════════════════ */
   const loadEventModel = useCallback(async () => {
     try {
-      console.log("[EventSettings][ROUTE]", { routeEventId, routePostId });
-
       let ev = null;
-
       if (routeEventId) {
-        const { data, error } = await supabase
-          .from(EVENTS_TABLE)
-          .select(EVENTS_COLS)
-          .eq("id", routeEventId)
-          .maybeSingle();
-        if (error) console.warn("[EventSettings] load event error", error);
+        const { data } = await supabase
+          .from(EVENTS_TABLE).select(EVENTS_COLS).eq("id", routeEventId).maybeSingle();
         ev = data || null;
       } else if (routePostId) {
-        const { data, error } = await supabase
-          .from(EVENTS_TABLE)
-          .select(EVENTS_COLS)
-          .eq("post_id", routePostId)
-          .maybeSingle();
-        if (error) console.warn("[EventSettings] load event(by post_id) error", error);
+        const { data } = await supabase
+          .from(EVENTS_TABLE).select(EVENTS_COLS).eq("post_id", routePostId).maybeSingle();
         ev = data || null;
       }
-
-      console.log("[EventSettings][EVENT]", {
-        found: !!ev,
-        eventId: ev?.id || null,
-        post_id: ev?.post_id || null,
-        ticket_holders_len: Array.isArray(ev?.ticket_holders) ? ev.ticket_holders.length : null,
-        unconfirmed_len: Array.isArray(ev?.unconfirmed) ? ev.unconfirmed.length : null,
-        scanned_len: Array.isArray(ev?.scanned) ? ev.scanned.length : null,
-        attendees_info_keys: ev?.attendees_info ? Object.keys(ev.attendees_info).slice(0, 6) : null,
-      });
-
-      if (!ev?.post_id && !routePostId) {
-        setModel(null);
-        return;
-      }
+      if (!ev?.post_id && !routePostId) { setModel(null); return; }
 
       const postId = ev?.post_id || routePostId;
-
       const { data: post, error: pErr } = await supabase
-        .from(POSTS_TABLE)
-        .select(POSTS_COLS)
-        .eq("id", postId)
-        .maybeSingle();
-
-      if (pErr) {
-        console.warn("[EventSettings] load post error", pErr);
-        return;
-      }
-      if (!post) {
-        setModel(null);
-        return;
-      }
+        .from(POSTS_TABLE).select(POSTS_COLS).eq("id", postId).maybeSingle();
+      if (pErr || !post) { setModel(null); return; }
 
       setModel({ event: ev, post, group: null });
-    } catch (e) {
-      console.warn("[EventSettings] load unexpected", e);
-    }
+    } catch {}
   }, [routeEventId, routePostId]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadEventModel();
-    }, [loadEventModel])
-  );
+  useFocusEffect(useCallback(() => { loadEventModel(); }, [loadEventModel]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    try {
-      await loadEventModel();
-    } finally {
-      setRefreshing(false);
-    }
+    try { await loadEventModel(); } finally { setRefreshing(false); }
   }, [loadEventModel]);
 
-  /* ---------------- init drafts when post changes ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     INIT DRAFTS
+  ══════════════════════════════════════════════════════════════════════ */
   const resetDraftsToPost = useCallback(() => {
     setDraftTitle(postRow?.title || "");
     setDraftDesc(postRow?.description || "");
@@ -329,17 +374,22 @@ export default function EventSettingsScreen() {
     setDraftEveryDay(postRow?.every_day ?? false);
     setDraftLocation(postRow?.location || "");
     const existingMedia = Array.isArray(postRow?.postmediauri)
-      ? postRow.postmediauri.map((uri) => ({ uri, type: isVideoUrl(uri) ? "video" : "image", isNew: false }))
+      ? postRow.postmediauri.map((uri) => ({
+          uri,
+          type: isVideoUrl(uri) ? "video" : "image",
+          isNew: false,
+        }))
       : [];
     setDraftMedia(existingMedia);
-  }, [postRow?.title, postRow?.description, postRow?.date, postRow?.time, postRow?.end_date, postRow?.end_time, postRow?.all_day, postRow?.every_day, postRow?.location, postRow?.postmediauri]);
+  }, [
+    postRow?.title, postRow?.description, postRow?.date, postRow?.time,
+    postRow?.end_date, postRow?.end_time, postRow?.all_day, postRow?.every_day,
+    postRow?.location, postRow?.postmediauri,
+  ]);
+
+  useEffect(() => { resetDraftsToPost(); }, [postRow?.id, resetDraftsToPost]);
 
   useEffect(() => {
-    resetDraftsToPost();
-  }, [postRow?.id, resetDraftsToPost]);
-
-  useEffect(() => {
-    // purchases_active defaults to true if null/undefined
     setPurchasesActive(eventRow?.purchases_active !== false);
   }, [eventRow?.id, eventRow?.purchases_active]);
 
@@ -347,21 +397,30 @@ export default function EventSettingsScreen() {
     setManuallyApprove(!!postRow?.manually_approve_attendees);
     setFixedTicketCount(!!postRow?.is_ticket_number_fixed);
     setTicketNumber(postRow?.ticket_number != null ? String(postRow.ticket_number) : "");
-    setPendingRequests(Array.isArray(postRow?.pending_ticket_requests) ? postRow.pending_ticket_requests : []);
-  }, [postRow?.id, postRow?.manually_approve_attendees, postRow?.is_ticket_number_fixed, postRow?.ticket_number, postRow?.pending_ticket_requests]);
+    setPendingRequests(
+      Array.isArray(postRow?.pending_ticket_requests)
+        ? postRow.pending_ticket_requests
+        : []
+    );
+  }, [
+    postRow?.id, postRow?.manually_approve_attendees,
+    postRow?.is_ticket_number_fixed, postRow?.ticket_number,
+    postRow?.pending_ticket_requests,
+  ]);
 
   useEffect(() => {
     const acts = safeArr(postRow?.actions).map((a) => String(a).toLowerCase());
     setTicketsPaused(!acts.includes("tickets"));
   }, [postRow?.id, postRow?.actions]);
 
-  // Fetch profiles for pending ticket request senders
+  /* ── pending requests profiles ── */
   useEffect(() => {
     const usernames = pendingRequests.map((r) => String(r?.username || "")).filter(Boolean);
     if (!usernames.length) { setPendingRequestsProfiles({}); return; }
     let alive = true;
     (async () => {
-      const { data } = await supabase.from("profiles").select("username, name, avatar_url").in("username", usernames);
+      const { data } = await supabase
+        .from("profiles").select("username, name, avatar_url").in("username", usernames);
       if (!alive) return;
       const map = {};
       (data || []).forEach((p) => { map[p.username] = p; });
@@ -370,37 +429,29 @@ export default function EventSettingsScreen() {
     return () => { alive = false; };
   }, [pendingRequests]);
 
+  /* ── build user lists ── */
   useEffect(() => {
     let alive = true;
     (async () => {
-      const ticketHolders = safeArr(eventRow?.ticket_holders); // usernames
-      const unconfirmed = safeArr(eventRow?.unconfirmed); // usernames
-
-      const tickets = await buildUsersFromUsernames(ticketHolders);
-      const unconf = await buildUsersFromUsernames(unconfirmed);
-
+      const tickets = await buildUsersFromUsernames(safeArr(eventRow?.ticket_holders));
+      const unconf = await buildUsersFromUsernames(safeArr(eventRow?.unconfirmed));
       if (!alive) return;
       setTicketUsers(tickets);
       setUnconfirmedUsers(unconf);
       setSelectedTicket(new Set());
       setSelectedUnconf(new Set());
     })();
-
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [eventRow?.id, eventRow?.ticket_holders, eventRow?.unconfirmed]);
 
-  // Fetch users who shared this event post
+  /* ── shared-by users ── */
   useEffect(() => {
     if (!postRow?.id) return;
     let alive = true;
     (async () => {
       try {
         const { data: sharePosts } = await supabase
-          .from(POSTS_TABLE)
-          .select("author_id, username")
-          .eq("shared_post_id", postRow.id);
+          .from(POSTS_TABLE).select("author_id, username").eq("shared_post_id", postRow.id);
         if (!alive || !Array.isArray(sharePosts) || !sharePosts.length) {
           if (alive) setSharedByUsers([]);
           return;
@@ -408,14 +459,297 @@ export default function EventSettingsScreen() {
         const usernames = sharePosts.map((p) => p.username).filter(Boolean);
         const users = await buildUsersFromUsernames(usernames);
         if (alive) setSharedByUsers(users);
-      } catch {
-        if (alive) setSharedByUsers([]);
-      }
+      } catch { if (alive) setSharedByUsers([]); }
     })();
     return () => { alive = false; };
   }, [postRow?.id]);
 
-  /* ---------------- selection ---------------- */
+  /* ── init Google integration state + auto-sync ── */
+  useEffect(() => {
+    const integration = eventRow?.google_integration || null;
+    setGoogleIntegration(integration);
+    if (integration?.form_id && eventRow?.id && isAdmin) {
+      syncGoogleFormResponses(integration, eventRow);
+    }
+  }, [eventRow?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── handle Google OAuth response ── */
+  useEffect(() => {
+    if (googleResponse?.type !== "success") return;
+    const code = googleResponse.params?.code;
+    const codeVerifier = googleRequest?.codeVerifier;
+    const redirectUri = googleRequest?.redirectUri;
+    if (!code || !codeVerifier || !redirectUri) return;
+
+    (async () => {
+      setGoogleAuthLoading(true);
+      try {
+        const tokens = await gExchangeCode(code, codeVerifier, redirectUri);
+        tempTokensRef.current = {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token,
+        };
+        const forms = await gFetchForms(tokens.access_token);
+        setAvailableForms(forms);
+        setSelectedFormIdInModal(null);
+        setFormsModalVisible(true);
+      } catch {
+        Alert.alert("Error", t("google_forms_connect_error") || "Could not connect to Google.");
+      } finally {
+        setGoogleAuthLoading(false);
+      }
+    })();
+  }, [googleResponse]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ══════════════════════════════════════════════════════════════════════
+     GOOGLE FORMS FUNCTIONS
+  ══════════════════════════════════════════════════════════════════════ */
+
+  // Sync form responses into ticket_holders + attendees_info
+  const syncGoogleFormResponses = async (integration, ev) => {
+    if (!integration?.form_id || !ev?.id) return;
+    setFormsSyncing(true);
+    try {
+      let accessToken = integration.access_token;
+
+      // Helper: fetch with automatic token refresh on 401
+      const gGet = async (url) => {
+        let resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (resp.status === 401 && integration.refresh_token) {
+          const newToken = await gRefreshToken(integration.refresh_token);
+          if (newToken) {
+            accessToken = newToken;
+            // persist the new access token
+            const updated = { ...integration, access_token: newToken };
+            await supabase
+              .from(EVENTS_TABLE).update({ google_integration: updated }).eq("id", ev.id);
+            setGoogleIntegration(updated);
+            setModel((prev) =>
+              prev ? { ...prev, event: { ...prev.event, google_integration: updated } } : prev
+            );
+            resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+          }
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+      };
+
+      // 1. Get form structure (question ID → title map)
+      const formData = await gGet(
+        `https://forms.googleapis.com/v1/forms/${integration.form_id}`
+      );
+      const fieldMap = {};
+      safeArr(formData.items).forEach((item) => {
+        const qId = item.questionItem?.question?.questionId;
+        if (qId) fieldMap[qId] = item.title || qId;
+      });
+
+      // 2. Get all responses
+      const responsesData = await gGet(
+        `https://forms.googleapis.com/v1/forms/${integration.form_id}/responses`
+      );
+      const responses = safeArr(responsesData.responses);
+
+      // 3. Build existing dedup sets
+      const existingRespondentIds = new Set(safeArr(ev.google_forms_respondent_ids));
+      const currentAttendeesInfo = safeObj(ev.attendees_info);
+      const existingEmails = new Set(
+        Object.values(currentAttendeesInfo)
+          .map((info) => String(safeObj(info).email || "").toLowerCase())
+          .filter(Boolean)
+      );
+
+      const newTicketHolders = [...safeArr(ev.ticket_holders)];
+      const newAttendeesInfo = { ...currentAttendeesInfo };
+      const newRespondentIds = [...existingRespondentIds];
+      let changed = false;
+
+      for (const response of responses) {
+        const responseId = response.responseId;
+        if (!responseId || existingRespondentIds.has(responseId)) continue;
+
+        // Build field map from answers
+        const answers = safeObj(response.answers);
+        const respondentData = { source: "google_forms", response_id: responseId };
+
+        for (const [questionId, answerObj] of Object.entries(answers)) {
+          const label = fieldMap[questionId] || questionId;
+          const value = answerObj?.textAnswers?.answers?.[0]?.value || "";
+          respondentData[label] = value;
+
+          const labelLc = label.toLowerCase();
+          if ((labelLc.includes("email") || labelLc === "e-mail") && !respondentData.email) {
+            respondentData.email = value;
+          }
+          if (labelLc.includes("name") && !labelLc.includes("last") && !respondentData.name) {
+            respondentData.name = value;
+          }
+        }
+
+        // Also use respondentEmail if Google collected it
+        if (!respondentData.email && response.respondentEmail) {
+          respondentData.email = response.respondentEmail;
+        }
+
+        // Dedup by email
+        const emailLc = String(respondentData.email || "").toLowerCase();
+        if (emailLc && existingEmails.has(emailLc)) continue;
+
+        // Choose display key (name, or email, or responseId)
+        let displayKey = respondentData.name || response.respondentEmail || responseId;
+
+        // Avoid collisions with existing keys
+        if (newTicketHolders.includes(displayKey) || newAttendeesInfo[displayKey]) {
+          let suffix = 2;
+          while (
+            newTicketHolders.includes(`${displayKey} (${suffix})`) ||
+            newAttendeesInfo[`${displayKey} (${suffix})`]
+          ) {
+            suffix++;
+          }
+          displayKey = `${displayKey} (${suffix})`;
+        }
+
+        respondentData.name = respondentData.name || displayKey;
+        newTicketHolders.push(displayKey);
+        newAttendeesInfo[displayKey] = respondentData;
+        newRespondentIds.push(responseId);
+        if (emailLc) existingEmails.add(emailLc);
+        changed = true;
+      }
+
+      if (changed) {
+        await supabase
+          .from(EVENTS_TABLE)
+          .update({
+            ticket_holders: newTicketHolders,
+            attendees_info: newAttendeesInfo,
+            google_forms_respondent_ids: newRespondentIds,
+          })
+          .eq("id", ev.id);
+
+        setModel((prev) =>
+          prev
+            ? {
+                ...prev,
+                event: {
+                  ...prev.event,
+                  ticket_holders: newTicketHolders,
+                  attendees_info: newAttendeesInfo,
+                  google_forms_respondent_ids: newRespondentIds,
+                },
+              }
+            : prev
+        );
+      }
+    } catch {
+      // Silent fail for auto-sync; user can pull-to-refresh to retry
+    } finally {
+      setFormsSyncing(false);
+    }
+  };
+
+  // Connect: save integration + immediately sync
+  const connectGoogleForm = async () => {
+    const formId = selectedFormIdInModal;
+    if (!formId || !eventRow?.id || !tempTokensRef.current) return;
+
+    const formName =
+      availableForms.find((f) => f.id === formId)?.name || formId;
+    const integration = {
+      form_id: formId,
+      form_name: formName,
+      access_token: tempTokensRef.current.access_token,
+      refresh_token: tempTokensRef.current.refresh_token,
+    };
+
+    try {
+      await supabase
+        .from(EVENTS_TABLE)
+        .update({ google_integration: integration })
+        .eq("id", eventRow.id);
+
+      setGoogleIntegration(integration);
+      setModel((prev) =>
+        prev
+          ? { ...prev, event: { ...prev.event, google_integration: integration } }
+          : prev
+      );
+      setFormsModalVisible(false);
+      setSelectedFormIdInModal(null);
+      tempTokensRef.current = null;
+
+      await syncGoogleFormResponses(integration, { ...eventRow, google_integration: integration });
+    } catch {
+      Alert.alert("Error", t("google_forms_connect_error") || "Could not save integration.");
+    }
+  };
+
+  // Disconnect: remove integration and undo imported respondents
+  const disconnectGoogleForm = async () => {
+    if (!eventRow?.id) return;
+    Alert.alert(
+      t("disconnect_google_form") || "Disconnect",
+      t("google_forms_disconnect_confirm") ||
+        "Disconnect Google Forms? All imported respondents will be removed.",
+      [
+        { text: t("google_forms_cancel") || "Cancel", style: "cancel" },
+        {
+          text: t("disconnect_google_form") || "Disconnect",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const currentAttendeesInfo = safeObj(eventRow.attendees_info);
+              // Find keys added via Google Forms
+              const keysToRemove = new Set(
+                Object.entries(currentAttendeesInfo)
+                  .filter(([, v]) => safeObj(v).source === "google_forms")
+                  .map(([k]) => k)
+              );
+              const newTicketHolders = safeArr(eventRow.ticket_holders).filter(
+                (h) => !keysToRemove.has(h)
+              );
+              const newAttendeesInfo = Object.fromEntries(
+                Object.entries(currentAttendeesInfo).filter(([k]) => !keysToRemove.has(k))
+              );
+
+              await supabase
+                .from(EVENTS_TABLE)
+                .update({
+                  ticket_holders: newTicketHolders,
+                  attendees_info: newAttendeesInfo,
+                  google_integration: null,
+                  google_forms_respondent_ids: [],
+                })
+                .eq("id", eventRow.id);
+
+              setGoogleIntegration(null);
+              setModel((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      event: {
+                        ...prev.event,
+                        ticket_holders: newTicketHolders,
+                        attendees_info: newAttendeesInfo,
+                        google_integration: null,
+                        google_forms_respondent_ids: [],
+                      },
+                    }
+                  : prev
+              );
+            } catch {
+              Alert.alert("Error", "Could not disconnect Google Forms.");
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  /* ══════════════════════════════════════════════════════════════════════
+     SELECTION
+  ══════════════════════════════════════════════════════════════════════ */
   const toggleSelect = (listKey, displayName) => {
     const key = String(displayName || "").trim();
     if (!key) return;
@@ -442,7 +776,9 @@ export default function EventSettingsScreen() {
     }
   };
 
-  /* ---------------- DM (only Alba users) ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     DM / MENU / REMOVE
+  ══════════════════════════════════════════════════════════════════════ */
   const openDM = (users, title) => {
     const onlyAlba = (users || []).filter((u) => !!u?.username);
     setDmUsers(onlyAlba);
@@ -450,14 +786,12 @@ export default function EventSettingsScreen() {
     setDmVisible(true);
   };
 
-  /* ---------------- 3-dot menu ---------------- */
   const openMenu = (listKey, user) => {
     if (!isAdmin) return;
     setMenuCtx({ listKey, user });
     setMenuVisible(true);
   };
 
-  /* ---------------- remove ---------------- */
   const confirmRemove = (users) => {
     if (!isAdmin) return;
     setRemoveCtx({ users: users || [] });
@@ -470,97 +804,79 @@ export default function EventSettingsScreen() {
 
     const removeNames = list.map((u) => u?.name).filter(Boolean);
     const removeSet = new Set(removeNames.map((x) => String(x).toLowerCase()));
-
-    const albaUsernames = list.map((u) => u?.username).filter(Boolean);
-    const albaSet = new Set(albaUsernames.map((x) => String(x).toLowerCase()));
+    const albaSet = new Set(
+      list.map((u) => u?.username).filter(Boolean).map((x) => String(x).toLowerCase())
+    );
 
     try {
-      const currentTickets = safeArr(eventRow.ticket_holders); // names
-      const currentUnc = safeArr(eventRow.unconfirmed); // names
-
-      const nextTickets = currentTickets.filter((n) => !removeSet.has(String(n).toLowerCase()));
-      const nextUnc = currentUnc.filter((n) => !removeSet.has(String(n).toLowerCase()));
+      const nextTickets = safeArr(eventRow.ticket_holders).filter(
+        (n) => !removeSet.has(String(n).toLowerCase())
+      );
+      const nextUnc = safeArr(eventRow.unconfirmed).filter(
+        (n) => !removeSet.has(String(n).toLowerCase())
+      );
 
       const { error: eErr } = await supabase
         .from(EVENTS_TABLE)
         .update({ ticket_holders: nextTickets, unconfirmed: nextUnc })
         .eq("id", eventRow.id);
-
       if (eErr) throw eErr;
 
       if (postRow?.group_id && albaSet.size > 0) {
         const { data: g, error: gErr } = await supabase
-          .from(GROUPS_TABLE)
-          .select("id, members")
-          .eq("id", postRow.group_id)
-          .maybeSingle();
-
+          .from(GROUPS_TABLE).select("id, members").eq("id", postRow.group_id).maybeSingle();
         if (!gErr && g?.id) {
-          const curMembers = Array.isArray(g.members) ? g.members : [];
-          const nextMembers = curMembers.filter((u) => !albaSet.has(String(u).toLowerCase()));
+          const nextMembers = (Array.isArray(g.members) ? g.members : []).filter(
+            (u) => !albaSet.has(String(u).toLowerCase())
+          );
           await supabase.from(GROUPS_TABLE).update({ members: nextMembers }).eq("id", g.id);
         }
       }
 
-      setModel((prev) => {
-        if (!prev?.event) return prev;
-        return {
-          ...prev,
-          event: { ...prev.event, ticket_holders: nextTickets, unconfirmed: nextUnc },
-        };
-      });
-
+      setModel((prev) =>
+        prev?.event
+          ? { ...prev, event: { ...prev.event, ticket_holders: nextTickets, unconfirmed: nextUnc } }
+          : prev
+      );
       setSelectedTicket(new Set());
       setSelectedUnconf(new Set());
-    } catch (e) {
-      console.warn("[EventSettings] removeUsers error", e);
+    } catch {
       Alert.alert("Error", "Could not remove user(s).");
     }
   };
 
-  /* ---------------- Ticket controls (save to posts) ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     TICKET CONTROLS
+  ══════════════════════════════════════════════════════════════════════ */
   const saveTicketControls = async (patch) => {
     if (!postRow?.id) return;
     setSavingTicketControls(true);
     try {
       const { error } = await supabase.from(POSTS_TABLE).update(patch).eq("id", postRow.id);
       if (error) throw error;
-      setModel((prev) => prev ? { ...prev, post: { ...prev.post, ...patch } } : prev);
-    } catch (e) {
-      console.warn("[EventSettings] saveTicketControls error", e);
+      setModel((prev) => (prev ? { ...prev, post: { ...prev.post, ...patch } } : prev));
+    } catch {
       Alert.alert("Error", "Could not save setting.");
     } finally {
       setSavingTicketControls(false);
     }
   };
 
-  /* ---------------- Pending ticket request: approve / reject ---------------- */
+  /* ── pending ticket requests: approve / reject ── */
   const approveTicketRequest = async (username) => {
     if (!postRow?.id) return;
     try {
-      const { data: result, error } = await supabase.rpc("approve_ticket_request", {
-        p_post_id: postRow.id,
-        p_username: username,
+      const { data, error } = await supabase.functions.invoke("approve-ticket-request", {
+        body: { post_id: postRow.id, username },
       });
       if (error) throw error;
-
-      // Update local pending list
+      if (data?.error) throw new Error(data.error);
       const nextPending = pendingRequests.filter((r) => r?.username !== username);
       setPendingRequests(nextPending);
-      setModel((prev) => prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev);
-
-      // Send push notification via send-push edge function
-      const eventTitle = result?.title || postRow?.title || "an event";
-      supabase.functions.invoke("send-push", {
-        body: {
-          type: "ticket_approved",
-          recipient_username: username,
-          event_title: eventTitle,
-          post_id: postRow.id,
-        },
-      }).catch((e) => console.warn("[EventSettings] send-push error", e?.message));
-    } catch (e) {
-      console.warn("[EventSettings] approveTicketRequest error", e);
+      setModel((prev) =>
+        prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev
+      );
+    } catch {
       Alert.alert("Error", "Could not approve request.");
     }
   };
@@ -568,21 +884,24 @@ export default function EventSettingsScreen() {
   const rejectTicketRequest = async (username) => {
     if (!postRow?.id) return;
     try {
-      const { error } = await supabase.rpc("reject_ticket_request", {
-        p_post_id: postRow.id,
-        p_username: username,
+      const { data, error } = await supabase.functions.invoke("reject-ticket-request", {
+        body: { post_id: postRow.id, username },
       });
       if (error) throw error;
+      if (data?.error) throw new Error(data.error);
       const nextPending = pendingRequests.filter((r) => r?.username !== username);
       setPendingRequests(nextPending);
-      setModel((prev) => prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev);
-    } catch (e) {
-      console.warn("[EventSettings] rejectTicketRequest error", e);
+      setModel((prev) =>
+        prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev
+      );
+    } catch {
       Alert.alert("Error", "Could not reject request.");
     }
   };
 
-  /* ---------------- Save logic ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     SAVE EVENT DETAILS
+  ══════════════════════════════════════════════════════════════════════ */
   const isDirty = useMemo(() => {
     const baseTitle = postRow?.title || "";
     const baseDesc = postRow?.description || "";
@@ -597,7 +916,6 @@ export default function EventSettingsScreen() {
       draftMedia.some((m) => m.isNew) ||
       draftMediaUris.length !== baseMediaUris.length ||
       draftMediaUris.some((u, i) => u !== baseMediaUris[i]);
-
     return (
       (draftTitle || "") !== baseTitle ||
       (draftDesc || "") !== baseDesc ||
@@ -606,43 +924,23 @@ export default function EventSettingsScreen() {
       (draftEndDate || "") !== baseEndDate ||
       (draftEndTime || "") !== baseEndTime ||
       (draftLocation || "") !== baseLoc ||
-      (draftAllDay !== (postRow?.all_day ?? false)) ||
-      (draftEveryDay !== (postRow?.every_day ?? false)) ||
+      draftAllDay !== (postRow?.all_day ?? false) ||
+      draftEveryDay !== (postRow?.every_day ?? false) ||
       mediaChanged
     );
-  }, [postRow, draftTitle, draftDesc, draftDate, draftTime, draftEndDate, draftEndTime, draftLocation, draftAllDay, draftEveryDay, draftMedia]);
+  }, [
+    postRow, draftTitle, draftDesc, draftDate, draftTime,
+    draftEndDate, draftEndTime, draftLocation, draftAllDay, draftEveryDay, draftMedia,
+  ]);
 
   const onSave = async () => {
     if (!postRow?.id) return;
     setSaving(true);
     try {
-      const baseTitle = postRow?.title || "";
-      const baseDesc = postRow?.description || "";
-      const baseDate = postRow?.date || "";
-      const baseTime = (postRow?.time || "").toString().slice(0, 5) || "";
-      const baseEndDate = postRow?.end_date || "";
-      const baseEndTime = (postRow?.end_time || "").toString().slice(0, 5) || "";
-      const baseLoc = postRow?.location || "";
-
-      const titleChanged = (draftTitle || "") !== baseTitle;
-      const descChanged = (draftDesc || "") !== baseDesc;
-      const dateChanged = (draftDate || "") !== baseDate;
-      const timeChanged = (draftTime || "") !== baseTime;
-      const endDateChanged = (draftEndDate || "") !== baseEndDate;
-      const endTimeChanged = (draftEndTime || "") !== baseEndTime;
-      const locChanged = (draftLocation || "") !== baseLoc;
-      const allDayChanged = draftAllDay !== (postRow?.all_day ?? false);
-      const everyDayChanged = draftEveryDay !== (postRow?.every_day ?? false);
-
-      // Upload new media items
       const finalMedia = [];
       for (const m of draftMedia) {
-        if (!m.isNew) {
-          finalMedia.push(m.uri);
-        } else {
-          const url = await uploadEventMedia(m.uri, postRow.id);
-          finalMedia.push(url);
-        }
+        if (!m.isNew) { finalMedia.push(m.uri); }
+        else { finalMedia.push(await uploadEventMedia(m.uri, postRow.id)); }
       }
       const baseMediaUris = Array.isArray(postRow?.postmediauri) ? postRow.postmediauri : [];
       const mediaChanged =
@@ -651,48 +949,44 @@ export default function EventSettingsScreen() {
         finalMedia.some((u, i) => u !== baseMediaUris[i]);
 
       const postPatch = {};
-      if (titleChanged) postPatch.title = draftTitle;
-      if (descChanged) postPatch.description = draftDesc;
-      if (dateChanged) postPatch.date = draftDate;
-      if (timeChanged || allDayChanged) postPatch.time = draftAllDay ? null : draftTime;
-      if (endDateChanged) postPatch.end_date = draftEndDate || null;
-      if (endTimeChanged || allDayChanged) postPatch.end_time = draftAllDay ? null : (draftEndTime || null);
-      if (allDayChanged) postPatch.all_day = draftAllDay;
-      if (everyDayChanged) postPatch.every_day = draftEveryDay;
-      if (locChanged) postPatch.location = draftLocation;
+      if ((draftTitle || "") !== (postRow?.title || "")) postPatch.title = draftTitle;
+      if ((draftDesc || "") !== (postRow?.description || "")) postPatch.description = draftDesc;
+      if ((draftDate || "") !== (postRow?.date || "")) postPatch.date = draftDate;
+      const baseTime = (postRow?.time || "").toString().slice(0, 5);
+      if ((draftTime || "") !== baseTime || draftAllDay !== (postRow?.all_day ?? false))
+        postPatch.time = draftAllDay ? null : draftTime;
+      if ((draftEndDate || "") !== (postRow?.end_date || "")) postPatch.end_date = draftEndDate || null;
+      const baseEndTime = (postRow?.end_time || "").toString().slice(0, 5);
+      if ((draftEndTime || "") !== baseEndTime || draftAllDay !== (postRow?.all_day ?? false))
+        postPatch.end_time = draftAllDay ? null : (draftEndTime || null);
+      if (draftAllDay !== (postRow?.all_day ?? false)) postPatch.all_day = draftAllDay;
+      if (draftEveryDay !== (postRow?.every_day ?? false)) postPatch.every_day = draftEveryDay;
+      if ((draftLocation || "") !== (postRow?.location || "")) postPatch.location = draftLocation;
       if (mediaChanged) postPatch.postmediauri = finalMedia;
 
       if (Object.keys(postPatch).length) {
         const { error } = await supabase.from(POSTS_TABLE).update(postPatch).eq("id", postRow.id);
         if (error) throw error;
       }
-
-      if ((titleChanged || descChanged) && postRow?.group_id) {
+      if ((postPatch.title || postPatch.description) && postRow?.group_id) {
         const groupPatch = {};
-        if (titleChanged) groupPatch.groupname = draftTitle;
-        if (descChanged) groupPatch.group_desc = draftDesc;
-
-        const { error } = await supabase.from(GROUPS_TABLE).update(groupPatch).eq("id", postRow.group_id);
-        if (error) throw error;
+        if (postPatch.title) groupPatch.groupname = draftTitle;
+        if (postPatch.description) groupPatch.group_desc = draftDesc;
+        await supabase.from(GROUPS_TABLE).update(groupPatch).eq("id", postRow.group_id);
       }
-
-      setModel((prev) => {
-        if (!prev?.post) return prev;
-        return { ...prev, post: { ...prev.post, ...postPatch } };
-      });
-    } catch (e) {
-      console.warn("[EventSettings] save error", e);
+      setModel((prev) =>
+        prev?.post ? { ...prev, post: { ...prev.post, ...postPatch } } : prev
+      );
+    } catch {
       Alert.alert("Error", "Could not save changes.");
     } finally {
       setSaving(false);
     }
   };
 
-  const onCancelEdits = () => {
-    resetDraftsToPost();
-  };
+  const onCancelEdits = () => { resetDraftsToPost(); };
 
-  /* ---------------- media helpers ---------------- */
+  /* ── media helpers ── */
   const uploadEventMedia = async (localUri, postId) => {
     const ext = localUri.split(".").pop()?.split("?")[0]?.toLowerCase() || "jpg";
     const isVideo = ["mp4", "mov", "m4v"].includes(ext);
@@ -703,8 +997,7 @@ export default function EventSettingsScreen() {
     const buffer = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
     const { error } = await supabase.storage
-      .from("alba-media")
-      .upload(key, buffer, { upsert: false, contentType: mimeType });
+      .from("alba-media").upload(key, buffer, { upsert: false, contentType: mimeType });
     if (error) throw error;
     const { data: pub } = supabase.storage.from("alba-media").getPublicUrl(key);
     return pub.publicUrl;
@@ -730,7 +1023,7 @@ export default function EventSettingsScreen() {
     setDraftMedia((prev) => prev.filter((_, i) => i !== index));
   };
 
-  /* ---------------- Invite users / PastEvents nav ---------------- */
+  /* ── invite / delete ── */
   const onInviteFromPrevious = () => {
     if (!postRow?.id) return;
     navigation.navigate("PastEvents", {
@@ -740,48 +1033,40 @@ export default function EventSettingsScreen() {
     });
   };
 
-  const inviteGroupPayload = useMemo(() => {
-    if (!postRow?.group_id) return null;
-    return { id: postRow.group_id };
-  }, [postRow?.group_id]);
+  const inviteGroupPayload = useMemo(
+    () => (postRow?.group_id ? { id: postRow.group_id } : null),
+    [postRow?.group_id]
+  );
 
-  const defaultInviteMessage = useMemo(() => {
-    const title = postRow?.title || "an event";
-    return `Join ${title}`;
-  }, [postRow?.title]);
+  const defaultInviteMessage = useMemo(
+    () => `Join ${postRow?.title || "an event"}`,
+    [postRow?.title]
+  );
 
-  /* ---------------- Delete event ---------------- */
   const deleteEvent = async () => {
     try {
       const postIdToDelete = postRow?.id || eventRow?.post_id || routePostId;
       if (!postIdToDelete) return;
-
       if (eventRow?.id) {
         const { error: eErr } = await supabase.from(EVENTS_TABLE).delete().eq("id", eventRow.id);
         if (eErr) throw eErr;
       } else {
-        const { error: eErr } = await supabase.from(EVENTS_TABLE).delete().eq("post_id", postIdToDelete);
-        if (eErr) throw eErr;
+        await supabase.from(EVENTS_TABLE).delete().eq("post_id", postIdToDelete);
       }
-
       const { error: pErr } = await supabase.from(POSTS_TABLE).delete().eq("id", postIdToDelete);
       if (pErr) throw pErr;
-
       setDeleteVisible(false);
       navigation.goBack();
-    } catch (e) {
-      console.warn("[EventSettings] delete error", e);
+    } catch {
       Alert.alert("Error", "Could not delete event.");
     }
   };
 
-  /* ---------------- ✅ QR scan -> validate -> mark used ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     QR SCANNER
+  ══════════════════════════════════════════════════════════════════════ */
   const openScanner = async () => {
-    if (!isAdmin) return;
-    if (!eventRow?.id) {
-      Alert.alert("Missing event", "No event loaded.");
-      return;
-    }
+    if (!isAdmin || !eventRow?.id) return;
     if (!permission?.granted) {
       const res = await requestPermission();
       if (!res?.granted) {
@@ -809,117 +1094,69 @@ export default function EventSettingsScreen() {
 
   const markScanned = async ({ holderDisplay }) => {
     if (!eventRow?.id) return;
-
     const uname = resolveUsernameFromDisplayName(holderDisplay);
     const toStore = uname || String(holderDisplay || "").trim();
     if (!toStore) throw new Error("Missing holder.");
-
     const current = safeArr(eventRow?.scanned);
     const exists = current.some((x) => String(x).toLowerCase() === String(toStore).toLowerCase());
     if (exists) {
       Alert.alert("Already used", "This ticket was already scanned.");
       return { already: true, stored: toStore };
     }
-
     const next = uniqCI([...current, toStore]);
-
-    const { error } = await supabase
-      .from(EVENTS_TABLE)
-      .update({ scanned: next })
-      .eq("id", eventRow.id);
-
+    const { error } = await supabase.from(EVENTS_TABLE).update({ scanned: next }).eq("id", eventRow.id);
     if (error) throw error;
-
-    // update local model
-    setModel((prev) => {
-      if (!prev?.event) return prev;
-      return { ...prev, event: { ...prev.event, scanned: next } };
-    });
-
+    setModel((prev) =>
+      prev?.event ? { ...prev, event: { ...prev.event, scanned: next } } : prev
+    );
     return { already: false, stored: toStore };
   };
 
   const handleBarcodeScanned = async ({ data }) => {
     const raw = String(data || "").trim();
-    if (!raw) return;
-
-    // hard lock to prevent double firing
-    if (scanLockRef.current) return;
+    if (!raw || scanLockRef.current) return;
     scanLockRef.current = true;
-
     setLastScanValue(raw);
     setScanBusy(true);
-
     try {
       if (!eventRow?.id) throw new Error("Missing event.");
-
-      // 1) find ticket by (id) OR (qr_payload)
-      // If your qr_payload == ticket.id, the first query will work.
       let ticket = null;
-
-      {
-        const { data: row, error } = await supabase
-          .from(TICKETS_TABLE)
-          .select("id, event_id, post_id, holder_display, qr_payload")
-          .eq("id", raw)
-          .maybeSingle();
-        if (error) {
-          // ignore & fallback
-        }
-        if (row?.id) ticket = row;
-      }
-
+      { const { data: row } = await supabase
+          .from(TICKETS_TABLE).select("id, event_id, post_id, holder_display, qr_payload")
+          .eq("id", raw).maybeSingle();
+        if (row?.id) ticket = row; }
       if (!ticket) {
         const { data: row2 } = await supabase
-          .from(TICKETS_TABLE)
-          .select("id, event_id, post_id, holder_display, qr_payload")
-          .eq("qr_payload", raw)
-          .maybeSingle();
+          .from(TICKETS_TABLE).select("id, event_id, post_id, holder_display, qr_payload")
+          .eq("qr_payload", raw).maybeSingle();
         if (row2?.id) ticket = row2;
       }
-
-      if (!ticket?.id) {
-        Alert.alert("Invalid ticket", "No ticket found for this QR code.");
-        return;
-      }
-
-      // 2) validate ticket belongs to this event
+      if (!ticket?.id) { Alert.alert("Invalid ticket", "No ticket found for this QR code."); return; }
       if (String(ticket.event_id) !== String(eventRow.id)) {
-        Alert.alert("Wrong event", "This ticket is for a different event.");
-        return;
+        Alert.alert("Wrong event", "This ticket is for a different event."); return;
       }
-
-      // 3) mark as scanned (events.scanned stores username if available)
-      const holderDisplay = String(ticket.holder_display || "").trim();
-      const result = await markScanned({ holderDisplay });
-
-      if (!result?.already) {
-        Alert.alert("Success", `Ticket validated for: ${result.stored}`);
-      }
+      const result = await markScanned({ holderDisplay: String(ticket.holder_display || "").trim() });
+      if (!result?.already) Alert.alert("Success", `Ticket validated for: ${result.stored}`);
     } catch (e) {
-      console.warn("[ScanTicket] error", e?.message || e);
       Alert.alert("Error", e?.message || "Could not validate ticket.");
     } finally {
       setScanBusy(false);
-      // allow scanning again after a short cooldown
-      setTimeout(() => {
-        scanLockRef.current = false;
-      }, 900);
+      setTimeout(() => { scanLockRef.current = false; }, 900);
     }
   };
 
-  /* ---------------- UI pieces ---------------- */
+  /* ══════════════════════════════════════════════════════════════════════
+     UI PIECES
+  ══════════════════════════════════════════════════════════════════════ */
   const SelectionBar = ({ listKey, selectedCount }) => {
     if (!selectedCount) return null;
     return (
       <View style={styles.selectionBar}>
         <Text style={styles.selectionText}>{selectedCount} selected</Text>
-
         <View style={{ flexDirection: "row", gap: 10 }}>
           <TouchableOpacity style={styles.selectionBtn} onPress={() => selectAll(listKey)}>
             <Text style={styles.selectionBtnText}>Select all</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.selectionBtn, styles.selectionPrimary]}
             onPress={() => {
@@ -932,7 +1169,6 @@ export default function EventSettingsScreen() {
           >
             <Text style={[styles.selectionBtnText, { color: "#fff" }]}>DM users</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.selectionBtn, styles.selectionDanger]}
             onPress={() => {
@@ -950,69 +1186,110 @@ export default function EventSettingsScreen() {
     );
   };
 
+  /* ── renderUserRow: ticket holders + unconfirmed ── */
   const renderUserRow = (listKey, user, selectedSet) => {
     const displayName = user?.name || "User";
     const username = user?.username ?? null;
     const isExternal = !username;
     const checked = selectedSet.has(displayName);
-    const usernameColor = isExternal ? "#8c97a8" : theme.text;
+    const rowKey = user.id?.toString() || displayName;
+    const isExpanded = expandedUserInfo.has(rowKey);
 
-    // Buyer info from attendees_info (all fields except username)
-    const info = safeObj(eventRow?.attendees_info);
-    const buyerInfo = safeObj(info?.[displayName]);
-    const extraFields = Object.entries(buyerInfo)
-      .filter(([k]) => k !== "username")
-      .map(([k, v]) => `${k}: ${v}`)
-      .filter(Boolean);
+    // Info from attendees_info (skip internal metadata keys)
+    const buyerInfo = safeObj(safeObj(eventRow?.attendees_info)?.[displayName]);
+    const infoFields = Object.entries(buyerInfo).filter(
+      ([k]) => k !== "username" && k !== "source" && k !== "response_id"
+    );
 
     return (
-      <View key={user.id?.toString() || displayName} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
-        {user.avatar_url && !isExternal ? (
-          <Image source={{ uri: user.avatar_url }} style={styles.memberAvatar} />
-        ) : (
-          <View
-            style={[
-              styles.memberAvatar,
-              { backgroundColor: theme.card, alignItems: "center", justifyContent: "center" },
-            ]}
-          >
-            <Text style={[styles.memberInitials, { color: theme.text }]}>
-              {(displayName || "?")[0]?.toUpperCase() || "?"}
-            </Text>
-          </View>
-        )}
-
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.memberName, { color: theme.text }]}>{displayName}</Text>
-          {extraFields.length > 0 ? (
-            extraFields.map((line, i) => (
-              <Text key={i} style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>{line}</Text>
-            ))
+      <View key={rowKey}>
+        <View style={[styles.memberRow, { borderBottomColor: theme.border }]}>
+          {user.avatar_url && !isExternal ? (
+            <Image source={{ uri: user.avatar_url }} style={styles.memberAvatar} />
           ) : (
-            <Text style={[styles.memberUsername, { color: usernameColor }]}>
-              {isExternal ? notOnAlbaLabel : `@${username}`}
-            </Text>
+            <View
+              style={[
+                styles.memberAvatar,
+                { backgroundColor: theme.card, alignItems: "center", justifyContent: "center" },
+              ]}
+            >
+              <Text style={[styles.memberInitials, { color: theme.text }]}>
+                {(displayName || "?")[0]?.toUpperCase() || "?"}
+              </Text>
+            </View>
           )}
+
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.memberName, { color: theme.text }]}>{displayName}</Text>
+            <TouchableOpacity
+              style={styles.infoToggleRow}
+              onPress={() =>
+                setExpandedUserInfo((prev) => {
+                  const next = new Set(prev);
+                  next.has(rowKey) ? next.delete(rowKey) : next.add(rowKey);
+                  return next;
+                })
+              }
+              hitSlop={{ top: 4, bottom: 4, left: 4, right: 10 }}
+            >
+              <Text
+                style={[
+                  styles.memberUsername,
+                  { color: isExternal ? "#8c97a8" : theme.text, flex: 1 },
+                ]}
+              >
+                {isExternal ? notOnAlbaLabel : `@${username}`}
+              </Text>
+              <Feather
+                name={isExpanded ? "chevron-up" : "chevron-down"}
+                size={13}
+                color="#59A7FF"
+                style={{ marginLeft: 4 }}
+              />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            onPress={() => toggleSelect(listKey, displayName)}
+            style={styles.checkboxBtn}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <View style={[styles.checkbox, checked && { backgroundColor: "#59A7FF", borderColor: "#59A7FF" }]}>
+              {checked && <Feather name="check" size={14} color="#fff" />}
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.memberMenuButton, { opacity: isAdmin ? 1 : 0.35 }]}
+            onPress={() => openMenu(listKey, user)}
+            disabled={!isAdmin}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Feather name="more-vertical" size={18} color={theme.subtleText || theme.text} />
+          </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          onPress={() => toggleSelect(listKey, displayName)}
-          style={styles.checkboxBtn}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-        >
-          <View style={[styles.checkbox, checked && { backgroundColor: "#59A7FF", borderColor: "#59A7FF" }]}>
-            {checked && <Feather name="check" size={14} color="#fff" />}
+        {isExpanded && (
+          <View
+            style={[
+              styles.infoPanel,
+              { backgroundColor: isDark ? "#1a1f2e" : "#f0f6ff", borderBottomColor: theme.border },
+            ]}
+          >
+            {infoFields.length > 0 ? (
+              infoFields.map(([k, v], i) => (
+                <Text key={i} style={[styles.infoPanelLine, { color: theme.text }]}>
+                  <Text style={styles.infoPanelKey}>{k}: </Text>
+                  {String(v ?? "")}
+                </Text>
+              ))
+            ) : (
+              <Text style={[styles.infoPanelLine, { color: theme.subtleText || "#8c97a8" }]}>
+                {t("no_info_available") || "No info available"}
+              </Text>
+            )}
           </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.memberMenuButton, { opacity: isAdmin ? 1 : 0.35 }]}
-          onPress={() => openMenu(listKey, user)}
-          disabled={!isAdmin}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-        >
-          <Feather name="more-vertical" size={18} color={theme.subtleText || theme.text} />
-        </TouchableOpacity>
+        )}
       </View>
     );
   };
@@ -1024,9 +1301,13 @@ export default function EventSettingsScreen() {
 
   const scannedCount = safeArr(eventRow?.scanned).length;
 
+  /* ══════════════════════════════════════════════════════════════════════
+     RENDER
+  ══════════════════════════════════════════════════════════════════════ */
   return (
     <ThemedView style={styles.container}>
       <SafeAreaView style={styles.safeArea}>
+        {/* Header */}
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Feather name="chevron-left" size={26} color={theme.text} />
@@ -1045,8 +1326,10 @@ export default function EventSettingsScreen() {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F91FF" colors={["#2F91FF"]} />
             }
           >
-            {/* Change title/description */}
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>{t("event_change_title") || "Change title"}</Text>
+            {/* ── Title ── */}
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>
+              {t("event_change_title") || "Change title"}
+            </Text>
             <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <TextInput
                 value={draftTitle}
@@ -1057,7 +1340,10 @@ export default function EventSettingsScreen() {
               />
             </View>
 
-            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>{t("event_change_description") || "Change description"}</Text>
+            {/* ── Description ── */}
+            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
+              {t("event_change_description") || "Change description"}
+            </Text>
             <View style={[styles.inputWrap, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <TextInput
                 value={draftDesc}
@@ -1069,7 +1355,7 @@ export default function EventSettingsScreen() {
               />
             </View>
 
-            {/* All day toggle */}
+            {/* ── All day / Every day ── */}
             <View style={styles.allDayRow}>
               <Switch
                 value={draftAllDay}
@@ -1084,8 +1370,6 @@ export default function EventSettingsScreen() {
                 {t("event_all_day") || "All day"}
               </Text>
             </View>
-
-            {/* Every day toggle */}
             <View style={styles.allDayRow}>
               <Switch
                 value={draftEveryDay}
@@ -1098,11 +1382,10 @@ export default function EventSettingsScreen() {
               </Text>
             </View>
 
-            {/* Start date/time */}
+            {/* ── Start date/time ── */}
             <Text style={[styles.sectionTitle, { color: theme.text }]}>
               {t("change_date_time") || "Start date and time"}
             </Text>
-
             <View style={styles.dateTimeRow}>
               <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
                 <TextInput
@@ -1113,7 +1396,6 @@ export default function EventSettingsScreen() {
                   style={[styles.pillInput, { color: theme.text }]}
                 />
               </View>
-
               {!draftAllDay && (
                 <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
                   <TextInput
@@ -1127,11 +1409,10 @@ export default function EventSettingsScreen() {
               )}
             </View>
 
-            {/* End date/time */}
+            {/* ── End date/time ── */}
             <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
               {t("change_end_date_time") || "End date and time"}
             </Text>
-
             <View style={styles.dateTimeRow}>
               <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
                 <TextInput
@@ -1142,7 +1423,6 @@ export default function EventSettingsScreen() {
                   style={[styles.pillInput, { color: theme.text }]}
                 />
               </View>
-
               {!draftAllDay && (
                 <View style={[styles.pill, { borderColor: theme.border, backgroundColor: theme.card }]}>
                   <TextInput
@@ -1156,6 +1436,7 @@ export default function EventSettingsScreen() {
               )}
             </View>
 
+            {/* ── Location ── */}
             <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
               {t("change_location") || "Change location"}
             </Text>
@@ -1169,7 +1450,7 @@ export default function EventSettingsScreen() {
               />
             </View>
 
-            {/* Media */}
+            {/* ── Media ── */}
             <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 10 }]}>
               {t("event_media") || "Media"}
             </Text>
@@ -1200,32 +1481,29 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Save + Cancel (only when dirty) */}
+            {/* ── Save / Cancel ── */}
             {isDirty && (
               <View style={styles.saveRow}>
                 <TouchableOpacity
                   style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
                   onPress={onSave}
                   disabled={saving}
-                  activeOpacity={0.85}
                 >
                   <Text style={styles.saveBtnText}>{saving ? "Saving..." : "Save"}</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
                   style={[
                     styles.cancelEditsBtn,
                     { backgroundColor: isDark ? "#111827" : "#EAF5FF", borderColor: theme.border },
                   ]}
                   onPress={onCancelEdits}
-                  activeOpacity={0.85}
                 >
                   <Text style={[styles.cancelEditsText, { color: theme.text }]}>Cancel</Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {/* Purchases active toggle */}
+            {/* ── Purchases active ── */}
             {isAdmin && (
               <TouchableOpacity
                 style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
@@ -1234,8 +1512,7 @@ export default function EventSettingsScreen() {
                   if (!eventRow?.id) return;
                   const next = !purchasesActive;
                   setPurchasesActive(next);
-                  const { error } = await supabase.from(EVENTS_TABLE).update({ purchases_active: next }).eq("id", eventRow.id);
-                  if (error) { console.warn("[EventSettings] purchases_active update error", error.message); setPurchasesActive(!next); }
+                  await supabase.from(EVENTS_TABLE).update({ purchases_active: next }).eq("id", eventRow.id);
                 }}
               >
                 <View style={{ flex: 1 }}>
@@ -1252,34 +1529,28 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Pause / Resume ticket selling (removes or prepends "tickets" in posts.actions) */}
+            {/* ── Pause / Resume ticket selling ── */}
             {isAdmin && postRow?.id && (
               <TouchableOpacity
                 style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
                 activeOpacity={0.7}
                 onPress={async () => {
                   const currentActions = safeArr(postRow?.actions);
-                  let nextActions;
-                  if (ticketsPaused) {
-                    // Resume — reinstate "tickets" as the first action
-                    nextActions = ["tickets", ...currentActions.filter((a) => String(a).toLowerCase() !== "tickets")];
-                  } else {
-                    // Pause — remove "tickets" entirely
-                    nextActions = currentActions.filter((a) => String(a).toLowerCase() !== "tickets");
-                  }
+                  const nextActions = ticketsPaused
+                    ? ["tickets", ...currentActions.filter((a) => String(a).toLowerCase() !== "tickets")]
+                    : currentActions.filter((a) => String(a).toLowerCase() !== "tickets");
                   setTicketsPaused(!ticketsPaused);
-                  const { error } = await supabase.from(POSTS_TABLE).update({ actions: nextActions }).eq("id", postRow.id);
-                  if (error) {
-                    console.warn("[EventSettings] ticket selling toggle error", error.message);
-                    setTicketsPaused(ticketsPaused); // revert
-                  } else {
-                    setModel((prev) => prev ? { ...prev, post: { ...prev.post, actions: nextActions } } : prev);
-                  }
+                  const { error } = await supabase
+                    .from(POSTS_TABLE).update({ actions: nextActions }).eq("id", postRow.id);
+                  if (error) setTicketsPaused(ticketsPaused);
+                  else setModel((prev) => prev ? { ...prev, post: { ...prev.post, actions: nextActions } } : prev);
                 }}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.toggleLabel, { color: theme.text }]}>
-                    {ticketsPaused ? (t("event_resume_tickets") || "Resume ticket selling") : (t("event_pause_tickets") || "Pause ticket selling")}
+                    {ticketsPaused
+                      ? (t("event_resume_tickets") || "Resume ticket selling")
+                      : (t("event_pause_tickets") || "Pause ticket selling")}
                   </Text>
                   <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
                     {ticketsPaused
@@ -1293,7 +1564,7 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Manually approve attendees toggle */}
+            {/* ── Manually approve ── */}
             {isAdmin && (
               <TouchableOpacity
                 style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
@@ -1320,7 +1591,7 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Fixed ticket count toggle + input */}
+            {/* ── Fixed ticket count ── */}
             {isAdmin && (
               <TouchableOpacity
                 style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
@@ -1329,11 +1600,8 @@ export default function EventSettingsScreen() {
                   if (!postRow?.id) return;
                   const next = !fixedTicketCount;
                   setFixedTicketCount(next);
-                  if (!next) {
-                    await saveTicketControls({ is_ticket_number_fixed: false, ticket_number: null });
-                  } else {
-                    await saveTicketControls({ is_ticket_number_fixed: true });
-                  }
+                  if (!next) await saveTicketControls({ is_ticket_number_fixed: false, ticket_number: null });
+                  else await saveTicketControls({ is_ticket_number_fixed: true });
                 }}
               >
                 <View style={{ flex: 1 }}>
@@ -1350,11 +1618,9 @@ export default function EventSettingsScreen() {
                       style={[styles.toggleSub, { color: theme.text, marginTop: 4 }]}
                       onEndEditing={async () => {
                         const n = parseInt(ticketNumber, 10);
-                        if (Number.isFinite(n) && n > 0 && postRow?.id) {
+                        if (Number.isFinite(n) && n > 0 && postRow?.id)
                           await saveTicketControls({ ticket_number: n });
-                        }
                       }}
-                      onPress={(e) => e.stopPropagation?.()}
                     />
                   )}
                 </View>
@@ -1364,9 +1630,14 @@ export default function EventSettingsScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Pending ticket requests */}
+            {/* ══ Pending ticket requests ══ */}
             {isAdmin && manuallyApprove && (
-              <View style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card, flexDirection: "column", alignItems: "stretch" }]}>
+              <View
+                style={[
+                  styles.toggleRow,
+                  { borderColor: theme.border, backgroundColor: theme.card, flexDirection: "column", alignItems: "stretch" },
+                ]}
+              >
                 <TouchableOpacity
                   style={{ flexDirection: "row", alignItems: "center" }}
                   activeOpacity={0.7}
@@ -1389,61 +1660,191 @@ export default function EventSettingsScreen() {
                       <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8", paddingVertical: 8 }]}>
                         {t("pending_ticket_requests_empty") || "No pending requests."}
                       </Text>
-                    ) : pendingRequests.map((req) => {
-                      const uname = req?.username || "";
-                      const info = req?.info || "";
-                      const prof = pendingRequestsProfiles[uname];
-                      return (
-                        <View key={uname} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
-                          {prof?.avatar_url ? (
-                            <Image source={{ uri: prof.avatar_url }} style={styles.memberAvatar} />
-                          ) : (
-                            <View style={[styles.memberAvatar, { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" }]}>
-                              <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>
-                                {(prof?.name || uname).charAt(0).toUpperCase()}
-                              </Text>
+                    ) : (
+                      pendingRequests.map((req) => {
+                        const uname = req?.username || "";
+                        const info = req?.info || "";
+                        const photoUrl = req?.photo_url || null;
+                        const prof = pendingRequestsProfiles[uname];
+                        const isExpanded = expandedPendingInfo.has(uname);
+                        const hasVettingInfo = !!(postRow?.ticket_approval_info && info) || !!info;
+                        const hasAnyExpandable = hasVettingInfo || !!photoUrl;
+
+                        return (
+                          <View key={uname}>
+                            <View style={[styles.memberRow, { borderBottomColor: theme.border }]}>
+                              {prof?.avatar_url ? (
+                                <Image source={{ uri: prof.avatar_url }} style={styles.memberAvatar} />
+                              ) : (
+                                <View
+                                  style={[
+                                    styles.memberAvatar,
+                                    { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" },
+                                  ]}
+                                >
+                                  <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>
+                                    {(prof?.name || uname).charAt(0).toUpperCase()}
+                                  </Text>
+                                </View>
+                              )}
+
+                              <View style={{ flex: 1, marginLeft: 10 }}>
+                                <Text style={[styles.memberName, { color: theme.text }]}>
+                                  {prof?.name || uname}
+                                </Text>
+                                <TouchableOpacity
+                                  style={styles.infoToggleRow}
+                                  onPress={() => {
+                                    if (!hasAnyExpandable) return;
+                                    setExpandedPendingInfo((prev) => {
+                                      const next = new Set(prev);
+                                      next.has(uname) ? next.delete(uname) : next.add(uname);
+                                      return next;
+                                    });
+                                  }}
+                                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 10 }}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.memberUsername,
+                                      { color: theme.subtleText || "#8c97a8", flex: 1 },
+                                    ]}
+                                  >
+                                    {uname ? `@${uname}` : ""}
+                                  </Text>
+                                  {hasAnyExpandable && (
+                                    <Feather
+                                      name={isExpanded ? "chevron-up" : "chevron-down"}
+                                      size={13}
+                                      color="#59A7FF"
+                                      style={{ marginLeft: 4 }}
+                                    />
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+
+                              <View style={{ flexDirection: "row", gap: 8 }}>
+                                <TouchableOpacity
+                                  style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
+                                  onPress={() => approveTicketRequest(uname)}
+                                >
+                                  <Feather name="check" size={16} color="#fff" />
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
+                                  onPress={() => rejectTicketRequest(uname)}
+                                >
+                                  <Feather name="x" size={16} color="#fff" />
+                                </TouchableOpacity>
+                              </View>
                             </View>
-                          )}
-                          <View style={{ flex: 1, marginLeft: 10 }}>
-                            <Text style={[styles.memberName, { color: theme.text }]}>
-                              {prof?.name || uname}
-                            </Text>
-                            {!!uname && (
-                              <Text style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>@{uname}</Text>
-                            )}
-                            {!!info && (
-                              <Text style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>{info}</Text>
+
+                            {/* Expanded section: vetting info + photo */}
+                            {isExpanded && (
+                              <View
+                                style={[
+                                  styles.infoPanel,
+                                  {
+                                    backgroundColor: isDark ? "#1a1f2e" : "#f0f6ff",
+                                    borderBottomColor: theme.border,
+                                  },
+                                ]}
+                              >
+                                {hasVettingInfo && (
+                                  <Text style={[styles.infoPanelLine, { color: theme.text }]}>
+                                    {postRow?.ticket_approval_info ? (
+                                      <>
+                                        <Text style={styles.infoPanelKey}>
+                                          {postRow.ticket_approval_info}:{" "}
+                                        </Text>
+                                        {info}
+                                      </>
+                                    ) : (
+                                      info
+                                    )}
+                                  </Text>
+                                )}
+                                {!!photoUrl && (
+                                  <Image
+                                    source={{ uri: photoUrl }}
+                                    style={[styles.pendingPhoto, { marginTop: hasVettingInfo ? 8 : 0 }]}
+                                    resizeMode="contain"
+                                  />
+                                )}
+                              </View>
                             )}
                           </View>
-                          <View style={{ flexDirection: "row", gap: 8 }}>
-                            <TouchableOpacity
-                              style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
-                              onPress={() => approveTicketRequest(uname)}
-                            >
-                              <Feather name="check" size={16} color="#fff" />
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
-                              onPress={() => rejectTicketRequest(uname)}
-                            >
-                              <Feather name="x" size={16} color="#fff" />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      );
-                    })}
+                        );
+                      })
+                    )}
                   </View>
                 )}
               </View>
             )}
 
-            {/* ✅ Scanner button */}
-            <View style={{ marginTop: 14 }}>
+            {/* ══ Google Forms integration button ══ */}
+            {isAdmin && (
+              <View style={{ marginTop: 14 }}>
+                {googleIntegration?.form_name ? (
+                  <View>
+                    <View
+                      style={[
+                        styles.googleFormsBtn,
+                        { backgroundColor: isDark ? "#1a2e1a" : "#e8f5e9", borderColor: "#2BB673" },
+                      ]}
+                    >
+                      <Feather name="check-circle" size={16} color="#2BB673" />
+                      <Text style={[styles.googleFormsBtnText, { color: "#2BB673" }]} numberOfLines={1}>
+                        {(t("google_form_connected") || "Google Form connected: {name}").replace(
+                          "{name}",
+                          googleIntegration.form_name
+                        )}
+                      </Text>
+                      {formsSyncing && (
+                        <ActivityIndicator size="small" color="#2BB673" style={{ marginLeft: 4 }} />
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      onPress={disconnectGoogleForm}
+                      style={styles.googleFormsDisconnect}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Text style={styles.googleFormsDisconnectText}>
+                        {t("disconnect_google_form") || "Disconnect"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={[
+                      styles.googleFormsBtn,
+                      {
+                        backgroundColor: isDark ? "#111827" : "#fff",
+                        borderColor: theme.border,
+                        opacity: googleAuthLoading ? 0.6 : 1,
+                      },
+                    ]}
+                    onPress={() => googlePromptAsync()}
+                    disabled={googleAuthLoading || !googleRequest}
+                    activeOpacity={0.85}
+                  >
+                    {googleAuthLoading ? (
+                      <ActivityIndicator size="small" color="#59A7FF" />
+                    ) : (
+                      <Feather name="link" size={16} color="#59A7FF" />
+                    )}
+                    <Text style={[styles.googleFormsBtnText, { color: "#59A7FF" }]}>
+                      {t("integrate_google_forms") || "Integrate Google Forms"}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {/* ══ Scan ticket QR button ══ */}
+            <View style={{ marginTop: 10 }}>
               <TouchableOpacity
-                style={[
-                  styles.scanBtn,
-                  { opacity: isAdmin ? 1 : 0.45, backgroundColor: "#6C63FF" },
-                ]}
+                style={[styles.scanBtn, { opacity: isAdmin ? 1 : 0.45, backgroundColor: "#6C63FF" }]}
                 onPress={openScanner}
                 disabled={!isAdmin}
                 activeOpacity={0.9}
@@ -1451,24 +1852,27 @@ export default function EventSettingsScreen() {
                 <Feather name="camera" size={16} color="#fff" />
                 <Text style={styles.scanBtnText}>{t("event_scan_qr") || "Scan ticket QR"}</Text>
                 <View style={{ flex: 1 }} />
-                <Text style={styles.scanMetaText}>{(t("event_scan_scanned") || "{n} scanned").replace("{n}", scannedCount)}</Text>
+                <Text style={styles.scanMetaText}>
+                  {(t("event_scan_scanned") || "{n} scanned").replace("{n}", scannedCount)}
+                </Text>
               </TouchableOpacity>
             </View>
 
-            {/* Ticket holders */}
+            {/* ══ Ticket holders ══ */}
             <View style={styles.listHeaderRow}>
-              <Text style={[styles.listTitle, { color: theme.text }]}>{t("ticket_holders") || "Ticket holders"}</Text>
-              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>{ticketUsers.length}</Text>
+              <Text style={[styles.listTitle, { color: theme.text }]}>
+                {t("ticket_holders") || "Ticket holders"}
+              </Text>
+              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>
+                {ticketUsers.length}
+              </Text>
             </View>
-
             <SelectionBar listKey="ticket" selectedCount={ticketSelectedCount} />
-
             <View style={[styles.membersList, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <ScrollView nestedScrollEnabled contentContainerStyle={{ paddingBottom: 4 }}>
                 {ticketUsers.map((u) => renderUserRow("ticket", u, selectedTicket))}
               </ScrollView>
             </View>
-
             <TouchableOpacity
               style={styles.dmWholeBtn}
               onPress={() => openDM(ticketUsers.filter((u) => !!u?.username), "DM whole list")}
@@ -1477,20 +1881,21 @@ export default function EventSettingsScreen() {
               <Text style={styles.dmWholeText}>{t("dm_whole_list") || "DM whole list"}</Text>
             </TouchableOpacity>
 
-            {/* Unconfirmed */}
+            {/* ══ Unconfirmed ══ */}
             <View style={[styles.listHeaderRow, { marginTop: 16 }]}>
-              <Text style={[styles.listTitle, { color: theme.text }]}>{t("unconfirmed") || "Unconfirmed"}</Text>
-              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>{unconfirmedUsers.length}</Text>
+              <Text style={[styles.listTitle, { color: theme.text }]}>
+                {t("unconfirmed") || "Unconfirmed"}
+              </Text>
+              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>
+                {unconfirmedUsers.length}
+              </Text>
             </View>
-
             <SelectionBar listKey="unconf" selectedCount={unconfSelectedCount} />
-
             <View style={[styles.membersList, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <ScrollView nestedScrollEnabled contentContainerStyle={{ paddingBottom: 4 }}>
                 {unconfirmedUsers.map((u) => renderUserRow("unconf", u, selectedUnconf))}
               </ScrollView>
             </View>
-
             <TouchableOpacity
               style={styles.dmWholeBtn}
               onPress={() => openDM(unconfirmedUsers.filter((u) => !!u?.username), "DM whole list")}
@@ -1499,10 +1904,14 @@ export default function EventSettingsScreen() {
               <Text style={styles.dmWholeText}>{t("dm_whole_list") || "DM whole list"}</Text>
             </TouchableOpacity>
 
-            {/* Shared the event */}
+            {/* ══ Shared the event ══ */}
             <View style={[styles.listHeaderRow, { marginTop: 16 }]}>
-              <Text style={[styles.listTitle, { color: theme.text }]}>{t("shared_event_list_title") || "Shared the event"}</Text>
-              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>{sharedByUsers.length}</Text>
+              <Text style={[styles.listTitle, { color: theme.text }]}>
+                {t("shared_event_list_title") || "Shared the event"}
+              </Text>
+              <Text style={[styles.listCount, { color: theme.subtleText || theme.text }]}>
+                {sharedByUsers.length}
+              </Text>
             </View>
             <View style={[styles.membersList, { borderColor: theme.border, backgroundColor: theme.card }]}>
               <ScrollView nestedScrollEnabled contentContainerStyle={{ paddingBottom: 4 }}>
@@ -1516,12 +1925,12 @@ export default function EventSettingsScreen() {
               </ScrollView>
             </View>
 
-            {/* Invite from previous */}
+            {/* ── Invite ── */}
             <TouchableOpacity style={[styles.outlineButton, { marginTop: 14 }]} onPress={onInviteFromPrevious}>
-              <Text style={styles.outlineButtonText}>{t("invite_previous_event") || "Invite users from previous event"}</Text>
+              <Text style={styles.outlineButtonText}>
+                {t("invite_previous_event") || "Invite users from previous event"}
+              </Text>
             </TouchableOpacity>
-
-            {/* Invite users -> ShareMenu */}
             <TouchableOpacity
               style={styles.primaryButton}
               onPress={() => {
@@ -1535,7 +1944,7 @@ export default function EventSettingsScreen() {
               <Text style={styles.primaryButtonText}>{t("invite_users") || "Invite users"}</Text>
             </TouchableOpacity>
 
-            {/* Delete event -> modal */}
+            {/* ── Delete ── */}
             <TouchableOpacity style={styles.deleteButton} onPress={() => setDeleteVisible(true)}>
               <Text style={styles.deleteButtonText}>{t("delete_event") || "Delete event"}</Text>
             </TouchableOpacity>
@@ -1543,7 +1952,7 @@ export default function EventSettingsScreen() {
         </KeyboardAvoidingView>
       </SafeAreaView>
 
-      {/* ShareMenu for invites */}
+      {/* ── ShareMenu ── */}
       <ShareMenu
         visible={shareVisible}
         onClose={() => setShareVisible(false)}
@@ -1553,17 +1962,101 @@ export default function EventSettingsScreen() {
         onSent={() => {}}
       />
 
-      {/* ✅ Scanner modal */}
+      {/* ══ Google Forms selection modal ══ */}
+      <Modal
+        visible={formsModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setFormsModalVisible(false)}
+      >
+        <View style={styles.formsModalOverlay}>
+          <View
+            style={[
+              styles.formsModalCard,
+              { backgroundColor: theme.card, borderColor: theme.border },
+            ]}
+          >
+            <Text style={[styles.formsModalTitle, { color: theme.text }]}>
+              {t("google_forms_modal_title") || "Select a Google Form"}
+            </Text>
+
+            {availableForms.length === 0 ? (
+              <Text style={[styles.formsModalEmpty, { color: theme.subtleText || "#8c97a8" }]}>
+                {t("google_forms_no_forms") || "No Google Forms found in your account"}
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
+                {availableForms.map((form) => (
+                  <TouchableOpacity
+                    key={form.id}
+                    style={[styles.formRow, { borderBottomColor: theme.border }]}
+                    onPress={() => setSelectedFormIdInModal(form.id)}
+                    activeOpacity={0.75}
+                  >
+                    <View
+                      style={[
+                        styles.formCheckbox,
+                        selectedFormIdInModal === form.id && {
+                          backgroundColor: "#59A7FF",
+                          borderColor: "#59A7FF",
+                        },
+                      ]}
+                    >
+                      {selectedFormIdInModal === form.id && (
+                        <Feather name="check" size={12} color="#fff" />
+                      )}
+                    </View>
+                    <Text style={[styles.formName, { color: theme.text }]} numberOfLines={2}>
+                      {form.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            <View style={styles.formsModalBtns}>
+              <TouchableOpacity
+                style={[styles.formsModalCancelBtn, { borderColor: theme.border }]}
+                onPress={() => {
+                  setFormsModalVisible(false);
+                  setSelectedFormIdInModal(null);
+                  tempTokensRef.current = null;
+                }}
+              >
+                <Text style={[styles.formsModalCancelText, { color: theme.text }]}>
+                  {t("google_forms_cancel") || "Cancel"}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.formsModalSelectBtn,
+                  { opacity: selectedFormIdInModal ? 1 : 0.45 },
+                ]}
+                onPress={selectedFormIdInModal ? connectGoogleForm : undefined}
+                disabled={!selectedFormIdInModal}
+              >
+                <Text style={styles.formsModalSelectText}>
+                  {t("google_forms_select") || "Select"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Scanner modal ── */}
       <Modal visible={scanVisible} transparent animationType="slide" onRequestClose={closeScanner}>
         <View style={styles.scanOverlay}>
           <View style={[styles.scanCard, { backgroundColor: isDark ? "#10131a" : "#fff" }]}>
             <View style={styles.scanHeader}>
-              <Text style={[styles.scanTitle, { color: isDark ? "#fff" : "#111" }]}>{t("event_scan_title") || "Scan ticket"}</Text>
+              <Text style={[styles.scanTitle, { color: isDark ? "#fff" : "#111" }]}>
+                {t("event_scan_title") || "Scan ticket"}
+              </Text>
               <TouchableOpacity onPress={closeScanner} hitSlop={10}>
                 <Feather name="x" size={22} color={isDark ? "#fff" : "#111"} />
               </TouchableOpacity>
             </View>
-
             <View style={styles.cameraWrap}>
               <CameraView
                 style={StyleSheet.absoluteFill}
@@ -1572,19 +2065,18 @@ export default function EventSettingsScreen() {
                 barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
               />
               <View style={styles.scanFrame} />
-
               {scanBusy && (
                 <View style={styles.scanBusy}>
                   <ActivityIndicator color="#fff" />
-                  <Text style={styles.scanBusyText}>{t("event_scan_validating") || "Validating…"}</Text>
+                  <Text style={styles.scanBusyText}>
+                    {t("event_scan_validating") || "Validating…"}
+                  </Text>
                 </View>
               )}
             </View>
-
             <Text style={[styles.scanHint, { color: isDark ? "#cfd6e6" : "#4a5568" }]}>
               {t("event_scan_hint") || "Point the camera at the QR code."}
             </Text>
-
             {!!lastScanValue && (
               <Text style={[styles.scanSmall, { color: isDark ? "#9aa7c0" : "#718096" }]} numberOfLines={1}>
                 {lastScanValue}
@@ -1594,23 +2086,20 @@ export default function EventSettingsScreen() {
         </View>
       </Modal>
 
-      {/* Delete confirm modal (Alba aesthetics) */}
+      {/* ── Delete confirm ── */}
       <Modal visible={deleteVisible} transparent animationType="fade" onRequestClose={() => setDeleteVisible(false)}>
         <Pressable style={styles.menuBackdrop} onPress={() => setDeleteVisible(false)} />
         <View style={[styles.deleteCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.deleteTitle, { color: theme.text }]}>
             {t("delete_event_confirm") || "Are you sure you want to delete this event?"}
           </Text>
-
           <View style={styles.deleteRow}>
-            <TouchableOpacity style={[styles.deleteChoice, { backgroundColor: "#ff4d4f" }]} onPress={deleteEvent} activeOpacity={0.9}>
+            <TouchableOpacity style={[styles.deleteChoice, { backgroundColor: "#ff4d4f" }]} onPress={deleteEvent}>
               <Text style={styles.deleteChoiceText}>Yes</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.deleteChoice, { backgroundColor: "#D9EEFF" }]}
               onPress={() => setDeleteVisible(false)}
-              activeOpacity={0.9}
             >
               <Text style={[styles.deleteChoiceText, { color: "#2F6CA8" }]}>No</Text>
             </TouchableOpacity>
@@ -1618,14 +2107,13 @@ export default function EventSettingsScreen() {
         </View>
       </Modal>
 
-      {/* 3-dot menu */}
+      {/* ── 3-dot menu ── */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)} />
         <View style={[styles.menuCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.menuTitle, { color: theme.text }]} numberOfLines={1}>
             {menuCtx?.user?.name || ""}
           </Text>
-
           {!!menuCtx?.user?.username && (
             <TouchableOpacity
               style={styles.menuItem}
@@ -1638,7 +2126,6 @@ export default function EventSettingsScreen() {
               <Text style={[styles.menuText, { color: theme.text }]}>DM user</Text>
             </TouchableOpacity>
           )}
-
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => {
@@ -1649,21 +2136,19 @@ export default function EventSettingsScreen() {
           >
             <Text style={[styles.menuText, { color: "#ff4d4f", fontFamily: "PoppinsBold" }]}>Remove</Text>
           </TouchableOpacity>
-
           <TouchableOpacity style={[styles.menuItem, { marginTop: 6 }]} onPress={() => setMenuVisible(false)}>
             <Text style={[styles.menuText, { color: theme.subtleText || theme.text }]}>Cancel</Text>
           </TouchableOpacity>
         </View>
       </Modal>
 
-      {/* Remove confirm */}
+      {/* ── Remove confirm ── */}
       <Modal visible={removeVisible} transparent animationType="fade" onRequestClose={() => setRemoveVisible(false)}>
         <Pressable style={styles.menuBackdrop} onPress={() => setRemoveVisible(false)} />
         <View style={[styles.deleteCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
           <Text style={[styles.deleteTitle, { color: theme.text }]}>
             {t("remove_user_confirm") || "Are you sure you want to remove this user?"}
           </Text>
-
           <View style={styles.deleteRow}>
             <TouchableOpacity
               style={[styles.deleteChoice, { backgroundColor: "#ff4d4f" }]}
@@ -1673,12 +2158,13 @@ export default function EventSettingsScreen() {
                 setRemoveCtx(null);
                 await removeUsers(users);
               }}
-              activeOpacity={0.9}
             >
               <Text style={styles.deleteChoiceText}>Yes</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={[styles.deleteChoice, { backgroundColor: "#D9EEFF" }]} onPress={() => setRemoveVisible(false)} activeOpacity={0.9}>
+            <TouchableOpacity
+              style={[styles.deleteChoice, { backgroundColor: "#D9EEFF" }]}
+              onPress={() => setRemoveVisible(false)}
+            >
               <Text style={[styles.deleteChoiceText, { color: "#2F6CA8" }]}>No</Text>
             </TouchableOpacity>
           </View>
@@ -1690,6 +2176,9 @@ export default function EventSettingsScreen() {
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   STYLES
+══════════════════════════════════════════════════════════════════════════ */
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safeArea: { flex: 1, paddingHorizontal: 16 },
@@ -1720,48 +2209,26 @@ const styles = StyleSheet.create({
   },
   toggleLabel: { fontFamily: "PoppinsBold", fontSize: 14 },
   toggleSub: { fontFamily: "Poppins", fontSize: 12, marginTop: 2 },
-  toggleTrack: {
-    width: 40,
-    height: 22,
-    borderRadius: 11,
-    padding: 2,
-    justifyContent: "center",
-  },
-  toggleThumb: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: "#fff",
-  },
+  toggleTrack: { width: 40, height: 22, borderRadius: 11, padding: 2, justifyContent: "center" },
+  toggleThumb: { width: 18, height: 18, borderRadius: 9, backgroundColor: "#fff" },
 
   mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
   mediaThumbnailWrap: { width: 80, height: 80, borderRadius: 10, overflow: "hidden" },
   mediaThumbnail: { width: 80, height: 80 },
   videoOverlay: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.3)",
   },
   mediaRemoveBtn: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    position: "absolute", top: 4, right: 4,
+    width: 22, height: 22, borderRadius: 11,
     backgroundColor: "rgba(0,0,0,0.55)",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
   mediaAddBtn: {
-    width: 80,
-    height: 80,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderStyle: "dashed",
-    alignItems: "center",
-    justifyContent: "center",
+    width: 80, height: 80, borderRadius: 10, borderWidth: 1,
+    borderStyle: "dashed", alignItems: "center", justifyContent: "center",
   },
 
   saveRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginTop: 12 },
@@ -1770,38 +2237,39 @@ const styles = StyleSheet.create({
   cancelEditsBtn: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10, borderWidth: 1 },
   cancelEditsText: { fontFamily: "PoppinsBold", fontSize: 14 },
 
-  // ✅ scan button
-  scanBtn: {
+  /* Google Forms button */
+  googleFormsBtn: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 12,
+    borderWidth: 1,
     paddingVertical: 12,
-    paddingHorizontal: 12,
-    gap: 10,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  googleFormsBtnText: { fontFamily: "PoppinsBold", fontSize: 14, flex: 1 },
+  googleFormsDisconnect: { alignSelf: "flex-start", marginTop: 4, marginLeft: 2, paddingVertical: 2 },
+  googleFormsDisconnectText: { fontFamily: "Poppins", fontSize: 12, color: "#ff4d4f" },
+
+  /* Scanner */
+  scanBtn: {
+    flexDirection: "row", alignItems: "center",
+    borderRadius: 12, paddingVertical: 12, paddingHorizontal: 12, gap: 10,
   },
   scanBtnText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#fff" },
   scanMetaText: { fontFamily: "Poppins", fontSize: 12, color: "#efeefe" },
 
   listHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 14,
-    marginBottom: 6,
-    paddingHorizontal: 2,
-    alignItems: "center",
+    flexDirection: "row", justifyContent: "space-between",
+    marginTop: 14, marginBottom: 6, paddingHorizontal: 2, alignItems: "center",
   },
   listTitle: { fontFamily: "PoppinsBold", fontSize: 14 },
   listCount: { fontFamily: "Poppins", fontSize: 14 },
 
   selectionBar: {
-    backgroundColor: "#D9EEFF",
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    marginBottom: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    backgroundColor: "#D9EEFF", borderRadius: 10,
+    paddingVertical: 8, paddingHorizontal: 10, marginBottom: 8,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
   selectionText: { fontFamily: "PoppinsBold", fontSize: 13, color: "#2F6CA8" },
   selectionBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#fff" },
@@ -1812,10 +2280,8 @@ const styles = StyleSheet.create({
   membersList: { borderWidth: 1, borderRadius: 14, maxHeight: 190, overflow: "hidden" },
 
   memberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 8,
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 10, paddingHorizontal: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   memberAvatar: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
@@ -1823,46 +2289,39 @@ const styles = StyleSheet.create({
   memberName: { fontFamily: "Poppins", fontSize: 15 },
   memberUsername: { fontFamily: "Poppins", fontSize: 13, marginTop: 2 },
 
+  /* Info expand toggle row (username line + chevron) */
+  infoToggleRow: { flexDirection: "row", alignItems: "center" },
+
+  /* Info expand panel */
+  infoPanel: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: 0,
+  },
+  infoPanelLine: { fontFamily: "Poppins", fontSize: 13, lineHeight: 20 },
+  infoPanelKey: { fontFamily: "PoppinsBold" },
+
   checkboxBtn: { paddingHorizontal: 6, paddingVertical: 6 },
   checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "#C9D4E2",
-    alignItems: "center",
-    justifyContent: "center",
+    width: 20, height: 20, borderRadius: 6, borderWidth: 1, borderColor: "#C9D4E2",
+    alignItems: "center", justifyContent: "center",
   },
   memberMenuButton: { paddingHorizontal: 4, paddingVertical: 4 },
 
-  pendingIconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  pendingIconBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  pendingPhoto: { width: "100%", height: 200, borderRadius: 10 },
 
   dmWholeBtn: {
-    alignSelf: "center",
-    flexDirection: "row",
-    gap: 8,
-    backgroundColor: "#59A7FF",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    marginTop: 10,
+    alignSelf: "center", flexDirection: "row", gap: 8,
+    backgroundColor: "#59A7FF", paddingVertical: 8, paddingHorizontal: 14,
+    borderRadius: 10, marginTop: 10,
   },
   dmWholeText: { fontFamily: "PoppinsBold", fontSize: 13, color: "#fff" },
 
   outlineButton: {
-    borderWidth: 1,
-    borderColor: "#59A7FF",
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: "center",
-    backgroundColor: "#fff",
-    marginTop: 6,
+    borderWidth: 1, borderColor: "#59A7FF", borderRadius: 10,
+    paddingVertical: 10, alignItems: "center", backgroundColor: "#fff", marginTop: 6,
   },
   outlineButtonText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#59A7FF" },
 
@@ -1879,52 +2338,60 @@ const styles = StyleSheet.create({
   menuText: { fontFamily: "Poppins", fontSize: 15 },
 
   deleteCard: {
-    position: "absolute",
-    left: 24,
-    right: 24,
-    top: "50%",
-    transform: [{ translateY: -90 }],
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 16,
+    position: "absolute", left: 24, right: 24, top: "50%",
+    transform: [{ translateY: -90 }], borderWidth: 1, borderRadius: 16, padding: 16,
   },
   deleteTitle: { fontFamily: "PoppinsBold", fontSize: 14, textAlign: "center" },
   deleteRow: { flexDirection: "row", gap: 12, marginTop: 14, justifyContent: "center" },
   deleteChoice: { minWidth: 110, paddingVertical: 10, paddingHorizontal: 18, borderRadius: 12, alignItems: "center" },
   deleteChoiceText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#fff" },
 
-  // ✅ scanner modal styles
-  scanOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
-  scanCard: {
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    padding: 14,
-    paddingBottom: 18,
+  /* Google Forms modal */
+  formsModalOverlay: {
+    flex: 1, backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
   },
+  formsModalCard: {
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    borderWidth: 1, padding: 18, paddingBottom: 28,
+  },
+  formsModalTitle: { fontFamily: "PoppinsBold", fontSize: 16, marginBottom: 14 },
+  formsModalEmpty: { fontFamily: "Poppins", fontSize: 14, paddingVertical: 20, textAlign: "center" },
+  formRow: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  formCheckbox: {
+    width: 22, height: 22, borderRadius: 6, borderWidth: 1.5,
+    borderColor: "#C9D4E2", alignItems: "center", justifyContent: "center",
+  },
+  formName: { fontFamily: "Poppins", fontSize: 14, flex: 1 },
+  formsModalBtns: { flexDirection: "row", gap: 12, marginTop: 20, justifyContent: "flex-end" },
+  formsModalCancelBtn: {
+    paddingVertical: 10, paddingHorizontal: 20,
+    borderRadius: 10, borderWidth: 1,
+  },
+  formsModalCancelText: { fontFamily: "PoppinsBold", fontSize: 14 },
+  formsModalSelectBtn: {
+    paddingVertical: 10, paddingHorizontal: 24,
+    borderRadius: 10, backgroundColor: "#59A7FF",
+  },
+  formsModalSelectText: { fontFamily: "PoppinsBold", fontSize: 14, color: "#fff" },
+
+  /* Scanner modal */
+  scanOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  scanCard: { borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 14, paddingBottom: 18 },
   scanHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
   scanTitle: { fontFamily: "PoppinsBold", fontSize: 16 },
   cameraWrap: { height: 360, borderRadius: 16, overflow: "hidden", backgroundColor: "#000" },
   scanFrame: {
-    position: "absolute",
-    left: 34,
-    right: 34,
-    top: 60,
-    bottom: 60,
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.75)",
-    borderRadius: 14,
+    position: "absolute", left: 34, right: 34, top: 60, bottom: 60,
+    borderWidth: 2, borderColor: "rgba(255,255,255,0.75)", borderRadius: 14,
   },
   scanBusy: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingVertical: 10,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
+    position: "absolute", left: 0, right: 0, bottom: 0, paddingVertical: 10,
+    backgroundColor: "rgba(0,0,0,0.55)", flexDirection: "row",
+    alignItems: "center", justifyContent: "center", gap: 10,
   },
   scanBusyText: { color: "#fff", fontFamily: "PoppinsBold" },
   scanHint: { marginTop: 10, fontFamily: "Poppins", fontSize: 13, textAlign: "center" },

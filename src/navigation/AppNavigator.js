@@ -29,6 +29,7 @@ import SingleChatScreen from "../screens/SingleChatScreen";
 import CommunitySettingsScreen from "../screens/CommunitySettingsScreen";
 import FeedSettingsScreen from "../screens/FeedSettingsScreen";
 import SavedPostsScreen from "../screens/SavedPostsScreen";
+import HiddenPostsScreen from "../screens/HiddenPostsScreen";
 import UseTimeScreen from "../screens/UseTimeScreen";
 import PreFaceRecognitionScreen from "../screens/PreFaceRecognitionScreen";
 import FaceRecognitionScreen from "../screens/FaceRecognitionScreen";
@@ -61,6 +62,7 @@ function MainNavigator() {
         component={CommunitySettingsScreen}
       />
       <Stack.Screen name="SavedPosts" component={SavedPostsScreen} />
+      <Stack.Screen name="HiddenPosts" component={HiddenPostsScreen} />
       <Stack.Screen name="FeedSettings" component={FeedSettingsScreen} />
       <Stack.Screen
         name="UseTime"
@@ -287,7 +289,6 @@ export default function AppNavigator() {
         $set_once: { first_login: today },
       });
     } catch (e) {
-      console.warn("[AppNav] trackLoginStreak error:", e?.message);
     }
   };
 
@@ -321,8 +322,6 @@ export default function AppNavigator() {
 
     (async () => {
       const { data, error } = await supabase.auth.getSession();
-      if (error) console.warn("getSession error", error);
-      console.log('[AppNav] cold-start getSession — hasSession:', !!data?.session);
 
       setSignedIn(!!data?.session);
       signedInRef.current = !!data?.session;
@@ -335,20 +334,17 @@ export default function AppNavigator() {
 
       const { data: listener } = supabase.auth.onAuthStateChange(
         async (event, session) => {
-          console.log('[AppNav] onAuthStateChange event:', event, 'userId:', session?.user?.id ?? null);
 
           // TOKEN_REFRESHED / USER_UPDATED don't change sign-in state and must
           // not re-trigger the Google profile-setup check (would race with
           // child screens that are already mounted and fetching data).
           if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
-            console.log('[AppNav] filtered out event:', event);
             return;
           }
 
           // Navigate immediately — don't block on the async profile check below.
           // ProfileSetupModal is rendered above the nav tree so it can appear
           // after navigation has already occurred.
-          console.log('[AppNav] setSignedIn →', !!session);
           setSignedIn(!!session);
           signedInRef.current = !!session;
 
@@ -365,7 +361,6 @@ export default function AppNavigator() {
               session.user.app_metadata?.provider === "google" ||
               (session.user.app_metadata?.providers ?? []).includes("google");
 
-            console.log('[AppNav] SIGNED_IN — isGoogleUser:', isGoogleUser, 'provider:', session.user.app_metadata?.provider, 'providers:', session.user.app_metadata?.providers);
 
             if (isGoogleUser) {
               // Defer the DB call out of the onAuthStateChange callback.
@@ -383,7 +378,6 @@ export default function AppNavigator() {
                     .eq("id", capturedUser.id)
                     .maybeSingle();
 
-                  console.log('[AppNav] Google profile check — hasProfile:', !!profile);
 
                   if (!profile) {
                     setPendingGoogleUser({
@@ -395,15 +389,12 @@ export default function AppNavigator() {
                       email: capturedUser.email || "",
                     });
                     setNeedsProfileSetup(true);
-                    console.log('[AppNav] needsProfileSetup → true (new Google user)');
                   } else {
                     setNeedsProfileSetup(false);
                     setPendingGoogleUser(null);
-                    console.log('[AppNav] needsProfileSetup → false (existing Google user)');
                   }
                 } catch (e) {
                   // On error, let user in without profile setup
-                  console.warn('[AppNav] Google profile check error:', e?.message);
                   setNeedsProfileSetup(false);
                 }
               }, 500);
@@ -546,7 +537,6 @@ export default function AppNavigator() {
           setJoinPendingModal(true);
         }
       } catch (e) {
-        console.warn("[DeepLink] join group error:", e?.message);
       }
     }
     // /post/ and /video/ are handled by React Navigation's linking config — no manual navigate needed
@@ -571,7 +561,6 @@ export default function AppNavigator() {
     // Handle notification taps — navigate to relevant screen
     const unsub = addNotificationTapListener((response) => {
       const data = response.notification.request.content.data;
-      console.log("[Push] notification tapped:", data);
       const nav = navRef.current;
       if (!nav?.isReady()) return;
       if (data?.type === "dm" && data.sender_username) {

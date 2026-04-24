@@ -63,7 +63,6 @@ export default function CommunityEventSettings() {
                 .eq("id", userId);
               setPayoutStatus("not_started");
             } catch (e) {
-              console.warn("Stripe disconnect error:", e);
             }
           },
         },
@@ -84,7 +83,6 @@ export default function CommunityEventSettings() {
       // Re-check status after returning from browser
       setTimeout(() => fetchPayoutStatus(userId), 3000);
     } catch (e) {
-      console.warn("Payout onboarding error:", e.message);
     } finally {
       setPayoutLoading(false);
     }
@@ -96,7 +94,6 @@ export default function CommunityEventSettings() {
       try {
         const { data: auth } = await supabase.auth.getUser();
         const u = auth?.user;
-        console.log("[EventSettings] auth user:", u?.id);
         if (!u) return;
         if (!mounted) return;
         setUserId(u.id);
@@ -127,7 +124,6 @@ export default function CommunityEventSettings() {
 
         if (mounted) await fetchPayoutStatus(u.id);
       } catch (e) {
-        console.warn("EventSettings load error", e);
       }
     })();
     return () => {
@@ -142,7 +138,6 @@ export default function CommunityEventSettings() {
       .update(patch)
       .eq("id", userId)
       .then(({ error }) => {
-        if (error) console.warn("EventSettings save error", error);
       });
   };
 

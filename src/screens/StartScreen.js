@@ -227,13 +227,10 @@ export default function StartScreen({ navigation }) {
     const finish = async (url) => {
       if (settled) return;
       settled = true;
-      console.log('[Google] finish() called, url:', url?.substring(0, 80));
       try {
         const codeMatch = url?.match(/[?&]code=([^&#]+)/);
         if (codeMatch?.[1]) {
-          console.log('[Google] branch: exchangeCodeForSession');
           const { error } = await supabase.auth.exchangeCodeForSession(codeMatch[1]);
-          console.log('[Google] exchangeCodeForSession result — error:', error?.message ?? null);
           if (error) throw error;
           posthog.capture('user_logged_in', { method: 'google' });
           return;
@@ -243,15 +240,12 @@ export default function StartScreen({ navigation }) {
           const params = new URLSearchParams(fragMatch[1]);
           const access_token = params.get('access_token');
           const refresh_token = params.get('refresh_token');
-          console.log('[Google] branch: setSession, has access_token:', !!access_token, 'has refresh_token:', !!refresh_token);
           if (access_token) {
             const { error } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
-            console.log('[Google] setSession result — error:', error?.message ?? null);
             if (error) throw error;
             return;
           }
         }
-        console.warn('[Google] finish(): no code or token found in URL');
         throw new Error('Authentication failed. Please try again.');
       } catch (e) {
         showAlert('Google sign in failed', userErrorMessage(e, 'Please try again.'));
@@ -274,13 +268,11 @@ export default function StartScreen({ navigation }) {
       });
 
       const result = await WebBrowser.openAuthSessionAsync(data.url, 'alba://');
-      console.log('[Google] WebBrowser result type:', result.type, 'settled:', settled);
 
       if (!settled && result.type === 'success' && result.url && result.url.length > 'alba://'.length) {
         subscription.remove();
         finish(result.url);
       } else if (!settled && result.type !== 'success') {
-        console.log('[Google] auth cancelled or failed, result:', result.type);
         subscription.remove();
         settled = true;
         setGoogleLoading(false);

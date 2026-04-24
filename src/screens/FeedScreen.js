@@ -128,7 +128,6 @@ function FeedItem({
         player.pause();
       }
     } catch (e) {
-      console.warn("Video play/pause failed for", item.id, e);
     }
   }, [player, isScreenFocused, isActive, pausedByHold, item.id, item.videoUrl]);
 
@@ -204,9 +203,7 @@ function FeedItem({
         player={player}
         nativeControls={false}
         allowsPictureInPicture={false}
-        onError={(e) =>
-          console.log("VideoView onError for", item.id, e?.nativeEvent)
-        }
+        onError={(e) => {}}
       />
 
       {!overlayHiddenByHold && (
@@ -607,7 +604,6 @@ export default function FeedScreen() {
           } = await supabase.auth.getUser();
 
           if (userError) {
-            console.warn("Error getting auth user in FeedScreen:", userError);
           }
 
           if (!isActive) return;
@@ -649,7 +645,6 @@ export default function FeedScreen() {
                 setSavedIds(new Set(profile.saved_feed_videos.map(String)));
               }
             } else if (profileError) {
-              console.warn("Error loading profile in FeedScreen:", profileError);
             }
           }
 
@@ -724,7 +719,6 @@ export default function FeedScreen() {
           }
 
           if (error) {
-            console.error("Error loading feed videos:", error);
             return;
           }
 
@@ -923,7 +917,6 @@ export default function FeedScreen() {
           .eq("id", id);
 
         if (error) {
-          console.warn("Error deleting feed video:", error);
           showToast(t("feed_couldnt_delete"));
           return;
         }
@@ -944,13 +937,11 @@ export default function FeedScreen() {
           try {
             listRef.current.scrollToIndex({ index: nextIndex, animated: true });
           } catch (e) {
-            console.warn("scrollToIndex after delete failed", e);
           }
         }
 
         showToast(t("feed_deleted_toast"));
       } catch (e) {
-        console.warn("Unexpected error deleting feed video:", e);
         showToast(t("feed_couldnt_delete"));
       }
     },
@@ -1022,7 +1013,6 @@ export default function FeedScreen() {
         .eq("id", meId);
 
       if (error) {
-        console.warn("Failed to update blocked_users on profile:", error);
       }
     }
 
@@ -1040,7 +1030,6 @@ export default function FeedScreen() {
       try {
         listRef.current.scrollToIndex({ index: nextIndex, animated: true });
       } catch (e) {
-        console.warn("scrollToIndex failed", e);
       }
     }
   };

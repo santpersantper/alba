@@ -195,7 +195,6 @@ export default function MediaMessage({
       setConfirmVisible(false);
       onDeleted?.(id);
     } catch (e) {
-      console.warn("Media delete failed", e?.message || e);
       Alert.alert("Error", "Could not delete this message.");
     } finally {
       setDeleting(false);

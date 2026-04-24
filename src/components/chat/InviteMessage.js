@@ -150,7 +150,6 @@ export default function InviteMessage({
           memberLine: line,
         });
       } catch (e) {
-        console.warn("[InviteMessage] fetch error", e);
       }
     })();
 
@@ -220,12 +219,9 @@ export default function InviteMessage({
           p_username: myUsername,
         });
         if (pendingErr) {
-          console.warn("[InviteMessage] request_to_join_group error:", pendingErr.message, pendingErr.code);
         } else {
-          console.log("[InviteMessage] join request sent for:", myUsername, "→ group:", groupId);
         }
       } else {
-        console.log("[InviteMessage] already pending:", myUsername);
       }
       return { requiresApproval: true };
     }
@@ -266,7 +262,6 @@ export default function InviteMessage({
       }
     } catch (e) {
       // if schema doesn't have group_id or other issues, ignore (still joined group)
-      console.warn("[InviteMessage join] events.unconfirmed update skipped:", e?.message || e);
     }
   };
 
@@ -295,7 +290,6 @@ export default function InviteMessage({
         return;
       }
     } catch (e) {
-      console.warn("[InviteMessage] join error:", e);
       // don’t block navigation; still allow opening chat
     }
 

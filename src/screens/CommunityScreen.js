@@ -266,6 +266,14 @@ export default function CommunityScreen() {
     [uid]
   );
 
+  const handlePostDeleted = useCallback((id) => {
+    setPosts((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
+  const handlePostHidden = useCallback((id, newHidden) => {
+    if (newHidden) setPosts((prev) => prev.filter((x) => x.id !== id));
+  }, []);
+
   const fetchNearbyPosts = useCallback(async () => {
     try {
       setLoading(true);
@@ -353,7 +361,6 @@ export default function CommunityScreen() {
 
         // ── Check 1: Android mock location flag (device-level, most reliable) ──
         if (coords.mocked) {
-          console.warn("[Community] Mock location detected");
           setSpoofReason("mocked");
           setActivePostId(null);
           return;
@@ -372,7 +379,6 @@ export default function CommunityScreen() {
         .eq("id", userId);
 
       if (upErr) {
-        console.warn("[Community] location update error", upErr);
       }
 
       // ── Checks 2 & 3: impossible jump + IP vs GPS country (server-side, async) ──
@@ -381,7 +387,6 @@ export default function CommunityScreen() {
         body: { latitude, longitude },
       }).then(({ data }) => {
         if (data?.spoofed) {
-          console.warn("[Community] Server spoof check:", data.reason);
           setSpoofReason(data.reason);
         }
       }).catch(() => {}); // fail open — don't block on network error
@@ -399,7 +404,6 @@ export default function CommunityScreen() {
       _doneNearby();
 
       if (rpcErr) {
-        console.warn("[Community] nearby_posts error", rpcErr);
         Alert.alert("Could not load posts", "Check your connection and pull down to retry.");
       }
 
@@ -479,6 +483,9 @@ export default function CommunityScreen() {
         } catch {}
       }
 
+      // Filter out hidden posts
+      arr = arr.filter((p) => !p.hidden);
+
       setPosts(arr);
       setActivePostId(arr.length ? String(arr[0].id) : null);
 
@@ -488,7 +495,6 @@ export default function CommunityScreen() {
           .catch(() => {});
       }
     } catch (e) {
-      console.warn("fetchNearbyPosts error", e);
       setActivePostId(null);
       if (e?.message === "timeout") {
         Alert.alert("Taking too long", "The request timed out. Check your connection and pull down to retry.");
@@ -603,7 +609,6 @@ export default function CommunityScreen() {
           match_count: 60,
         });
         if (rpcError) {
-          console.warn("[Community] search_community_posts error:", rpcError);
           setSemanticResults(null);
           return;
         }
@@ -612,7 +617,6 @@ export default function CommunityScreen() {
         // chronological display so Community never goes blank on a label click.
         setSemanticResults(Array.isArray(results) && results.length > 0 ? results : null);
       } catch (e) {
-        console.warn("[Community] semantic search error", e);
         setSemanticResults(null);
       } finally {
         setSemanticLoading(false);
@@ -848,6 +852,48 @@ export default function CommunityScreen() {
     const first = viewableItems[0];
     if (first?.item?.id != null) setActivePostId(String(first.item.id));
   }).current;
+
+  const renderPost = useCallback(({ item, index }) => {
+    // Inline ad-interest prompt card — handled inline, no Post involved
+    if (item.type === "ad_prompt") return null; // kept in FlatList renderItem below
+    const isActive = String(item.id) === String(activePostId);
+    const matchLabel =
+      activeLabel && semanticResults !== null
+        ? semanticResults.some((r) => String(r.id) === String(item.id) && r.similarity >= 0.25)
+        : false;
+    const isFirst = index === 0;
+    const ovOk =
+      isFirst &&
+      firstPostOverride &&
+      String(firstPostOverride.postId) === String(item.id);
+    const effectiveAvatar = ovOk ? firstPostOverride.cachedAvatar || item.userpicuri : item.userpicuri;
+    const effectiveMedia  = ovOk ? firstPostOverride.cachedMedia  || item.postmediauri : item.postmediauri;
+    return (
+      <ThemedView variant="gray" style={styles.feedSection}>
+        <Post
+          {...item}
+          postId={item.id}
+          userPicUri={effectiveAvatar || "https://placehold.co/48x48"}
+          postMediaUri={effectiveMedia}
+          postMediaUriHint={item.postmediauri}
+          actions={item.actions || []}
+          authorId={item.author_id}
+          initialSaved={!!savedMeta[item.id]}
+          onToggleSave={toggleSave}
+          onDeleted={handlePostDeleted}
+          onToggleHidden={handlePostHidden}
+          labelTag={matchLabel ? activeLabel : null}
+          labelColor={
+            activeLabel
+              ? LABEL_COLORS[labels.indexOf(activeLabel)] || LABEL_COLORS[LABEL_COLORS.length - 1]
+              : null
+          }
+          isActive={isActive}
+          colors={["#56d1f0", "#00a4e6", "#60affe"]}
+        />
+      </ThemedView>
+    );
+  }, [activePostId, savedMeta, firstPostOverride, activeLabel, semanticResults, labels, toggleSave, handlePostDeleted, handlePostHidden]);
 
   return (
     <ThemedView
@@ -1136,9 +1182,9 @@ export default function CommunityScreen() {
         ListFooterComponent={<ThemedView variant="gray" style={{ height: 60 }} />}
         ListEmptyComponent={<ThemedView variant="gray" style={{ paddingVertical: 24 }} />}
         renderItem={({ item, index }) => {
+          if (item.type !== "ad_prompt") return renderPost({ item, index });
           // Inline ad-interest prompt card
-          if (item.type === "ad_prompt") {
-            return (
+          return (
               <View style={[styles.adPromptCard, { backgroundColor: isDark ? theme.gray : "#FFFFFF" }]}>
                 <Text style={[styles.adPromptTitle, { color: theme.text }]}>
                   Are you interested in seeing ads about{" "}
@@ -1199,55 +1245,6 @@ export default function CommunityScreen() {
                 </View>
               </View>
             );
-          }
-
-          const isActive = String(item.id) === String(activePostId);
-
-          const matchLabel =
-            activeLabel && semanticResults !== null
-              ? semanticResults.some((r) => String(r.id) === String(item.id) && r.similarity >= 0.25)
-              : false;
-
-          const isFirst = index === 0;
-          const ovOk =
-            isFirst &&
-            firstPostOverride &&
-            String(firstPostOverride.postId) === String(item.id);
-
-          const effectiveAvatar = ovOk
-            ? firstPostOverride.cachedAvatar || item.userpicuri
-            : item.userpicuri;
-          const effectiveMedia = ovOk
-            ? firstPostOverride.cachedMedia || item.postmediauri
-            : item.postmediauri;
-
-          return (
-            <ThemedView variant="gray" style={styles.feedSection}>
-              <Post
-                {...item}
-                postId={item.id}
-                userPicUri={effectiveAvatar || "https://placehold.co/48x48"}
-                postMediaUri={effectiveMedia}
-                postMediaUriHint={item.postmediauri}
-                actions={item.actions || []}
-                authorId={item.author_id}
-                initialSaved={!!savedMeta[item.id]}
-                onToggleSave={toggleSave}
-                onDeleted={(id) =>
-                  setPosts((prev) => prev.filter((x) => x.id !== id))
-                }
-                labelTag={matchLabel ? activeLabel : null}
-                labelColor={
-                  activeLabel
-                    ? LABEL_COLORS[labels.indexOf(activeLabel)] ||
-                      LABEL_COLORS[LABEL_COLORS.length - 1]
-                    : null
-                }
-                isActive={isActive}
-                colors={["#56d1f0", "#00a4e6", "#60affe"]}
-              />
-            </ThemedView>
-          );
         }}
       />
       )}

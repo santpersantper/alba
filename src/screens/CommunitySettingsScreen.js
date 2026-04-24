@@ -69,6 +69,10 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   const [allowTags, setAllowTags] = useState(true);
   const [allowsCollab, setAllowsCollab] = useState(true);
+  const [displayFullName, setDisplayFullName] = useState(false);
+  const [isOrganization, setIsOrganization] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [orgModalVisible, setOrgModalVisible] = useState(false);
 
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [blockedProfiles, setBlockedProfiles] = useState([]);
@@ -129,14 +133,14 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (!u) return;
 
       setUserId(u.id);
+      if (u.email) setUserEmail(u.email);
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, allows_collab, followed_users")
+        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, allows_collab, followed_users, display_full_name, is_organization")
         .eq("id", u.id)
         .maybeSingle();
 
-      if (error) { console.warn("[loadSettings] SELECT error:", JSON.stringify(error)); return; }
       if (!data) return;
 
       if (typeof data.show_local_news === "boolean") setShowNews(data.show_local_news);
@@ -145,6 +149,8 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (typeof data.show_followed_users_posts === "boolean") setShowFollowedPosts(data.show_followed_users_posts);
       if (typeof data.allow_tags === "boolean") setAllowTags(data.allow_tags);
       if (typeof data.allows_collab === "boolean") setAllowsCollab(data.allows_collab);
+      if (typeof data.display_full_name === "boolean") setDisplayFullName(data.display_full_name);
+      if (typeof data.is_organization === "boolean") setIsOrganization(data.is_organization);
       const fu = Array.isArray(data.followed_users) ? data.followed_users : [];
       setFollowedUserIds(fu);
       if (typeof data.name === "string") setEditName(data.name);
@@ -332,9 +338,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   };
 
   const updateProfile = (patch) => {
-    if (!userId) { console.warn("[updateProfile] no userId"); return Promise.resolve(); }
     return supabase.from("profiles").update(patch).eq("id", userId)
-      .then(({ error }) => { if (error) console.warn("[updateProfile] error:", JSON.stringify(error), "patch:", JSON.stringify(patch)); });
   };
 
   const updateBlockedUsers = (next) => {
@@ -1160,6 +1164,43 @@ export default function CommunitySettingsScreen({ navigation }) {
                 thumbColor="#fff"
               />
             </View>
+            <View style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("settings_display_full_name") || "Show full name on profile"}</Text>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>
+                  {t("settings_display_full_name_sub") || "Display your full name instead of just your first name in your profile header"}
+                </Text>
+              </View>
+              <Switch
+                value={displayFullName}
+                onValueChange={async (val) => {
+                  setDisplayFullName(val);
+                  await updateProfile({ display_full_name: val });
+                }}
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </View>
+            <TouchableOpacity
+              activeOpacity={isOrganization ? 1 : 0.7}
+              onPress={() => { if (!isOrganization) setOrgModalVisible(true); }}
+              style={[styles.rowBetween, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: borderColor }]}
+            >
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={[styles.rowTitle, { color: textColor }]}>{t("settings_is_organization") || "I'm running this account as an organization"}</Text>
+                <Text style={[styles.rowSub, { color: secondaryText }]}>
+                  {isOrganization
+                    ? (t("settings_is_organization_active") || "Your account is marked as an organization.")
+                    : (t("settings_is_organization_sub") || "Tap to learn how to get your account verified as an organization")}
+                </Text>
+              </View>
+              <Switch
+                value={isOrganization}
+                disabled
+                trackColor={{ false: borderColor, true: accent }}
+                thumbColor="#fff"
+              />
+            </TouchableOpacity>
           </View>
 
           {/* ── Followed users ── */}
@@ -1294,6 +1335,16 @@ export default function CommunitySettingsScreen({ navigation }) {
           </TouchableOpacity>
 
           <TouchableOpacity
+            onPress={() => navigation.navigate("HiddenPosts")}
+            style={[styles.savedPostsBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
+            activeOpacity={0.7}
+          >
+            <ThemedText style={[styles.savedPostsBtnText, { color: theme.text }]}>
+              {t("hidden_posts_button") || "See my hidden posts"}
+            </ThemedText>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             onPress={() => Linking.openURL("mailto:support@albaappofficial.com")}
             style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
             activeOpacity={0.7}
@@ -1419,6 +1470,37 @@ export default function CommunitySettingsScreen({ navigation }) {
                   : <ThemedText style={[styles.unblockBtnSmallText, { color: "#fff" }]}>{t("settings_delete_confirm")}</ThemedText>}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={orgModalVisible} transparent animationType="fade" onRequestClose={() => setOrgModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.unblockModalContent, { backgroundColor: isDark ? theme.gray : theme.background, padding: 20 }]}>
+            <Text style={[styles.unblockTitle, { color: theme.text, marginBottom: 10 }]}>
+              {t("org_modal_title") || "Organization account"}
+            </Text>
+            <Text style={[styles.rowSub, { color: isDark ? "#ccc" : "#555", lineHeight: 20, marginBottom: 6 }]}>
+              {t("org_modal_body1") || "Please contact"}
+            </Text>
+            <Text style={[styles.rowSub, { color: accent, fontFamily: "PoppinsBold", marginBottom: 6 }]}>
+              support@albaappofficial.com
+            </Text>
+            <Text style={[styles.rowSub, { color: isDark ? "#ccc" : "#555", lineHeight: 20, marginBottom: 6 }]}>
+              {t("org_modal_body2") || "with information that proves your link to the organization. It is enough to show that your email"}
+            </Text>
+            <Text style={[styles.rowSub, { color: textColor, fontFamily: "PoppinsBold", marginBottom: 6 }]}>
+              {userEmail}
+            </Text>
+            <Text style={[styles.rowSub, { color: isDark ? "#ccc" : "#555", lineHeight: 20, marginBottom: 16 }]}>
+              {t("org_modal_body3") || "is publicly associated with the organization you represent, on their website or other social media."}
+            </Text>
+            <TouchableOpacity
+              style={[styles.unblockBtnSmall, styles.unblockYesBtn, { alignSelf: "center", paddingHorizontal: 24 }]}
+              onPress={() => setOrgModalVisible(false)}
+            >
+              <Text style={[styles.unblockBtnSmallText, { color: "#fff" }]}>{t("ok_button") || "OK"}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

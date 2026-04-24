@@ -10,7 +10,7 @@
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --clean",
       "ios": {
-        "image": "macos-sonoma-14.6-xcode-16.1"
+        "image": "macos-sequoia-15.6-xcode-26.0"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
@@ -26,7 +26,7 @@
         "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a"
       },
       "ios": {
-        "image": "macos-sonoma-14.6-xcode-16.1"
+        "image": "macos-sequoia-15.6-xcode-26.0"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",
@@ -39,7 +39,7 @@
       "credentialsSource": "remote",
       "autoIncrement": true,
       "ios": {
-        "image": "macos-sonoma-14.6-xcode-16.1"
+        "image": "macos-sequoia-15.6-xcode-26.0"
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://phoepkacbrtolqmlwkvw.supabase.co",

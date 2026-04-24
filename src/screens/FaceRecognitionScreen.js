@@ -23,6 +23,7 @@ import { useAlbaLanguage } from "../theme/LanguageContext";
 
 // Minimum displacement (in pixels) the face centre must travel across the
 // rolling 2.5-second window before we consider the user "live".
+const log = () => {};
 const MOTION_THRESHOLD = 18;
 // How often we sample a frame for face detection (ms)
 const POLL_INTERVAL = 350;
@@ -75,12 +76,10 @@ export default function FaceRecognitionScreen() {
       try {
         result = await detectFacesAsync(snapshot.uri, { mode: 1 }); // 1 = fast
       } catch (e) {
-        console.log("[FaceDetect] detectFacesAsync error:", e?.message);
         return;
       }
 
       const faces = result?.faces ?? [];
-      console.log("[FaceDetect] faces found:", faces.length);
 
       if (!faces.length) {
         setFaceVisible(false);
@@ -111,10 +110,8 @@ export default function FaceRecognitionScreen() {
         }
       }
 
-      console.log("[FaceDetect] maxDist:", maxDist.toFixed(1), "threshold:", MOTION_THRESHOLD);
 
       if (maxDist >= MOTION_THRESHOLD) {
-        console.log("[FaceDetect] MOTION READY");
         motionReadyRef.current = true;
         setMotionReady(true);
         clearInterval(pollingRef.current);
@@ -127,7 +124,6 @@ export default function FaceRecognitionScreen() {
   // ── Verification flow ─────────────────────────────────────────────────────
   const handleVerify = async () => {
     const runId = `verify_${Date.now()}`;
-    const log = (...args) => console.log(`[FaceVerify:${runId}]`, ...args);
 
     if (!cameraRef.current) {
       showModal("Error", "Camera not ready yet.");
@@ -250,7 +246,6 @@ export default function FaceRecognitionScreen() {
       invalidateAuthCache();
       navigation.reset({ index: 0, routes: [{ name: "Community" }] });
     } catch (e) {
-      console.log("[FaceVerify] FULL ERROR:", e);
       if (e?.message === "PROFILE_NO_FACE") {
         showModal(
           "Profile photo issue",

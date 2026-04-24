@@ -37,7 +37,6 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
   };
 
   const submitReport = () => {
-    console.log("REPORT text message", { messageId: id, text, reason: reportText });
     setReportText("");
     setReportVisible(false);
     Alert.alert("", "Thanks for your report.");
@@ -55,14 +54,11 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
     }
     try {
       setDeleting(true);
-      console.log("[Delete] attempting delete, message id:", id);
       const { error } = await supabase.rpc("delete_chat_message", { p_message_id: id });
-      console.log("[Delete] rpc result — error:", error ? error.message : null);
       if (error) throw error;
       setConfirmVisible(false);
       onDeleted?.(id);
     } catch (e) {
-      console.warn("Text delete failed", e?.message || e);
       Alert.alert("Error", "Could not delete this message.");
     } finally {
       setDeleting(false);

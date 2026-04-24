@@ -216,7 +216,6 @@ export default function ShareMenu({
 
         if (alive) setMeUsername(prof?.username || null);
       } catch (e) {
-        console.warn("ShareMenu getUser error", e);
       }
     })();
     return () => {
@@ -251,9 +250,7 @@ export default function ShareMenu({
           ]);
 
         if (tErr) throw tErr;
-        if (gErr) console.warn("ShareMenu member groups error", gErr);
 
-        console.log("[ShareMenu] meUsername:", meUsername, "threads:", threads?.length, "memberGroups:", memberGroups?.length, memberGroups?.map(g => g.groupname));
 
         // IDs of groups already represented in threads
         const threadGroupIds = new Set(
@@ -325,7 +322,6 @@ export default function ShareMenu({
             ts: g.updated_at ? new Date(g.updated_at).getTime() : 0,
           }));
 
-        console.log("[ShareMenu] extraGroups (no-thread member groups):", extraGroups.length, extraGroups.map(e => e.item.handle));
 
         // Merge, sort descending by recency, take top 6
         const all = [...withTs, ...extraGroups].sort((a, b) => b.ts - a.ts).slice(0, 6);
@@ -336,7 +332,6 @@ export default function ShareMenu({
 
         if (alive) setAccounts(all.map(({ item }) => item));
       } catch (e) {
-        console.error("ShareMenu load recent chats error", e);
         if (alive) setAccounts([]);
       } finally {
         if (alive) setLoadingGrid(false);
@@ -511,7 +506,6 @@ export default function ShareMenu({
       onSent?.(rows);
       onClose?.();
     } catch (e) {
-      console.warn("ShareMenu send failed:", e?.message || e);
     }
   }, [
     defaultMessage,

@@ -132,7 +132,6 @@ export default function MyAds({ navigation }) {
 
         if (alive) setRows(mapped);
       } catch (e) {
-        console.warn("MyAds load error:", e);
         if (alive) setRows([]);
       } finally {
         if (alive) setLoading(false);

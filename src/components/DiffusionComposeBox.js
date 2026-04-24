@@ -238,7 +238,6 @@ export default function DiffusionComposeBox({
         () => loadReceipts(messageId)
       )
       .subscribe((status, err) => {
-        if (err) console.warn("[DiffusionComposeBox realtime] error:", err.message);
       });
   };
 
