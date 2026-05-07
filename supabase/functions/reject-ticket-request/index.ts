@@ -24,8 +24,8 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { post_id, username } = await req.json();
-    if (!post_id || !username) return json({ error: "post_id and username are required" }, 400);
+    const { post_id, request_id, username } = await req.json();
+    if (!post_id || (!request_id && !username)) return json({ error: "post_id and request_id are required" }, 400);
 
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
@@ -36,7 +36,8 @@ serve(async (req) => {
     // 1. Reject the request — removes from pending, returns payment_intent_id if any
     const { data: result, error: rpcError } = await supabaseAdmin.rpc("reject_ticket_request", {
       p_post_id: post_id,
-      p_username: username,
+      p_request_id: request_id ?? null,
+      p_username: username ?? null,
     });
     if (rpcError) throw rpcError;
 

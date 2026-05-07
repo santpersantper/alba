@@ -47,6 +47,9 @@ yarn-error.*
 
 credentials.json
 google-services.json
+*-service-account*.json
+*-284519312c1e*.json
+alba-prod-*.json
 .idea/
 .expo/
 *.ipa

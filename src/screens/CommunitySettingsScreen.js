@@ -17,8 +17,13 @@ import {
   Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { Image } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
+import * as ImageManipulator from "expo-image-manipulator";
 import { useFocusEffect } from "@react-navigation/native";
 import { posthog } from "../lib/analytics";
+import { useGuest } from "../theme/GuestContext";
 import MyEvents from "../components/community-settings/MyEvents";
 import MyAds from "../components/community-settings/MyAds";
 import CommunityEventSettings from "../components/community-settings/CommunityEventSettings";
@@ -39,6 +44,26 @@ import OnboardingOverlay from "../components/OnboardingOverlay";
 
 const TABS_KEYS = ["general", "events", "ads", "privacy"];
 
+function base64ToArrayBuffer(base64) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let bufferLength = base64.length * 0.75;
+  if (base64[base64.length - 1] === "=") { bufferLength--; }
+  if (base64[base64.length - 2] === "=") { bufferLength--; }
+  const buffer = new ArrayBuffer(bufferLength);
+  const bytes = new Uint8Array(buffer);
+  let p = 0;
+  for (let i = 0; i < base64.length; i += 4) {
+    const e1 = chars.indexOf(base64[i]);
+    const e2 = chars.indexOf(base64[i + 1]);
+    const e3 = chars.indexOf(base64[i + 2]);
+    const e4 = chars.indexOf(base64[i + 3]);
+    bytes[p++] = (e1 << 2) | (e2 >> 4);
+    if (base64[i + 2] !== "=") bytes[p++] = ((e2 & 15) << 4) | (e3 >> 2);
+    if (base64[i + 3] !== "=") bytes[p++] = ((e3 & 3) << 6) | e4;
+  }
+  return buffer;
+}
+
 export default function CommunitySettingsScreen({ navigation }) {
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -46,6 +71,7 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   const { theme, mode, setMode, isDark } = useAlbaTheme();
   const { language, setLanguage, t } = useAlbaLanguage();
+  const { setIsGuest } = useGuest();
 
   const TABS = [
     t("settings_tab_general") || "General",
@@ -87,13 +113,25 @@ export default function CommunitySettingsScreen({ navigation }) {
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Guest account state
+  const [isGuestAccount, setIsGuestAccount] = useState(false);
+  const [guestAvatarUri, setGuestAvatarUri] = useState(null);
+  const [guestAvatarUploading, setGuestAvatarUploading] = useState(false);
+  const [guestUpgradeVisible, setGuestUpgradeVisible] = useState(false);
+  const [guestSaving, setGuestSaving] = useState(false);
+  const [guestSaveError, setGuestSaveError] = useState(null);
+  const [guestSaveSuccess, setGuestSaveSuccess] = useState(false);
+
   // Profile editing
   const [editName, setEditName] = useState("");
+  const [originalName, setOriginalName] = useState("");
   const [editUsername, setEditUsername] = useState("");
   const [originalUsername, setOriginalUsername] = useState("");
   const [usernameStatus, setUsernameStatus] = useState(null); // null | 'checking' | 'available' | 'taken' | 'invalid'
   const [editPassword, setEditPassword] = useState("");
   const [editPasswordConfirm, setEditPasswordConfirm] = useState("");
+  const [editAge, setEditAge] = useState("");
+  const [originalAge, setOriginalAge] = useState("");
   const [isVerified, setIsVerified] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -128,20 +166,23 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   const loadSettings = useCallback(async () => {
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const u = auth?.user;
-      if (!u) return;
+      console.log("[CSS] loadSettings start");
+      const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
+      console.log("[CSS] session uid:", sessionData?.session?.user?.id, "sessErr:", sessErr?.message);
+      const u = sessionData?.session?.user;
+      if (!u) { console.log("[CSS] no user, returning"); return; }
 
       setUserId(u.id);
       if (u.email) setUserEmail(u.email);
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, allows_collab, followed_users, display_full_name, is_organization")
+        .select("show_local_news, visible_to_all, allow_dms, blocked_users, name, username, is_verified, show_followed_users_posts, allow_tags, allows_collab, followed_users, display_full_name, is_organization, is_guest, avatar_url, age")
         .eq("id", u.id)
         .maybeSingle();
+      console.log("[CSS] profiles query data:", data?.username, "error:", error?.message);
 
-      if (!data) return;
+      if (!data) { console.log("[CSS] no profile data"); return; }
 
       if (typeof data.show_local_news === "boolean") setShowNews(data.show_local_news);
       if (typeof data.visible_to_all === "boolean") setVisibleToAll(data.visible_to_all);
@@ -153,16 +194,23 @@ export default function CommunitySettingsScreen({ navigation }) {
       if (typeof data.is_organization === "boolean") setIsOrganization(data.is_organization);
       const fu = Array.isArray(data.followed_users) ? data.followed_users : [];
       setFollowedUserIds(fu);
-      if (typeof data.name === "string") setEditName(data.name);
+      if (typeof data.name === "string") { setEditName(data.name); setOriginalName(data.name); }
       if (typeof data.username === "string") {
         setEditUsername(data.username);
         setOriginalUsername(data.username);
       }
       if (typeof data.is_verified === "boolean") setIsVerified(data.is_verified);
+      if (typeof data.is_guest === "boolean") setIsGuestAccount(data.is_guest);
+      if (data.avatar_url && !guestAvatarUri) setGuestAvatarUri(data.avatar_url);
+      const ageVal = data.age != null ? String(data.age) : "";
+      setEditAge(ageVal);
+      setOriginalAge(ageVal);
 
       const bu = Array.isArray(data.blocked_users) ? data.blocked_users : [];
       setBlockedUsers(bu);
-    } catch {}
+    } catch (e) {
+      console.warn("loadSettings error:", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -277,6 +325,124 @@ export default function CommunitySettingsScreen({ navigation }) {
 
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? "#222" : "#fff" }} />;
 
+  const pickGuestAvatar = async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return;
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.85,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      setGuestAvatarUri(res.assets[0].uri);
+    } catch {}
+  };
+
+  const saveGuestProfile = async () => {
+    if (guestSaving) return;
+    setGuestSaveError(null);
+    setGuestSaveSuccess(false);
+
+    const trimmedUsername = editUsername.trim();
+    const trimmedName = editName.trim();
+    if (!trimmedUsername) { setGuestSaveError("Username cannot be empty."); return; }
+    if (usernameStatus === "checking") { setGuestSaveError("Please wait for username check."); return; }
+    if (usernameStatus === "taken") { setGuestSaveError("That username is already taken."); return; }
+    if (usernameStatus === "invalid") { setGuestSaveError("Username must be at least 3 characters."); return; }
+    if (editPassword) {
+      if (!pwChecks.length || !pwChecks.letter || !pwChecks.number || !pwChecks.special) {
+        setGuestSaveError("Password doesn't meet all requirements."); return;
+      }
+      if (editPassword !== editPasswordConfirm) { setGuestSaveError("Passwords don't match."); return; }
+    }
+
+    setGuestSaving(true);
+    try {
+      let avatarUrl = null;
+      // Upload avatar if a local URI was selected (not a remote URL already)
+      if (guestAvatarUri && !guestAvatarUri.startsWith("http")) {
+        setGuestAvatarUploading(true);
+        let uri = guestAvatarUri;
+        let ext = (uri.split(".").pop() || "jpg").toLowerCase();
+        let mime = ext === "png" ? "image/png" : "image/jpeg";
+        if (ext === "heic" || ext === "heif") {
+          const m = await ImageManipulator.manipulateAsync(uri, [], { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG });
+          uri = m.uri; ext = "jpg"; mime = "image/jpeg";
+        }
+        const b64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
+        const filePath = `avatars/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const { data: upData, error: upErr } = await supabase.storage.from("alba-media").upload(filePath, base64ToArrayBuffer(b64), { contentType: mime, upsert: true });
+        if (upErr) throw upErr;
+        const { data: urlData } = supabase.storage.from("alba-media").getPublicUrl(filePath);
+        avatarUrl = urlData?.publicUrl;
+        setGuestAvatarUploading(false);
+      }
+
+      const { error: unErr } = await supabase.rpc("change_username", {
+        p_new_username: trimmedUsername,
+        p_new_name: trimmedName,
+      });
+      if (unErr) throw unErr;
+
+      const profilePatch = { is_guest: false };
+      if (avatarUrl) profilePatch.avatar_url = avatarUrl;
+      if (editAge !== originalAge) {
+        const ageNum = editAge ? parseInt(editAge, 10) : null;
+        profilePatch.age = ageNum && !isNaN(ageNum) ? ageNum : null;
+      }
+      await supabase.from("profiles").update(profilePatch).eq("id", userId);
+
+      if (editPassword) {
+        const { error: passErr } = await supabase.auth.updateUser({ password: editPassword });
+        if (passErr) throw passErr;
+        setEditPassword("");
+        setEditPasswordConfirm("");
+      }
+      if (editAge !== originalAge) setOriginalAge(editAge);
+
+      // Update tickets + ticket_holders in events with new username
+      const oldUsername = originalUsername;
+      supabase.from("tickets").select("id, event_id, created_at")
+        .eq("owner_id", userId)
+        .order("created_at", { ascending: true })
+        .then(async ({ data: tks }) => {
+          if (!tks?.length) return;
+          const firstPerEvent = {};
+          tks.forEach((tk) => { if (!firstPerEvent[tk.event_id]) firstPerEvent[tk.event_id] = tk.id; });
+          const ids = Object.values(firstPerEvent);
+          if (ids.length) {
+            supabase.from("tickets").update({ holder_display: trimmedUsername }).in("id", ids).catch(() => {});
+          }
+          // Replace old guest username with new username in each event's ticket_holders
+          if (oldUsername && oldUsername !== trimmedUsername) {
+            const eventIds = Object.keys(firstPerEvent).filter(Boolean);
+            for (const evId of eventIds) {
+              const { data: ev } = await supabase.from("events").select("id, ticket_holders").eq("id", evId).maybeSingle();
+              if (!ev) continue;
+              const holders = Array.isArray(ev.ticket_holders) ? ev.ticket_holders : [];
+              const updated = holders.map(h =>
+                String(h).toLowerCase() === String(oldUsername).toLowerCase() ? trimmedUsername : h
+              );
+              supabase.from("events").update({ ticket_holders: updated }).eq("id", evId).catch(() => {});
+            }
+          }
+        });
+
+      setIsGuestAccount(false);
+      setIsGuest(false);
+      setOriginalUsername(trimmedUsername);
+      setGuestSaveSuccess(true);
+      setTimeout(() => setGuestSaveSuccess(false), 3000);
+    } catch (e) {
+      setGuestSaveError(e?.message || "Could not save changes.");
+    } finally {
+      setGuestSaving(false);
+      setGuestAvatarUploading(false);
+    }
+  };
+
   const saveProfile = async () => {
     if (saving) return;
     setSaveError(null);
@@ -328,6 +494,16 @@ export default function CommunitySettingsScreen({ navigation }) {
         setEditPasswordConfirm("");
       }
 
+      if (editAge !== originalAge) {
+        const ageNum = editAge ? parseInt(editAge, 10) : null;
+        await updateProfile({ age: ageNum && !isNaN(ageNum) ? ageNum : null });
+        setOriginalAge(editAge);
+      }
+
+      setOriginalName(trimmedName);
+      setOriginalUsername(trimmedUsername);
+      setEditPassword("");
+      setEditPasswordConfirm("");
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (e) {
@@ -542,11 +718,17 @@ export default function CommunitySettingsScreen({ navigation }) {
   }, [cityQuery, prefs.premiumTravelerMode]);
 
   const bg = isDark ? "#1a1a1a" : "#fff";
-  const cardBg = isDark ? "#2b2b2b" : "#f6f8fb";
+  const cardBg = "transparent";
   const textColor = theme.text;
   const secondaryText = isDark ? "#aaa" : "#6F7D95";
   const borderColor = isDark ? "#444" : "#d9e4f3";
   const accent = "#00A9FF";
+
+  const hasProfileChanges =
+    editName.trim() !== originalName.trim() ||
+    editUsername.trim().toLowerCase() !== originalUsername.trim().toLowerCase() ||
+    !!editPassword ||
+    editAge !== originalAge;
 
   // Which segment is active for the theme selector
   const themeSegment = nightAuto ? "auto" : nightOn ? "dark" : "light";
@@ -555,12 +737,12 @@ export default function CommunitySettingsScreen({ navigation }) {
     <TouchableOpacity
       onPress={() => toggleSection(key)}
       style={[
-        { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16 },
+        { flexDirection: "row", alignItems: "center", marginTop: 16, marginBottom: 8 },
         extraStyle,
       ]}
       activeOpacity={0.7}
     >
-      <Text style={[styles.sectionLabel, { color: secondaryText, marginTop: 0 }]}>{label}</Text>
+      <Text style={[styles.sectionLabel, { color: secondaryText, marginTop: 0, marginBottom: 0, marginRight: 6 }]}>{label}</Text>
       <Feather
         name={sectionsOpen[key] ? "chevron-up" : "chevron-down"}
         size={16}
@@ -569,13 +751,134 @@ export default function CommunitySettingsScreen({ navigation }) {
     </TouchableOpacity>
   );
 
+  const renderGuestProfileSection = () => {
+    const initials = editName?.trim()?.[0]?.toUpperCase() || "G";
+    return (
+      <View style={[styles.card, { backgroundColor: cardBg, borderColor, marginTop: 16 }]}>
+        <View style={{ padding: 14 }}>
+          <Text style={[styles.sectionLabel, { color: secondaryText, marginTop: 0, marginBottom: 12 }]}>
+            {t("guest_profile_section_title") || "Set up your profile"}
+          </Text>
+          <Text style={[styles.rowSub, { color: secondaryText, marginBottom: 14 }]}>
+            {t("guest_profile_section_sub") || "Create your own profile and become a full member of Alba."}
+          </Text>
+
+          {/* Avatar */}
+          <TouchableOpacity onPress={pickGuestAvatar} style={{ alignSelf: "center", marginBottom: 16 }}>
+            {guestAvatarUri ? (
+              <Image source={{ uri: guestAvatarUri }} style={{ width: 72, height: 72, borderRadius: 36 }} />
+            ) : (
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: isDark ? "#444" : "#d9e4f3", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ color: secondaryText, fontFamily: "PoppinsBold", fontSize: 24 }}>{initials}</Text>
+              </View>
+            )}
+            <View style={{ position: "absolute", bottom: 0, right: 0, backgroundColor: accent, borderRadius: 10, padding: 4 }}>
+              <Feather name="camera" size={12} color="#fff" />
+            </View>
+          </TouchableOpacity>
+
+          <TextInput
+            style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+            placeholder={t("settings_name_placeholder")}
+            placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+            value={editName}
+            onChangeText={setEditName}
+          />
+          <TextInput
+            style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+            placeholder={t("settings_username_placeholder")}
+            placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={editUsername}
+            onChangeText={(v) => {
+              let cleaned = v.replace(/[^a-zA-Z0-9._]/g, "").slice(0, 25);
+              cleaned = cleaned.replace(/\.{2,}/g, ".");
+              setEditUsername(cleaned);
+            }}
+          />
+          {usernameStatus === "checking" && (
+            <View style={styles.usernameStatusRow}><ActivityIndicator size="small" color={accent} style={{ marginRight: 5 }} /><Text style={[styles.usernameStatusText, { color: secondaryText }]}>{t("settings_checking_username")}</Text></View>
+          )}
+          {usernameStatus === "available" && (
+            <View style={styles.usernameStatusRow}><Feather name="check-circle" size={13} color="#4CAF50" style={{ marginRight: 5 }} /><Text style={[styles.usernameStatusText, { color: "#4CAF50" }]}>{t("settings_username_available")}</Text></View>
+          )}
+          {usernameStatus === "taken" && (
+            <View style={styles.usernameStatusRow}><Feather name="x-circle" size={13} color="#E55353" style={{ marginRight: 5 }} /><Text style={[styles.usernameStatusText, { color: "#E55353" }]}>{t("settings_username_taken")}</Text></View>
+          )}
+          {usernameStatus === "invalid" && (
+            <View style={styles.usernameStatusRow}><Text style={[styles.usernameStatusText, { color: "#F59E0B" }]}>{t("settings_username_invalid")}</Text></View>
+          )}
+
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TextInput
+              style={[styles.profileInput, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+              placeholder={t("settings_password_placeholder")}
+              placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+              secureTextEntry
+              value={editPassword}
+              onChangeText={setEditPassword}
+            />
+            <TextInput
+              style={[styles.profileInput, { width: 68, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent", textAlign: "center" }]}
+              placeholder="Age"
+              placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+              keyboardType="numeric"
+              maxLength={3}
+              value={editAge}
+              onChangeText={(v) => setEditAge(v.replace(/[^0-9]/g, ""))}
+            />
+          </View>
+          {!!editPassword && (
+            <>
+              {[
+                { key: "length",  label: "At least 8 characters" },
+                { key: "letter",  label: "Contains a letter" },
+                { key: "number",  label: "Contains a number" },
+                { key: "special", label: "Contains a special character (!@#…)" },
+              ].map(({ key, label }) => (
+                <View key={key} style={styles.pwCheckRow}>
+                  <Feather name={pwChecks[key] ? "check" : "x"} size={12} color={pwChecks[key] ? "#4CAF50" : "#E55353"} style={{ marginRight: 6 }} />
+                  <Text style={[styles.pwCheckText, { color: pwChecks[key] ? "#4CAF50" : "#E55353" }]}>{label}</Text>
+                </View>
+              ))}
+              <TextInput
+                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent", marginTop: 8 }]}
+                placeholder={t("settings_confirm_password")}
+                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                secureTextEntry
+                value={editPasswordConfirm}
+                onChangeText={setEditPasswordConfirm}
+              />
+            </>
+          )}
+
+          {!!guestSaveError && <Text style={styles.saveErrorText}>{guestSaveError}</Text>}
+          {guestSaveSuccess && <Text style={styles.saveSuccessText}>{t("guest_conversion_success") || "Profile saved!"}</Text>}
+          <TouchableOpacity
+            style={[styles.saveBtn, { marginTop: 10, opacity: (guestSaving || guestAvatarUploading) ? 0.6 : 1 }]}
+            onPress={saveGuestProfile}
+            disabled={guestSaving || guestAvatarUploading}
+          >
+            {(guestSaving || guestAvatarUploading)
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.saveBtnText}>{t("guest_save_changes_button") || "Save changes"}</Text>}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   const renderTabContent = () => {
     if (activeTab === "general") {
       return (
         <>
+          {/* ── Guest profile conversion section (shown instead of regular profile for guests) ── */}
+          {isGuestAccount && renderGuestProfileSection()}
+
           {/* ── Profile ── */}
-          {renderSectionHeader("profile", t("settings_profile_section"))}
-          {sectionsOpen.profile && (
+          {!isGuestAccount && renderSectionHeader("profile", t("settings_profile_section"))}
+          {!isGuestAccount && sectionsOpen.profile && (
           <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
             <View style={{ padding: 14 }}>
               {/* Verification badge */}
@@ -595,26 +898,28 @@ export default function CommunitySettingsScreen({ navigation }) {
                 </Text>
               </TouchableOpacity>
 
-              <TextInput
-                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-                placeholder={t("settings_name_placeholder")}
-                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-                value={editName}
-                onChangeText={setEditName}
-              />
-              <TextInput
-                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-                placeholder={t("settings_username_placeholder")}
-                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={editUsername}
-                onChangeText={(v) => {
-                  let cleaned = v.replace(/[^a-zA-Z0-9._]/g, "").slice(0, 25);
-                  cleaned = cleaned.replace(/\.{2,}/g, ".");
-                  setEditUsername(cleaned);
-                }}
-              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <TextInput
+                  style={[styles.profileInput, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+                  placeholder={t("settings_name_placeholder")}
+                  placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                  value={editName}
+                  onChangeText={setEditName}
+                />
+                <TextInput
+                  style={[styles.profileInput, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+                  placeholder={t("settings_username_placeholder")}
+                  placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  value={editUsername}
+                  onChangeText={(v) => {
+                    let cleaned = v.replace(/[^a-zA-Z0-9._]/g, "").slice(0, 25);
+                    cleaned = cleaned.replace(/\.{2,}/g, ".");
+                    setEditUsername(cleaned);
+                  }}
+                />
+              </View>
               {usernameStatus === "checking" && (
                 <View style={styles.usernameStatusRow}>
                   <ActivityIndicator size="small" color={accent} style={{ marginRight: 5 }} />
@@ -638,14 +943,25 @@ export default function CommunitySettingsScreen({ navigation }) {
                   <Text style={[styles.usernameStatusText, { color: "#F59E0B" }]}>{t("settings_username_invalid")}</Text>
                 </View>
               )}
-              <TextInput
-                style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa" }]}
-                placeholder={t("settings_password_placeholder")}
-                placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
-                secureTextEntry
-                value={editPassword}
-                onChangeText={setEditPassword}
-              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <TextInput
+                  style={[styles.profileInput, { flex: 1, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent" }]}
+                  placeholder={t("settings_password_placeholder")}
+                  placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                  secureTextEntry
+                  value={editPassword}
+                  onChangeText={setEditPassword}
+                />
+                <TextInput
+                  style={[styles.profileInput, { width: 68, borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent", textAlign: "center" }]}
+                  placeholder="Age"
+                  placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
+                  keyboardType="numeric"
+                  maxLength={3}
+                  value={editAge}
+                  onChangeText={(v) => setEditAge(v.replace(/[^0-9]/g, ""))}
+                />
+              </View>
               {!!editPassword && (
                 <>
                   {[
@@ -667,7 +983,7 @@ export default function CommunitySettingsScreen({ navigation }) {
                     </View>
                   ))}
                   <TextInput
-                    style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: isDark ? "#1a1a1a" : "#f5f6fa", marginTop: 8 }]}
+                    style={[styles.profileInput, { borderColor: isDark ? "#444" : "#d0d7e2", color: textColor, backgroundColor: "transparent", marginTop: 8 }]}
                     placeholder={t("settings_confirm_password")}
                     placeholderTextColor={isDark ? "#666" : "#9fa5b3"}
                     secureTextEntry
@@ -684,68 +1000,72 @@ export default function CommunitySettingsScreen({ navigation }) {
                 <Text style={styles.saveSuccessText}>{t("settings_saved")}</Text>
               )}
 
-              <TouchableOpacity
-                style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
-                onPress={saveProfile}
-                disabled={saving}
-              >
-                {saving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.saveBtnText}>{t("settings_save_changes")}</Text>}
-              </TouchableOpacity>
+              {hasProfileChanges && (
+                <TouchableOpacity
+                  style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
+                  onPress={saveProfile}
+                  disabled={saving}
+                >
+                  {saving
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Text style={styles.saveBtnText}>{t("settings_save_changes")}</Text>}
+                </TouchableOpacity>
+              )}
             </View>
           </View>)}
 
           {/* ── Appearance ── */}
-          {renderSectionHeader("appearance", t("appearance_section_title"))}
+          {renderSectionHeader("appearance", t("night_mode_title") || "Night mode")}
           {sectionsOpen.appearance && (
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
-            {[
-              { key: "auto",  label: t("night_auto")  || "Auto"  },
-              { key: "light", label: t("night_off")   || "Light" },
-              { key: "dark",  label: t("night_on")    || "Dark"  },
-            ].map(({ key, label }, idx) => (
-              <TouchableOpacity
-                key={key}
-                style={[
-                  styles.listOptionRow,
-                  { borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth, borderTopColor: borderColor },
-                ]}
-                onPress={() => handleSetMode(key)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
-                {themeSegment === key && <Feather name="check" size={16} color={accent} />}
-              </TouchableOpacity>
-            ))}
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor, paddingHorizontal: 16, paddingVertical: 14 }]}>
+            <View style={{ flexDirection: "row", gap: 24 }}>
+              {[
+                { key: "dark",  label: t("night_on_label")   || "On"        },
+                { key: "light", label: t("night_off_label")  || "Off"       },
+                { key: "auto",  label: t("night_auto_label") || "Automatic" },
+              ].map(({ key, label }) => (
+                <TouchableOpacity
+                  key={key}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 7 }}
+                  onPress={() => handleSetMode(key)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.radioOuter, { borderColor: accent }]}>
+                    {themeSegment === key && <View style={[styles.radioInner, { backgroundColor: accent }]} />}
+                  </View>
+                  <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>)}
 
           {/* ── Language ── */}
           {renderSectionHeader("language", t("language_section_title"))}
           {sectionsOpen.language && (
-          <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
-            {[
-              { key: "en", label: t("language_en") || "English"  },
-              { key: "it", label: t("language_it") || "Italiano" },
-            ].map(({ key, label }, idx) => (
-              <TouchableOpacity
-                key={key}
-                style={[
-                  styles.listOptionRow,
-                  { borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth, borderTopColor: borderColor },
-                ]}
-                onPress={() => setLanguage(key)}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
-                {language === key && <Feather name="check" size={16} color={accent} />}
-              </TouchableOpacity>
-            ))}
+          <View style={[styles.card, { backgroundColor: cardBg, borderColor, paddingHorizontal: 16, paddingVertical: 14 }]}>
+            <View style={{ flexDirection: "row", gap: 24 }}>
+              {[
+                { key: "en", label: t("language_en") || "English" },
+                { key: "it", label: t("language_it") || "Italian" },
+              ].map(({ key, label }) => (
+                <TouchableOpacity
+                  key={key}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 7 }}
+                  onPress={() => setLanguage(key)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.radioOuter, { borderColor: accent }]}>
+                    {language === key && <View style={[styles.radioInner, { backgroundColor: accent }]} />}
+                  </View>
+                  <Text style={[styles.rowTitle, { color: textColor, fontWeight: "400" }]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>)}
 
           {/* ── Feed preferences ── */}
-          {renderSectionHeader("feed", "Feed")}
-          {sectionsOpen.feed && (
+          {!isGuestAccount && renderSectionHeader("feed", "Feed")}
+          {!isGuestAccount && sectionsOpen.feed && (
           <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
             <View style={styles.rowBetween}>
               <View style={{ flex: 1, marginRight: 12 }}>
@@ -778,8 +1098,8 @@ export default function CommunitySettingsScreen({ navigation }) {
           </View>)}
 
           {/* ── Alba Premium ── */}
-          {renderSectionHeader("premium", t("premium_section_title"))}
-          {sectionsOpen.premium && (
+          {!isGuestAccount && renderSectionHeader("premium", t("premium_section_title"))}
+          {!isGuestAccount && sectionsOpen.premium && (
           <View style={styles.premiumSection}>
             {/* Ad-Free checkbox */}
             <TouchableOpacity style={styles.checkboxRow} onPress={handleAdFreePress} activeOpacity={0.7}>
@@ -917,8 +1237,8 @@ export default function CommunitySettingsScreen({ navigation }) {
           </View>)}
 
           {/* ── Notifications ── */}
-          {renderSectionHeader("notifications", t("notif_section_title"))}
-          {sectionsOpen.notifications && (
+          {!isGuestAccount && renderSectionHeader("notifications", t("notif_section_title"))}
+          {!isGuestAccount && sectionsOpen.notifications && (
           <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
             {[
               { key: "notifChatMessages",  label: t("notif_direct_messages"),   sub: t("notif_direct_messages_sub") },
@@ -1284,7 +1604,7 @@ export default function CommunitySettingsScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: isDark ? theme.gray : theme.background }]}>
+    <SafeAreaView edges={["top", "left", "right"]} style={[styles.safe, { backgroundColor: isDark ? theme.gray : theme.background }]}>
       <ThemedView variant="gray" style={styles.header}>
         <TouchableOpacity onPress={() => navigation?.goBack?.()} style={styles.backBtn} hitSlop={8}>
           <Feather name="chevron-left" size={24} color={theme.text} />
@@ -1300,11 +1620,15 @@ export default function CommunitySettingsScreen({ navigation }) {
         {TABS.map((tab, idx) => {
           const tabKey = TABS_KEYS[idx];
           const isActive = activeTab === tabKey;
+          const guestLocked = isGuestAccount && tabKey !== "general";
           return (
             <TouchableOpacity
               key={tabKey}
               style={[styles.tabItem, isActive && styles.tabItemActive]}
-              onPress={() => setActiveTab(tabKey)}
+              onPress={() => {
+                if (guestLocked) { setGuestUpgradeVisible(true); return; }
+                setActiveTab(tabKey);
+              }}
               activeOpacity={0.7}
             >
               <ThemedText style={[styles.tabLabel, { color: isActive ? "#00A9FF" : (isDark ? "#aaa" : "#6F7D95") }]}>
@@ -1349,7 +1673,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
             activeOpacity={0.7}
           >
-            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>Contact Support</ThemedText>
+            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>{t("settings_contact_support") || "Contact Support"}</ThemedText>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1357,7 +1681,7 @@ export default function CommunitySettingsScreen({ navigation }) {
             style={[styles.logoutBtn, { backgroundColor: isDark ? theme.gray : theme.background }]}
             activeOpacity={0.7}
           >
-            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>Send Feedback</ThemedText>
+            <ThemedText style={[styles.logoutBtnText, { color: theme.text }]}>{t("settings_send_feedback") || "Send Feedback"}</ThemedText>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -1529,6 +1853,23 @@ export default function CommunitySettingsScreen({ navigation }) {
       )}
 
       <OnboardingOverlay screenKey="settings" />
+
+      {/* Guest upgrade modal — shown when guest taps locked tabs */}
+      <Modal visible={guestUpgradeVisible} transparent animationType="fade" onRequestClose={() => setGuestUpgradeVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.unblockModalContent, { backgroundColor: isDark ? theme.gray : theme.background, padding: 24, alignItems: "center" }]}>
+            <Text style={[styles.unblockTitle, { color: theme.text, textAlign: "center" }]}>
+              {t("guest_upgrade_title") || "Create your own profile and become part of Alba!"}
+            </Text>
+            <TouchableOpacity
+              style={[styles.unblockBtnSmall, styles.unblockYesBtn, { alignSelf: "center", paddingHorizontal: 28, marginTop: 4 }]}
+              onPress={() => setGuestUpgradeVisible(false)}
+            >
+              <Text style={[styles.unblockBtnSmallText, { color: "#fff" }]}>{t("guest_upgrade_ok") || "OK"}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1606,6 +1947,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 14,
     paddingVertical: 14,
+  },
+  radioOuter: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radioInner: {
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
   },
 
   // Legacy checkbox (kept for renderCheckbox still used in Premium section indirectly)

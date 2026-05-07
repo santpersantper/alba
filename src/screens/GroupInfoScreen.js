@@ -646,7 +646,8 @@ export default function GroupInfoScreen() {
       if (error) {
         Alert.alert("Error", "Could not remove member.");
         return;
-      }
+      }
+
 
       setMembersUsernames(nextMembers);
       setGroupAdmins(nextAdmins);
@@ -1415,7 +1416,7 @@ export default function GroupInfoScreen() {
                               })}
                             >
                               <Text style={{ color: "#3D8BFF", fontSize: 12, fontFamily: "Poppins", marginTop: 2 }}>
-                                {isExpanded ? (t("group_read_less") || "Read less") : (t("group_read_more") || "Read more")}
+                                {isExpanded ? (t("group_read_less") || "Read less") : (t("group_read_more") || "more")}
                               </Text>
                             </TouchableOpacity>
                           )}

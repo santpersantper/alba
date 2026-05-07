@@ -132,6 +132,7 @@ export default function SavedPostsScreen({ navigation }) {
 
   return (
     <SafeAreaView
+      edges={["top", "left", "right"]}
       style={[styles.safe, { backgroundColor: theme.gray }]}
     >
       {/* Header */}

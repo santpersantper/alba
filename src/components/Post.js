@@ -8,7 +8,7 @@
 // - date/time can be in props or basePost: `date`, `time`
 // - location can be in props or basePost: `location`
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -120,6 +120,14 @@ const isHeic = (u = "") => /\.heic$/i.test(stripQuery(u));
 const isVideoUrl = (u = "") => /\.(mp4|mov|m4v|webm)$/i.test(stripQuery(u));
 const isHttp = (s) => typeof s === "string" && /^https?:\/\//i.test(s);
 const stripAt = (h = "") => String(h).replace(/^@+/, "");
+
+const shortenAddress = (addr) => {
+  if (!addr) return addr;
+  const parts = addr.split(",");
+  if (parts.length <= 1) return addr;
+  if (/^\s*\d{4,6}\b/.test(parts[1])) return parts[0].trim();
+  return addr;
+};
 
 
 // ✅ parse possible json-string arrays
@@ -263,7 +271,7 @@ function ImageSlide({ uri, width, height, index }) {
   );
 }
 
-function VideoSlide({ uri, width, height, index, autoPlay }) {
+function VideoSlide({ uri, width, height, index, autoPlay, onSizeKnown }) {
   const [muted, setMuted] = useState(true);
 
   const player = useVideoPlayer(uri, (p) => {
@@ -278,6 +286,13 @@ function VideoSlide({ uri, width, height, index, autoPlay }) {
 
   const { status } = useEvent(player, "statusChange", { status: player.status });
   const loaded = status === "readyToPlay";
+
+  const { videoSize } = useEvent(player, "videoSizeChange", { videoSize: player.videoSize });
+
+  useEffect(() => {
+    if (!videoSize?.width || !videoSize?.height) return;
+    onSizeKnown?.(index, videoSize.width, videoSize.height);
+  }, [videoSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!loaded) return;
@@ -504,6 +519,16 @@ function Post(props) {
     });
   }, []); // once
 
+  const onVideoSizeKnown = useCallback((idx, w, h) => {
+    setMediaDims((prev) => {
+      if (prev[idx]?.width && prev[idx]?.height) return prev;
+      const next = [...prev];
+      _dimCache[media[idx]] = { width: w, height: h };
+      next[idx] = { width: w, height: h };
+      return next;
+    });
+  }, [media]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onLayoutContainer = (e) => {
     const w = e.nativeEvent.layout.width;
     if (w && w !== containerW) setContainerW(w);
@@ -527,6 +552,11 @@ function Post(props) {
       if (h > MAX_MEDIA_HEIGHT) h = MAX_MEDIA_HEIGHT;
       return h;
     }
+    const hint = mediaHint[idx] || media[idx] || "";
+    if (isVideoUrl(hint) || isVideoUrl(media[idx] || "")) {
+      // Use portrait (9:16) height for videos so vertical clips display fully
+      return Math.min(Math.round(baseW * 16 / 9), MAX_MEDIA_HEIGHT);
+    }
     return DEFAULT_MEDIA_HEIGHT;
   };
 
@@ -534,7 +564,6 @@ function Post(props) {
   const currentHeight = computeHeightForIndex(currentIndex);
 
   /* ---------- menus / modals, auth, etc. ---------- */
-  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -858,27 +887,27 @@ function Post(props) {
     );
   } else if (showFullCaption) {
     captionContent = (
-      <>
-        <ThemedText style={styles.description}>{parsedCaption}</ThemedText>
+      <ThemedText style={styles.description}>
+        {parsedCaption}
         {isLongCaption && (
-          <ThemedText style={styles.readMoreText} onPress={() => setShowFullCaption(false)}>
-            {t("caption_read_less") || "Read less"}
-          </ThemedText>
+          <Text onPress={() => setShowFullCaption(false)} style={{ fontSize: 14, fontFamily: "PoppinsBold" }}>
+            {" "}{t("caption_read_less") || "Read less"}
+          </Text>
         )}
-      </>
+      </ThemedText>
     );
   } else {
     captionContent = (
-      <>
-        <ThemedText style={styles.description} numberOfLines={1} ellipsizeMode="tail">
+      <View style={{ flexDirection: "row", alignItems: "center", paddingLeft: 10, paddingRight: 10, marginBottom: 4 }}>
+        <ThemedText style={[styles.description, { flexShrink: 1, paddingLeft: 0, paddingRight: 0, marginBottom: 0 }]} numberOfLines={1} ellipsizeMode="tail">
           {parsedCaption}
         </ThemedText>
         {isLongCaption && (
-          <ThemedText style={styles.readMoreText} onPress={() => setShowFullCaption(true)}>
+          <Text style={{ fontSize: 14, fontFamily: "PoppinsBold", color: isDark ? "#fff" : "#111" }} onPress={() => setShowFullCaption(true)}>
             {t("caption_read_more")}
-          </ThemedText>
+          </Text>
         )}
-      </>
+      </View>
     );
   }
 
@@ -988,6 +1017,22 @@ function Post(props) {
       return { key: key || `custom-${i}`, text: displayText, icon, featherIcon, bg, onPress, disabled: soldOut };
     });
 
+  const handleEdit = async () => {
+    const { data } = await supabase.from("posts").select("*").eq("id", effectivePostId).single();
+    if (!data) return;
+    navigation.navigate("CreatePost", { editPost: data });
+  };
+
+  const [isHidden, setIsHidden] = useState(!!(isOnHiddenList || basePost.hidden || props.hidden));
+  const [showOwnerMenu, setShowOwnerMenu] = useState(false);
+
+  const handleHide = async () => {
+    const nextHidden = !isHidden;
+    setIsHidden(nextHidden);
+    await supabase.from("posts").update({ hidden: nextHidden }).eq("id", effectivePostId);
+    onToggleHidden?.(effectivePostId, nextHidden);
+  };
+
   const runDelete = async () => {
     if (!effectivePostId) {
       setConfirmOpen(false);
@@ -1018,6 +1063,7 @@ function Post(props) {
   const rawLocation = props.location || basePost.location;
   const rawEndDate = props.end_date || basePost.end_date;
   const rawEndTime = props.end_time || basePost.end_time;
+  const rawRepeatDays = props.repeat_days || basePost.repeat_days;
 
   const prettyTime = rawTime ? normalizeTime(rawTime) : null;
   const prettyEndTime = rawEndTime ? normalizeTime(rawEndTime) : null;
@@ -1046,8 +1092,18 @@ function Post(props) {
 
   const isOnlinePost = !!(props.online ?? basePost.online);
 
+  // "Every Mon, Fri" label — replaces the date when repeat_days is set
+  const DAY_KEY_MAP = {
+    Mon: "day_mon", Tue: "day_tue", Wed: "day_wed", Thu: "day_thu",
+    Fri: "day_fri", Sat: "day_sat", Sun: "day_sun",
+  };
+  const repeatDaysArr = Array.isArray(rawRepeatDays) ? rawRepeatDays : [];
+  const repeatDaysLabel = repeatDaysArr.length > 0
+    ? `${t("repeat_days_prefix") || "Every"} ${repeatDaysArr.map((d) => t(DAY_KEY_MAP[d]) || d).join(", ")}`
+    : null;
+
   const subtitle = isEventPost
-    ? [prettyDateRange, timeRange, isOnlinePost ? null : rawLocation].filter(Boolean).join(", ")
+    ? [repeatDaysLabel || prettyDateRange, timeRange, isOnlinePost ? null : rawLocation].filter(Boolean).join(", ")
     : [rawLocation].filter(Boolean).join(", ");
 
   // ── shared post rendering ──────────────────────────────────────────────────
@@ -1096,7 +1152,7 @@ function Post(props) {
   // ── localized label ─────────────────────────────────────────────────────────
   const postType = props.type || basePost.type || "";
   const localizedLabel = labelTag
-    ? (getLocalizedTypeLabel(postType, t) || labelTag)
+    ? (getLocalizedTypeLabel(labelTag, t) || labelTag)
     : null;
 
   return (
@@ -1122,14 +1178,14 @@ function Post(props) {
             const rawCollabs = props.collaborators ?? basePost.collaborators;
             const collabs = Array.isArray(rawCollabs) ? rawCollabs.filter(Boolean) : [];
             return (
-              <>
+              <View style={{ position: "relative" }}>
                 <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center" }}>
                   <TouchableOpacity onPress={openProfile} activeOpacity={0.7}>
                     <ThemedText style={styles.handleLine}>@{resolvedUsername || displayUser}</ThemedText>
                   </TouchableOpacity>
                   {collabs.length === 1 && (
                     <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
-                      {" "}and{" "}
+                      {" "}{t("collab_and") || "and"}{" "}
                       <ThemedText
                         style={[styles.handleLine]}
                         onPress={() => navigation.navigate("Profile", { username: collabs[0] })}
@@ -1140,7 +1196,7 @@ function Post(props) {
                   )}
                   {collabs.length > 1 && (
                     <ThemedText style={[styles.handleLine, { fontFamily: "Poppins" }]}>
-                      {" "}and{" "}
+                      {" "}{t("collab_and") || "and"}{" "}
                       <ThemedText
                         style={[styles.handleLine, { color: isDark ? "#59A7FF" : "#1a6fd4" }]}
                         onPress={() => setCollabModalOpen((v) => !v)}
@@ -1151,7 +1207,7 @@ function Post(props) {
                   )}
                 </View>
                 {collabModalOpen && collabs.length > 1 && (
-                  <ThemedView style={[styles.collabDropdown, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+                  <ThemedView style={[styles.collabDropdown, { position: "absolute", top: 26, left: 0, backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
                     {collabs.map((u) => (
                       <TouchableOpacity
                         key={u}
@@ -1164,69 +1220,33 @@ function Post(props) {
                     ))}
                   </ThemedView>
                 )}
-              </>
+              </View>
             );
           })()}
           {(isEventPost ? (prettyDateRange || timeRange || rawLocation || isOnlinePost) : rawLocation) && (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" }}>
-              {isEventPost && (prettyDateRange || timeRange) && (
-                <ThemedText style={styles.subtitle}>
-                  {[prettyDateRange, timeRange].filter(Boolean).join(", ")}{(rawLocation || isOnlinePost) ? ",\u00A0" : ""}
-                </ThemedText>
-              )}
-              {isEventPost && isOnlinePost ? (
-                <ThemedText style={styles.subtitle}>{t("event_online") || "Online"}</ThemedText>
-              ) : (!!rawLocation && (
-                <TouchableOpacity
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    const q = encodeURIComponent(rawLocation);
-                    const url = Platform.OS === "ios" ? `maps://0,0?q=${q}` : `geo:0,0?q=${q}`;
-                    Linking.openURL(url).catch(() =>
-                      Linking.openURL(`https://maps.google.com/?q=${q}`)
-                    );
-                  }}
-                >
-                  <ThemedText style={[styles.subtitle, { color: isDark ? "#AAAAAA" : "#0D2B6B" }]}>{rawLocation}</ThemedText>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <ThemedText style={styles.subtitle} numberOfLines={1} ellipsizeMode="tail">
+              {isEventPost && [prettyDateRange, timeRange].filter(Boolean).join(", ")}
+              {isEventPost && (prettyDateRange || timeRange) && (rawLocation || isOnlinePost) ? ", " : ""}
+              {isEventPost && isOnlinePost
+                ? (t("event_online") || "Online")
+                : rawLocation
+                ? <Text
+                    onPress={() => {
+                      const q = encodeURIComponent(rawLocation);
+                      const url = Platform.OS === "ios" ? `maps://0,0?q=${q}` : `geo:0,0?q=${q}`;
+                      Linking.openURL(url).catch(() => Linking.openURL(`https://maps.google.com/?q=${q}`));
+                    }}
+                    style={{ color: isDark ? "#AAAAAA" : "#0D2B6B" }}
+                  >
+                    {shortenAddress(rawLocation)}
+                  </Text>
+                : null}
+            </ThemedText>
           )}
         </View>
 
-        {/* Translate icon */}
-        {!!(description || basePost.description) && (
-          <TouchableOpacity
-            style={[styles.kebabBtn, { marginRight: 4 }]}
-            onPress={handleTranslate}
-            hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-            disabled={translating}
-          >
-            {translating
-              ? <ActivityIndicator size="small" color="#59A7FF" />
-              : <MaterialCommunityIcons name="translate" size={18} color={translated ? "#59A7FF" : (isDark ? "#FFFFFF" : "#111111")} />
-            }
-          </TouchableOpacity>
-        )}
-
-        <TouchableOpacity
-          style={styles.kebabBtn}
-          onPress={() => setMenuOpen((v) => !v)}
-          hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
-        >
-          <Feather
-            name="more-vertical"
-            size={20}
-            color={isDark ? "#FFFFFF" : "#111111"}
-          />
-        </TouchableOpacity>
       </View>
 
-      {!!(title || basePost.title) && (
-        <ThemedText style={styles.title}>
-          {parseMentionText(title || basePost.title, isDark, (uname) => navigation.navigate("Profile", { username: uname }))}
-        </ThemedText>
-      )}
       {captionContent}
 
       {media.length > 0 && (
@@ -1255,6 +1275,7 @@ function Post(props) {
                   height={currentHeight}
                   index={i}
                   autoPlay={isActive && i === currentIndex}
+                  onSizeKnown={onVideoSizeKnown}
                 />
               ) : (
                 <ImageSlide key={`${m}-${i}`} uri={m} width={slideWidth} height={currentHeight} index={i} />
@@ -1272,33 +1293,99 @@ function Post(props) {
         </ThemedView>
       )}
 
-      {ctas.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ctaScroll}>
-          {ctas.map((cta, i) => (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ctaScroll}>
+        {ctas.map((cta, i) => (
+          <TouchableOpacity
+            key={`${cta.key}-${i}`}
+            onPress={cta.onPress}
+            activeOpacity={cta.disabled ? 1 : 0.85}
+            disabled={cta.disabled}
+            style={[
+              styles.ctaButton,
+              cta.bg ? { backgroundColor: cta.bg } : null,
+            ]}
+          >
+            {cta.featherIcon
+              ? <Feather name={cta.featherIcon} size={16} color="#fff" />
+              : cta.icon
+              ? <Image source={cta.icon} style={styles.ctaIcon} resizeMode="contain" />
+              : null
+            }
+          </TouchableOpacity>
+        ))}
+        {hasSaveAction && (
+          <TouchableOpacity
+            onPress={handleSavePress}
+            activeOpacity={0.85}
+            style={[styles.ctaButton, { backgroundColor: "#60affe" }]}
+          >
+            <Ionicons name={saved ? "bookmark" : "bookmark-outline"} size={16} color="#fff" />
+          </TouchableOpacity>
+        )}
+        {!!(description || basePost.description) && (
+          <TouchableOpacity
+            onPress={handleTranslate}
+            activeOpacity={0.85}
+            disabled={translating}
+            style={[styles.ctaButton, { backgroundColor: "#5BC4B8", opacity: translating ? 0.7 : 1 }]}
+          >
+            {translating
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <MaterialCommunityIcons name="translate" size={16} color="#fff" />
+            }
+          </TouchableOpacity>
+        )}
+        {!canDelete && (
+          <TouchableOpacity
+            onPress={() => {
+              if (props.onReport) props.onReport(effectivePostId);
+              else { setReportText(""); setReportOpen(true); }
+            }}
+            activeOpacity={0.85}
+            style={[styles.ctaButton, { backgroundColor: isDark ? "#444" : "#e0e0e0" }]}
+          >
+            <Feather name="flag" size={16} color={isDark ? "#fff" : "#666"} />
+          </TouchableOpacity>
+        )}
+        {canDelete && !showOwnerMenu && (
+          <TouchableOpacity
+            onPress={() => setShowOwnerMenu(true)}
+            activeOpacity={0.85}
+            style={[styles.ctaButton, {
+              backgroundColor: isDark ? "#222222" : "#FFFFFF",
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: isDark ? "#FFFFFF" : "#000000",
+            }]}
+          >
+            <Feather name="more-vertical" size={16} color={isDark ? "#FFFFFF" : "#000000"} />
+          </TouchableOpacity>
+        )}
+        {canDelete && showOwnerMenu && (
+          <>
             <TouchableOpacity
-              key={`${cta.key}-${i}`}
-              onPress={cta.onPress}
-              activeOpacity={cta.disabled ? 1 : 0.85}
-              disabled={cta.disabled}
-              style={[
-                styles.ctaButton,
-                cta.bg ? { backgroundColor: cta.bg } : null,
-                i === ctas.length - 1 ? { marginRight: 0 } : null,
-              ]}
+              onPress={() => { setShowOwnerMenu(false); setConfirmOpen(true); }}
+              activeOpacity={0.85}
+              style={[styles.ctaButton, { backgroundColor: "#FF4D4D" }]}
             >
-              {cta.featherIcon
-                ? <Feather name={cta.featherIcon} size={16} color="#fff" style={styles.ctaIcon} />
-                : cta.icon
-                ? <Image source={cta.icon} style={styles.ctaIcon} resizeMode="contain" />
-                : null
-              }
-              <ThemedText style={styles.ctaLabel} numberOfLines={1} ellipsizeMode="tail">
-                {cta.text}
-              </ThemedText>
+              <Feather name="trash-2" size={16} color="#fff" />
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+            <TouchableOpacity
+              onPress={() => { setShowOwnerMenu(false); handleEdit(); }}
+              activeOpacity={0.85}
+              style={[styles.ctaButton, { backgroundColor: isDark ? "#444" : "#e0e0e0" }]}
+            >
+              <Feather name="edit-2" size={16} color={isDark ? "#fff" : "#666"} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { setShowOwnerMenu(false); handleHide(); }}
+              activeOpacity={0.85}
+              style={[styles.ctaButton, { backgroundColor: isDark ? "#444" : "#e0e0e0" }]}
+            >
+              <Feather name={isHidden ? "eye" : "eye-off"} size={16} color={isDark ? "#fff" : "#666"} />
+            </TouchableOpacity>
+          </>
+        )}
+      </ScrollView>
 
       <ShareMenu
         visible={shareVisible}
@@ -1307,6 +1394,7 @@ function Post(props) {
         postId={effectivePostId}
         isVideo={(props.type || basePost.type || "") === "feedPost"}
         thumbnailUrl={basePost.thumbnail_url || hintArr.find((u) => u && !isVideoUrl(u)) || null}
+        allowGuests={!!basePost.allow_guests}
         onShareOnProfile={!isNestedShare ? () => setSharePostModalVisible(true) : undefined}
         t={t}
       />
@@ -1348,152 +1436,6 @@ function Post(props) {
           </View>
         </Modal>
       )}
-
-      {menuOpen && (
-        <View style={styles.menuRoot}>
-          <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)} />
-          <ThemedView style={[styles.menuCard, { backgroundColor: isDark ? "#333333" : "#FFFFFF" }]}>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuOpen(false);
-                if (props.onReport) {
-                  props.onReport(effectivePostId);
-                } else {
-                  setReportText("");
-                  setReportOpen(true);
-                }
-              }}
-            >
-              <Feather
-                name="alert-triangle"
-                size={16}
-                color={isDark ? "#FFFFFF" : "#333333"}
-                style={{ marginRight: 8 }}
-              />
-              <ThemedText style={styles.menuText}>{t("menu_report")}</ThemedText>
-            </TouchableOpacity>
-
-            {hasSaveAction && (
-              <TouchableOpacity style={styles.menuItem} onPress={handleSavePress}>
-                <Ionicons
-                  name={saved ? "bookmark" : "bookmark-outline"}
-                  size={16}
-                  color={isDark ? "#FFFFFF" : "#333333"}
-                  style={{ marginRight: 8 }}
-                />
-                <ThemedText style={styles.menuText}>
-                  {saved ? t("menu_saved") : t("menu_save")}
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {/* Remove collaboration — only for collaborators who are not the post author */}
-            {!canDelete && authUsername && Array.isArray(basePost.collaborators) && basePost.collaborators.includes(authUsername) && (
-              <>
-                <ThemedView style={styles.menuDivider} />
-                <TouchableOpacity
-                  style={styles.menuItem}
-                  onPress={async () => {
-                    setMenuOpen(false);
-                    try {
-                      await supabase.rpc("remove_collaborator", {
-                        p_post_id: effectivePostId,
-                        p_username: authUsername,
-                      });
-                      const posterUsername = String(displayUser || basePost.user || "").replace(/^@/, "");
-                      supabase.functions.invoke("send-push", {
-                        body: {
-                          type: "collab_removed",
-                          collaborator_username: authUsername,
-                          poster_username: posterUsername,
-                        },
-                      }).catch(() => {});
-                    } catch (e) {
-                    }
-                  }}
-                >
-                  <Feather name="user-minus" size={16} color="#d23b3b" style={{ marginRight: 8 }} />
-                  <ThemedText style={[styles.menuText, { color: "#d23b3b" }]}>
-                    {t("collab_remove_menu") || "Remove collaboration"}
-                  </ThemedText>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {canDelete && <ThemedView style={styles.menuDivider} />}
-
-            {canDelete && (
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setMenuOpen(false);
-                  navigation.navigate("CreatePost", {
-                    editPost: {
-                      id: effectivePostId,
-                      title: title || basePost.title || "",
-                      description: description || basePost.description || "",
-                      type: props.type || basePost.type || "",
-                      date: rawDate || null,
-                      time: rawTime || null,
-                      endDate: rawEndDate || null,
-                      endTime: rawEndTime || null,
-                      all_day: basePost.all_day ?? false,
-                      every_day: basePost.every_day ?? false,
-                      online: basePost.online ?? false,
-                      location: rawLocation || null,
-                      mediaUrls: mediaArr,
-                      collaborators: Array.isArray(props.collaborators ?? basePost.collaborators) ? (props.collaborators ?? basePost.collaborators) : [],
-                    },
-                  });
-                }}
-              >
-                <Feather name="edit-2" size={16} color={isDark ? "#FFFFFF" : "#333333"} style={{ marginRight: 8 }} />
-                <ThemedText style={styles.menuText}>{t("menu_edit") || "Edit"}</ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {canDelete && (
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={async () => {
-                  setMenuOpen(false);
-                  const newHidden = !isOnHiddenList;
-                  try {
-                    await supabase.from("posts").update({ hidden: newHidden }).eq("id", effectivePostId);
-                    if (onToggleHidden) onToggleHidden(effectivePostId, newHidden);
-                  } catch (e) {
-                  }
-                }}
-              >
-                <Feather
-                  name={isOnHiddenList ? "eye" : "eye-off"}
-                  size={16}
-                  color={isDark ? "#FFFFFF" : "#333333"}
-                  style={{ marginRight: 8 }}
-                />
-                <ThemedText style={styles.menuText}>
-                  {isOnHiddenList ? (t("menu_show_post") || "Show post") : (t("menu_hide") || "Hide")}
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {canDelete && (
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setMenuOpen(false);
-                  setConfirmOpen(true);
-                }}
-              >
-                <Feather name="x" size={16} color="#d23b3b" style={{ marginRight: 8 }} />
-                <ThemedText style={[styles.menuText, { color: "#d23b3b" }]}>{t("menu_delete")}</ThemedText>
-              </TouchableOpacity>
-            )}
-          </ThemedView>
-        </View>
-      )}
-
 
       <Modal visible={reportOpen} transparent animationType="fade" onRequestClose={() => setReportOpen(false)}>
         <View style={styles.reportOverlay}>
@@ -1625,9 +1567,8 @@ const styles = StyleSheet.create({
   dotActive: { backgroundColor: "#fff" },
 
   ctaScroll: { paddingTop: 6, paddingRight: 4, padding: 10 },
-  ctaButton: { height: 40, borderRadius: 10, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginRight: 8, overflow: "hidden", flexShrink: 0 },
-  ctaIcon: { width: 16, height: 16, marginRight: 6 },
-  ctaLabel: { color: "#FFFFFF", fontSize: 14, fontFamily: "Poppins" },
+  ctaButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", marginRight: 10, overflow: "hidden", flexShrink: 0 },
+  ctaIcon: { width: 16, height: 16 },
 
   kebabBtn: { paddingHorizontal: 6, paddingVertical: 4, marginLeft: 6, alignItems: "center", justifyContent: "center" },
 
@@ -1637,7 +1578,7 @@ const styles = StyleSheet.create({
   menuItem: { paddingVertical: 10, paddingHorizontal: 12, flexDirection: "row", alignItems: "center" },
   menuText: { fontFamily: "Poppins", fontSize: 14 },
   menuDivider: { height: 1, backgroundColor: "#eceff3", marginVertical: 2 },
-  collabDropdown: { marginTop: 4, marginBottom: 2, borderRadius: 8, paddingVertical: 4, paddingHorizontal: 4, shadowColor: "#000", shadowOpacity: 0.10, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  collabDropdown: { zIndex: 50, borderRadius: 8, paddingVertical: 4, paddingHorizontal: 4, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 8 },
   collabDropdownItem: { flexDirection: "row", alignItems: "center", paddingVertical: 7, paddingHorizontal: 6 },
 
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center" },

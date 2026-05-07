@@ -82,14 +82,11 @@ export default function SignUpScreen({ navigation }) {
 
   const bg = isDark ? theme.gray : "#FFFFFF";
   const accent = isDark ? "#FFFFFF" : "#00A9FF";
-  const placeholder = accent;
 
-  const borderStyle = isDark
-    ? { borderBottomWidth: 1, borderBottomColor: "#FFFFFF" }
-    : { borderWidth: 1, borderColor: "#00A9FF", borderRadius: 8, paddingHorizontal: 14 };
+  const inputStyle = { backgroundColor: isDark ? "#555" : "#00A9FF", borderRadius: 999, paddingHorizontal: 18 };
 
   const Logo = () => (
-    <Image source={require("../../assets/icon.png")} style={styles.logo} />
+    <Image source={isDark ? require("../../assets/icon_white.png") : require("../../assets/icon.png")} style={styles.logo} />
   );
 
   // Load device ID once on mount
@@ -426,7 +423,7 @@ export default function SignUpScreen({ navigation }) {
       <Feather
         name={valid ? "check" : "x"}
         size={18}
-        color={valid ? accent : "#FF3B30"}
+        color={valid ? "#fff" : "#FF3B30"}
         style={styles.validationIcon}
       />
     );
@@ -454,11 +451,11 @@ export default function SignUpScreen({ navigation }) {
             <Logo />
 
             {/* Name */}
-            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+            <View style={[styles.inputContainer, inputStyle, formDisabled && styles.fieldDisabled]}>
               <TextInput
-                style={[styles.inputField, { color: accent }]}
+                style={[styles.inputField, { color: "#fff" }]}
                 placeholder={t("signup_name_placeholder")}
-                placeholderTextColor={placeholder}
+                placeholderTextColor="rgba(255,255,255,0.7)"
                 value={name}
                 onChangeText={setName}
                 returnKeyType="next"
@@ -468,11 +465,11 @@ export default function SignUpScreen({ navigation }) {
             </View>
 
             {/* Email */}
-            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+            <View style={[styles.inputContainer, inputStyle, formDisabled && styles.fieldDisabled]}>
               <TextInput
-                style={[styles.inputField, { color: accent }]}
+                style={[styles.inputField, { color: "#fff" }]}
                 placeholder={t("signup_email_placeholder")}
-                placeholderTextColor={placeholder}
+                placeholderTextColor="rgba(255,255,255,0.7)"
                 value={email}
                 onChangeText={handleEmailChange}
                 autoCapitalize="none"
@@ -482,17 +479,17 @@ export default function SignUpScreen({ navigation }) {
               />
               {!formDisabled && (
                 emailChecking
-                  ? <ActivityIndicator size="small" color={accent} />
+                  ? <ActivityIndicator size="small" color="#fff" />
                   : renderValidationIcon(emailValid)
               )}
             </View>
 
             {/* Username */}
-            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+            <View style={[styles.inputContainer, inputStyle, formDisabled && styles.fieldDisabled]}>
               <TextInput
-                style={[styles.inputField, { color: accent }]}
+                style={[styles.inputField, { color: "#fff" }]}
                 placeholder={t("signup_username_placeholder")}
-                placeholderTextColor={placeholder}
+                placeholderTextColor="rgba(255,255,255,0.7)"
                 value={username}
                 onChangeText={handleUsernameChange}
                 autoCapitalize="none"
@@ -501,17 +498,17 @@ export default function SignUpScreen({ navigation }) {
               />
               {!formDisabled && (
                 usernameChecking
-                  ? <ActivityIndicator size="small" color={accent} />
+                  ? <ActivityIndicator size="small" color="#fff" />
                   : renderValidationIcon(usernameValid)
               )}
             </View>
 
             {/* Password */}
-            <View style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}>
+            <View style={[styles.inputContainer, inputStyle, formDisabled && styles.fieldDisabled]}>
               <TextInput
-                style={[styles.inputField, { color: accent }]}
+                style={[styles.inputField, { color: "#fff" }]}
                 placeholder={t("signup_password_placeholder")}
-                placeholderTextColor={placeholder}
+                placeholderTextColor="rgba(255,255,255,0.7)"
                 secureTextEntry
                 value={password}
                 onChangeText={setPassword}
@@ -522,14 +519,14 @@ export default function SignUpScreen({ navigation }) {
 
             {/* Age */}
             <TouchableOpacity
-              style={[styles.inputContainer, borderStyle, formDisabled && styles.fieldDisabled]}
+              style={[styles.inputContainer, inputStyle, formDisabled && styles.fieldDisabled]}
               onPress={() => !formDisabled && setShowAgePicker(true)}
               activeOpacity={formDisabled ? 1 : 0.8}
             >
-              <Text style={[styles.inputField, { color: accent, opacity: age ? 1 : 0.8 }]}>
+              <Text style={[styles.inputField, { color: "#fff", opacity: age ? 1 : 0.8 }]}>
                 {age || `${t("signup_age_placeholder")} (optional)`}
               </Text>
-              {!formDisabled && <Feather name="chevron-down" size={18} color={accent} />}
+              {!formDisabled && <Feather name="chevron-down" size={18} color="#fff" />}
             </TouchableOpacity>
 
             {/* ── Step: form → show "Proceed" button ───────────────────── */}
@@ -548,7 +545,7 @@ export default function SignUpScreen({ navigation }) {
                 {sendingCode ? (
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={[styles.btnText, { color: "#FFFFFF" }]}>
+                  <Text style={[styles.btnText, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}>
                     {t("signup_button_label")}
                   </Text>
                 )}
@@ -561,14 +558,14 @@ export default function SignUpScreen({ navigation }) {
                   {t("signup_code_sent_prefix")} {email}.
                 </Text>
 
-                <View style={[styles.inputContainer, borderStyle, { marginBottom: 0, width: "100%" }]}>
+                <View style={[styles.inputContainer, inputStyle, { marginBottom: 0, width: "100%" }]}>
                   <TextInput
                     style={[
                       styles.inputField,
-                      { color: accent, letterSpacing: 14, textAlign: "center", fontSize: 22 },
+                      { color: "#fff", letterSpacing: 14, textAlign: "center", fontSize: 22 },
                     ]}
                     placeholder={t("signup_code_placeholder")}
-                    placeholderTextColor={placeholder}
+                    placeholderTextColor="rgba(255,255,255,0.7)"
                     value={otp}
                     onChangeText={(v) => setOtp(v.replace(/[^0-9]/g, "").slice(0, 6))}
                     keyboardType="number-pad"
@@ -580,9 +577,7 @@ export default function SignUpScreen({ navigation }) {
                 <TouchableOpacity
                   style={[
                     styles.nextBtn,
-                    isDark
-                      ? { backgroundColor: theme.gray, borderWidth: 1, borderColor: "#FFFFFF" }
-                      : { backgroundColor: "#00A9FF" },
+                    { borderWidth: 1, borderColor: isDark ? "#FFFFFF" : "#00A9FF" },
                     (verifyingCode || otp.length < 6) && { opacity: 0.7 },
                   ]}
                   onPress={handleVerifyAndSignUp}
@@ -591,7 +586,7 @@ export default function SignUpScreen({ navigation }) {
                   {verifyingCode ? (
                     <ActivityIndicator color="#FFFFFF" />
                   ) : (
-                    <Text style={[styles.btnText, { color: "#FFFFFF" }]}>
+                    <Text style={[styles.btnText, { color: isDark ? "#FFFFFF" : "#00A9FF" }]}>
                       {t("signup_complete_label")}
                     </Text>
                   )}
@@ -732,8 +727,8 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   nextBtn: {
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: 999,
+    paddingVertical: 10,
     paddingHorizontal: 40,
     marginTop: 32,
   },

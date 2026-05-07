@@ -10,7 +10,8 @@ import { View, ActivityIndicator, AppState, Modal, Text, TouchableOpacity, Style
 import { Image as ExpoImage } from "expo-image";
 import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
-import { LanguageProvider } from "../theme/LanguageContext";
+import { LanguageProvider, useAlbaLanguage } from "../theme/LanguageContext";
+import { GuestProvider } from "../theme/GuestContext";
 import AuthNavigator from "./AuthNavigator";
 import MainTabs from "./MainTabs";
 import { ThemeProvider, useAlbaTheme } from "../theme/ThemeContext";
@@ -159,8 +160,53 @@ const banStyles = StyleSheet.create({
   recheckText: { fontFamily: "Poppins", fontSize: 13, textDecorationLine: "underline" },
 });
 
-function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onProfileComplete, navRef, banState, onBanRecheck, onTerminationAck }) {
+const GUEST_ALLOWED_SCREENS = new Set(['MainTabs', 'Community', 'Feed', 'CommunitySettings', 'MyTickets']);
+
+function getActiveRouteName(state) {
+  if (!state) return null;
+  const route = state.routes[state.index ?? state.routes.length - 1];
+  if (route.state) return getActiveRouteName(route.state);
+  return route.name;
+}
+
+function GuestBlockModal({ visible, onClose, navRef }) {
   const { isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
+  const bg = isDark ? "#1A1F27" : "#FFFFFF";
+  const fg = isDark ? "#FFFFFF" : "#111111";
+  if (!visible) return null;
+  return (
+    <Modal visible transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={guestBlockStyles.overlay}>
+        <View style={[guestBlockStyles.card, { backgroundColor: bg }]}>
+          <Text style={[guestBlockStyles.body, { color: fg }]}>
+            {t("guest_feature_locked_body") || "Please set up your account to access all of Alba's features."}
+          </Text>
+          <TouchableOpacity style={guestBlockStyles.btn} onPress={() => {
+            onClose();
+            navRef.current?.navigate("CommunitySettings");
+          }}>
+            <Text style={guestBlockStyles.btnText}>{t("guest_feature_locked_btn") || "OK"}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const guestBlockStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", padding: 28 },
+  card: { borderRadius: 18, padding: 24, alignItems: "center", width: "82%" },
+  body: { fontFamily: "Poppins", fontSize: 15, textAlign: "center", marginBottom: 20, lineHeight: 22 },
+  btn: { backgroundColor: "#6C63FF", paddingVertical: 11, paddingHorizontal: 36, borderRadius: 12 },
+  btnText: { color: "#fff", fontFamily: "PoppinsBold", fontSize: 15 },
+});
+
+function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onProfileComplete, navRef, banState, onBanRecheck, onTerminationAck, isGuest }) {
+  const { isDark } = useAlbaTheme();
+  const [guestBlocked, setGuestBlocked] = useState(false);
+  const isGuestRef = useRef(isGuest);
+  useEffect(() => { isGuestRef.current = isGuest; }, [isGuest]);
 
   const navTheme = isDark
     ? {
@@ -200,7 +246,20 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
 
   return (
     <>
-      <NavigationContainer ref={navRef} theme={navTheme} key={navKey} linking={linking}>
+      <NavigationContainer
+        ref={navRef}
+        theme={navTheme}
+        key={navKey}
+        linking={linking}
+        onStateChange={(state) => {
+          if (!isGuestRef.current) return;
+          const routeName = getActiveRouteName(state);
+          if (routeName && !GUEST_ALLOWED_SCREENS.has(routeName)) {
+            navRef.current?.goBack();
+            setGuestBlocked(true);
+          }
+        }}
+      >
         {signedIn ? <MainNavigator /> : <AuthNavigator />}
       </NavigationContainer>
 
@@ -213,6 +272,9 @@ function ThemedNavigation({ signedIn, needsProfileSetup, pendingGoogleUser, onPr
 
       {/* Ban / suspension modal — blocks all interaction while active */}
       <BanModal banState={banState} onRecheck={onBanRecheck} onGotIt={onTerminationAck} />
+
+      {/* Guest feature locked modal */}
+      <GuestBlockModal visible={guestBlocked} onClose={() => setGuestBlocked(false)} navRef={navRef} />
     </>
   );
 }
@@ -257,6 +319,7 @@ export default function AppNavigator() {
   const [needsProfileSetup, setNeedsProfileSetup] = useState(false);
   const [pendingGoogleUser, setPendingGoogleUser] = useState(null);
   const [banState, setBanState] = useState(null); // null | { type: "temp"|"terminated", bannedUntil?, reason? }
+  const [isGuest, setIsGuest] = useState(false);
   const [joinPendingModal, setJoinPendingModal] = useState(false);
   const navRef = useRef(null);
   const signedInRef = useRef(false);
@@ -323,13 +386,26 @@ export default function AppNavigator() {
     (async () => {
       const { data, error } = await supabase.auth.getSession();
 
+      // A stale/revoked refresh token causes getSession to fail with
+      // "Refresh Token Not Found". Sign out to clear it so the error
+      // doesn't repeat on every cold start.
+      if (error?.message?.toLowerCase().includes("refresh token")) {
+        await supabase.auth.signOut();
+      }
+
       setSignedIn(!!data?.session);
       signedInRef.current = !!data?.session;
       setReady(true);
 
-      // Check ban for session that's already active at cold start
+      // Check ban + is_guest for session that's already active at cold start
       if (data?.session?.user?.id) {
         checkBanStatus(data.session.user.id);
+        supabase
+          .from('profiles')
+          .select('is_guest')
+          .eq('id', data.session.user.id)
+          .maybeSingle()
+          .then(({ data: p }) => setIsGuest(p?.is_guest === true));
       }
 
       const { data: listener } = supabase.auth.onAuthStateChange(
@@ -350,19 +426,27 @@ export default function AppNavigator() {
 
           if (session?.user?.id) {
             checkBanStatus(session.user.id);
+            supabase
+              .from('profiles')
+              .select('is_guest')
+              .eq('id', session.user.id)
+              .maybeSingle()
+              .then(({ data: p }) => setIsGuest(p?.is_guest === true));
           } else {
             setBanState(null);
+            setIsGuest(false);
           }
 
-          // Only run Google profile-setup check on actual sign-in events
+          // Only run social profile-setup check on actual sign-in events
           if (event === 'SIGNED_IN' && session?.user) {
             trackLoginStreak(session.user.id);
-            const isGoogleUser =
-              session.user.app_metadata?.provider === "google" ||
-              (session.user.app_metadata?.providers ?? []).includes("google");
+            const providers = session.user.app_metadata?.providers ?? [];
+            const provider = session.user.app_metadata?.provider ?? "";
+            const isSocialUser =
+              provider === "google" || providers.includes("google") ||
+              provider === "apple" || providers.includes("apple");
 
-
-            if (isGoogleUser) {
+            if (isSocialUser) {
               // Defer the DB call out of the onAuthStateChange callback.
               // Supabase JS v2 fires this callback synchronously during setSession,
               // so the auth middleware is still in a transitional state — any DB
@@ -374,12 +458,13 @@ export default function AppNavigator() {
                 try {
                   const { data: profile } = await supabase
                     .from("profiles")
-                    .select("id")
+                    .select("id, username")
                     .eq("id", capturedUser.id)
                     .maybeSingle();
 
-
-                  if (!profile) {
+                  // A DB trigger may create a bare profile row on auth user creation,
+                  // so check username (not just row existence) to detect new users.
+                  if (!profile || !profile.username) {
                     setPendingGoogleUser({
                       id: capturedUser.id,
                       name:
@@ -603,6 +688,7 @@ export default function AppNavigator() {
       merchantIdentifier="merchant.com.alba.app"
       urlScheme="alba"
     >
+      <GuestProvider isGuest={isGuest} setIsGuest={setIsGuest}>
       <LanguageProvider>
         <ThemeProvider>
           {!ready || !fontsLoaded ? (
@@ -620,6 +706,7 @@ export default function AppNavigator() {
                 banState={banState}
                 onBanRecheck={handleBanRecheck}
                 onTerminationAck={handleTerminationAck}
+                isGuest={isGuest}
               />
               <JoinPendingModal
                 visible={joinPendingModal}
@@ -629,6 +716,7 @@ export default function AppNavigator() {
           )}
         </ThemeProvider>
       </LanguageProvider>
+      </GuestProvider>
     </StripeProvider>
   );
 }

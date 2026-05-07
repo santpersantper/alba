@@ -1,39 +1,36 @@
 // src/utils/translate.js
-// Translation utility — uses Lingva Translate (Google-quality, free, no API key, no daily limit)
-// with MyMemory as fallback.
+// Translation utility — uses MyMemory (free, no API key) with auto-detection.
 // Source language is auto-detected so both IT→EN and EN→IT work regardless of app language.
-
-const LINGVA_BASE = "https://lingva.ml/api/v1";
 
 /**
  * Translate text into the app's display language.
- * Source language is auto-detected by the API, so any language can be translated.
- * @param {string} text          - Source text
+ * @param {string} text           - Source text
  * @param {"en"|"it"} appLanguage - Current app language (determines target)
- * @returns {Promise<string>}     Translated text, or original on failure
+ * @returns {Promise<string>}      Translated text, or original on failure
  */
 export async function translateText(text, appLanguage) {
   if (!text || !text.trim()) return text;
 
   const target = appLanguage === "it" ? "it" : "en";
 
-  // — Primary: Lingva Translate — auto-detects source language
+  // — Primary: MyMemory with auto-detection
   try {
-    const url = `${LINGVA_BASE}/auto/${target}/${encodeURIComponent(text)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const params = new URLSearchParams({ q: text, langpair: `autodetect|${target}` });
+    const res = await fetch(`https://api.mymemory.translated.net/get?${params}`, {
+      headers: { Accept: "application/json" },
+    });
     if (res.ok) {
       const json = await res.json();
-      if (json?.translation && typeof json.translation === "string") {
-        return json.translation;
+      const result = json?.responseData?.translatedText;
+      if (result && typeof result === "string" && json?.responseStatus === 200) {
+        try { return decodeURIComponent(result.replace(/\+/g, " ")); } catch { return result; }
       }
     }
-  } catch {
-    // fall through to backup
-  }
+  } catch {}
 
-  // — Fallback: MyMemory — fixed langpair based on target
+  // — Fallback: MyMemory with fixed langpair
   try {
-    const langpair = target === "en" ? "it|en" : "en|it";
+    const langpair = target === "it" ? "en|it" : "it|en";
     const params = new URLSearchParams({ q: text, langpair });
     const res = await fetch(`https://api.mymemory.translated.net/get?${params}`);
     if (res.ok) {

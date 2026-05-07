@@ -9,13 +9,15 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { supabase } from "../lib/supabase";
 import { useAlbaLanguage } from "../theme/LanguageContext";
 
 export default function PreFaceRecognitionScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const returnTo = route.params?.returnTo ?? null;
   const { t } = useAlbaLanguage();
 
   const [fontsLoaded] = useFonts({
@@ -49,11 +51,11 @@ export default function PreFaceRecognitionScreen() {
         if (!mounted) return;
 
         if (prof?.is_verified) {
-          // Already verified → send them back to Community
-          navigation.reset({
-            index: 0,
-            routes: [{ name: "Community" }],
-          });
+          if (returnTo === "Settings") {
+            navigation.goBack();
+          } else {
+            navigation.reset({ index: 0, routes: [{ name: "Community" }] });
+          }
           return;
         }
 
@@ -114,7 +116,7 @@ export default function PreFaceRecognitionScreen() {
     if (!hasAvatar) {
       goToProfile();
     } else {
-      navigation.navigate("FaceRecognition");
+      navigation.navigate("FaceRecognition", returnTo ? { returnTo } : undefined);
     }
   };
 

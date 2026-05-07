@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
   },
   questionBtn: {
     backgroundColor: '#0D6EFD',
-    borderRadius: 12,
+    borderRadius: 999,
     paddingVertical: 8,
     paddingHorizontal: 16,
     marginRight: 12,

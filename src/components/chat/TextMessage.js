@@ -9,7 +9,9 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../../lib/supabase";
 import ShareMenu from "../ShareMenu";
 import { useAlbaTheme } from "../../theme/ThemeContext";
@@ -17,9 +19,32 @@ import { useAlbaLanguage } from "../../theme/LanguageContext";
 import { translateText } from "../../utils/translate";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 
+const CLICKABLE_RE = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}|@\w+)/g;
+
+function renderClickableText(raw, baseStyle, linkColor, navigation) {
+  if (!raw) return null;
+  const parts = raw.split(CLICKABLE_RE);
+  return parts.map((part, i) => {
+    if (!part) return null;
+    if (/^https?:\/\/[^\s]+$/.test(part) || /^www\.[^\s]+$/.test(part)) {
+      const url = part.startsWith("http") ? part : `https://${part}`;
+      return <Text key={i} style={[baseStyle, { color: linkColor }]} onPress={() => Linking.openURL(url).catch(() => {})}>{part}</Text>;
+    }
+    if (/^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(part)) {
+      return <Text key={i} style={[baseStyle, { color: linkColor }]} onPress={() => Linking.openURL(`mailto:${part}`).catch(() => {})}>{part}</Text>;
+    }
+    if (/^@\w+$/.test(part)) {
+      const username = part.slice(1);
+      return <Text key={i} style={[baseStyle, { color: linkColor }]} onPress={() => navigation.navigate("Profile", { username })}>{part}</Text>;
+    }
+    return <Text key={i} style={baseStyle}>{part}</Text>;
+  });
+}
+
 export default function TextMessage({ id, text, time, isMe = false, isAdmin = false, onDeleted, senderName, senderUsername, groupId, onKick, failed = false, onRetry, pendingReview = false }) {
   const { theme, isDark } = useAlbaTheme();
   const { language, t } = useAlbaLanguage();
+  const navigation = useNavigation();
 
   const [menuVisible, setMenuVisible] = useState(false);
   const [translated, setTranslated] = useState(false);
@@ -104,6 +129,10 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
   // ✅ requested: other people's bubbles use theme.gray on dark mode
   const otherBubbleBg = isDark ? "#363C47" : styles.bubbleOther.backgroundColor;
 
+  const msgColor = isMe ? "#fff" : (isDark ? "#fff" : "#1A1F27");
+  const linkColor = isMe ? "#D4EAFF" : "#59A7FF";
+  const msgStyle = [styles.msgText, { color: msgColor }];
+
   if (failed) {
     return (
       <View style={[styles.row, { justifyContent: "flex-end" }]}>
@@ -113,7 +142,9 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
           style={{ maxWidth: "78%", alignItems: "flex-end" }}
         >
           <View style={[styles.bubble, styles.bubbleOther, { backgroundColor: isDark ? "#363C47" : styles.bubbleOther.backgroundColor }]}>
-            <Text style={[styles.msgText, { color: isDark ? "#fff" : "#1A1F27" }]}>{text}</Text>
+            <Text style={[styles.msgText, { color: isDark ? "#fff" : "#1A1F27" }]}>
+              {renderClickableText(text, [styles.msgText, { color: isDark ? "#fff" : "#1A1F27" }], "#59A7FF", navigation)}
+            </Text>
           </View>
           <Text style={styles.failedCaption}>Message not sent. Tap to retry.</Text>
         </TouchableOpacity>
@@ -152,13 +183,13 @@ export default function TextMessage({ id, text, time, isMe = false, isAdmin = fa
             {!isMe && senderName ? (
               <Text style={[styles.senderName, { color: isDark ? "#A8B4C4" : "#374151" }]}>{senderName}</Text>
             ) : null}
-            <Text
-              style={[
-                styles.msgText,
-                isMe ? { color: "#fff" } : { color: isDark ? "#fff" : "#1A1F27" },
-              ]}
-            >
-              {translated && translatedText ? translatedText : text}
+            <Text style={msgStyle}>
+              {renderClickableText(
+                translated && translatedText ? translatedText : text,
+                msgStyle,
+                linkColor,
+                navigation
+              )}
             </Text>
           </View>
           {pendingReview && isMe && (

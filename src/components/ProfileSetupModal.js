@@ -1,6 +1,6 @@
 // components/ProfileSetupModal.js
-// Shown over the app after a new Google sign-in to collect username + age.
-// City is auto-detected from device location. Name/email come from Google.
+// Shown over the app after a new social sign-in (Google/Apple) to collect username + age.
+// City is auto-detected from device location. Name/email come from the provider where available.
 import React, { useState, useRef } from "react";
 import {
   Modal,

@@ -202,7 +202,7 @@ export default function MyEvents({ navigation }) {
 
   return (
     <View style={[styles.container, { backgroundColor: containerBg, borderColor: border }]}>
-      <Text style={[styles.title, { color: titleColor }]}>My events</Text>
+      <Text style={[styles.title, { color: titleColor }]}>{t('my_events_title')}</Text>
 
       {loading ? (
         <ActivityIndicator color={subtle} />
@@ -248,7 +248,7 @@ export default function MyEvents({ navigation }) {
         onPress={() => navigation?.navigate?.("CreatePost")}
         activeOpacity={0.85}
       >
-        <Text style={styles.addBtnText}>Add event</Text>
+        <Text style={styles.addBtnText}>{t('my_events_add_btn')}</Text>
       </TouchableOpacity>
     </View>
   );

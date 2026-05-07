@@ -11,10 +11,16 @@ import {
   Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { detectFacesAsync } from "expo-face-detector";
+let detectFacesAsync = null;
+try {
+  detectFacesAsync = require("expo-face-detector").detectFacesAsync;
+} catch {
+  // expo-face-detector not available (e.g., Expo Go)
+}
+
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { supabase } from "../lib/supabase";
@@ -30,6 +36,8 @@ const POLL_INTERVAL = 350;
 
 export default function FaceRecognitionScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const returnTo = route.params?.returnTo ?? null;
   const { t } = useAlbaLanguage();
 
   const [fontsLoaded] = useFonts({
@@ -242,9 +250,13 @@ export default function FaceRecognitionScreen() {
       }
       if (!verifyData?.ok) throw new Error("Verification failed. Please try again.");
 
-      log("SUCCESS → reset to Community");
+      log("SUCCESS → navigate after verification");
       invalidateAuthCache();
-      navigation.reset({ index: 0, routes: [{ name: "Community" }] });
+      if (returnTo === "Settings") {
+        navigation.navigate("CommunitySettings");
+      } else {
+        navigation.reset({ index: 0, routes: [{ name: "Community" }] });
+      }
     } catch (e) {
       if (e?.message === "PROFILE_NO_FACE") {
         showModal(

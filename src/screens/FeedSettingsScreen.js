@@ -165,10 +165,10 @@ export default function FeedSettingsScreen() {
     } catch {}
   };
 
-  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? "#222" : "#fff" }} />;
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: "transparent" }} />;
 
   const bg = isDark ? "#1a1a1a" : "#fff";
-  const cardBg = isDark ? "#2b2b2b" : "#f6f8fb";
+  const cardBg = "transparent";
   const textColor = isDark ? "#fff" : "#111";
   const secondaryText = isDark ? "#aaa" : "#6F7D95";
   const borderColor = isDark ? "#444" : "#d9e4f3";
@@ -214,7 +214,7 @@ export default function FeedSettingsScreen() {
               <Text style={[styles.rowTitle, { color: textColor }]}>{t("feed_settings_alert_title")}</Text>
               <View style={styles.minutesRow}>
                 <TextInput
-                  style={[styles.minutesInput, { color: textColor, borderColor, backgroundColor: isDark ? "#222" : "#fff" }]}
+                  style={[styles.minutesInput, { color: textColor, borderColor, backgroundColor: "transparent" }]}
                   value={alertMinutes}
                   onChangeText={saveAlertMinutes}
                   keyboardType="number-pad"
@@ -254,7 +254,7 @@ export default function FeedSettingsScreen() {
               <Text style={[styles.rowTitle, { color: textColor }]}>Max distance</Text>
               <View style={styles.minutesRow}>
                 <TextInput
-                  style={[styles.minutesInput, { color: textColor, borderColor, backgroundColor: isDark ? "#222" : "#fff" }]}
+                  style={[styles.minutesInput, { color: textColor, borderColor, backgroundColor: "transparent" }]}
                   value={radiusKm}
                   onChangeText={handleRadiusKmChange}
                   keyboardType="number-pad"
@@ -312,7 +312,7 @@ export default function FeedSettingsScreen() {
                 {
                   color: textColor,
                   borderColor,
-                  backgroundColor: isDark ? "#1a1a1a" : "#fff",
+                  backgroundColor: "transparent",
                 },
               ]}
               placeholder="e.g. cooking, indie music, street art, surfing..."

@@ -40,6 +40,7 @@ export default function ShareMenu({
   onSent,
   defaultMessage,
   onShareOnProfile, // called when user taps "Share on my profile"
+  allowGuests,    // if true, share URL uses /post/view?id= so web recipients can buy tickets
   t,
 }) {
   const [fontsLoaded] = useFonts({
@@ -92,12 +93,12 @@ export default function ShareMenu({
       return `https://albaappofficial.com/join/group/${inviteGroup.id}`;
     }
     if (postId != null) {
-      return isVideo
-        ? `https://albaappofficial.com/video/${postId}`
-        : `https://albaappofficial.com/post/${postId}`;
+      if (isVideo) return `https://albaappofficial.com/video/${postId}`;
+      if (allowGuests) return `https://albaappofficial.com/post/view/?id=${postId}`;
+      return `https://albaappofficial.com/post/${postId}`;
     }
     return null;
-  }, [inviteGroup, postId, isVideo, thumbnailUrl]);
+  }, [inviteGroup, postId, isVideo, thumbnailUrl, allowGuests]);
 
   const handleCopyLink = useCallback(async () => {
     if (!shareLink) return;
@@ -530,9 +531,8 @@ export default function ShareMenu({
 
   const inputWrapStyle = useMemo(() => {
     return {
-      backgroundColor: isDark ? "#121212" : "#F4F6F9",
-      borderColor: isDark ? "#444" : "transparent",
-      borderWidth: isDark ? 1 : 0,
+      borderColor: isDark ? "#444" : "#d9e4f3",
+      borderWidth: StyleSheet.hairlineWidth,
     };
   }, [isDark]);
 
@@ -567,36 +567,48 @@ export default function ShareMenu({
             contentContainerStyle={{ flexGrow: 1 }}
             keyboardShouldPersistTaps="handled"
           >
-            {/* SEARCH */}
-            <View style={[styles.searchWrap, inputWrapStyle]}>
-              <Feather
-                name="search"
-                size={18}
-                color={isDark ? "#A0A4AE" : "#B8B8B8"}
-              />
-              <TextInput
-                style={[styles.searchInput, { color: theme.text }]}
-                placeholder={tx("share_search_users_placeholder", "Search users")}
-                placeholderTextColor={inputPlaceholderColor}
-                value={q}
-                onChangeText={handleSearchChange}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {!!q && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setQ("");
-                    setSearchResults([]);
-                    setSearchLoading(false);
-                  }}
-                  hitSlop={8}
-                >
-                  <Feather
-                    name="x"
-                    size={18}
-                    color={isDark ? "#A0A4AE" : "#B8B8B8"}
-                  />
+            {/* SEARCH + ACTION BUTTONS */}
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <View style={[styles.searchWrap, inputWrapStyle, { flex: 1, marginBottom: 0 }]}>
+                <Feather
+                  name="search"
+                  size={18}
+                  color={isDark ? "#A0A4AE" : "#B8B8B8"}
+                />
+                <TextInput
+                  style={[styles.searchInput, { color: theme.text }]}
+                  placeholder={tx("share_search_users_placeholder", "Search users")}
+                  placeholderTextColor={inputPlaceholderColor}
+                  value={q}
+                  onChangeText={handleSearchChange}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {!!q && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setQ("");
+                      setSearchResults([]);
+                      setSearchLoading(false);
+                    }}
+                    hitSlop={8}
+                  >
+                    <Feather
+                      name="x"
+                      size={18}
+                      color={isDark ? "#A0A4AE" : "#B8B8B8"}
+                    />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {!!shareLink && (
+                <TouchableOpacity style={styles.circleBtn} onPress={handleCopyLink} activeOpacity={0.75}>
+                  <Feather name={copiedLink ? "check" : "link"} size={16} color="#fff" />
+                </TouchableOpacity>
+              )}
+              {!!postId && typeof onShareOnProfile === "function" && (
+                <TouchableOpacity style={styles.circleBtn} onPress={() => { onClose(); onShareOnProfile(); }} activeOpacity={0.75}>
+                  <Feather name="repeat" size={16} color="#fff" />
                 </TouchableOpacity>
               )}
             </View>
@@ -751,33 +763,6 @@ export default function ShareMenu({
               </View>
             )}
 
-            {/* COPY LINK */}
-            {!!shareLink && (
-              <TouchableOpacity
-                style={[styles.copyLinkRow, { backgroundColor: isDark ? "#1a1a1a" : "#F4F6F9" }]}
-                onPress={handleCopyLink}
-                activeOpacity={0.75}
-              >
-                <Feather name="link" size={18} color="#4EBCFF" style={{ marginRight: 10 }} />
-                <Text style={[styles.copyLinkText, { color: theme.text }]}>
-                  {copiedLink ? "Copied!" : "Copy link"}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* SHARE ON MY PROFILE */}
-            {!!postId && typeof onShareOnProfile === "function" && (
-              <TouchableOpacity
-                style={[styles.copyLinkRow, { backgroundColor: isDark ? "#1a1a1a" : "#F4F6F9", marginTop: shareLink ? 8 : 0 }]}
-                onPress={() => { onClose(); onShareOnProfile(); }}
-                activeOpacity={0.75}
-              >
-                <Feather name="repeat" size={18} color="#4EBCFF" style={{ marginRight: 10 }} />
-                <Text style={[styles.copyLinkText, { color: theme.text }]}>
-                  {tx("share_on_profile", "Share on my profile")}
-                </Text>
-              </TouchableOpacity>
-            )}
 
             {/* MENU GRID (packed left-to-right) */}
             <View style={[styles.grid, { marginTop: shareLink || isSearching ? 12 : 2 }]}>
@@ -953,17 +938,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  copyLinkRow: {
-    flexDirection: "row",
+  circleBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#4EBCFF",
     alignItems: "center",
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 4,
-  },
-  copyLinkText: {
-    fontFamily: "PoppinsBold",
-    fontSize: 14,
+    justifyContent: "center",
   },
 
   msgBox: {

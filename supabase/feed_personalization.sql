@@ -159,10 +159,17 @@ begin
     po.caption_embedding is not null
     and not (pr.id::text = any(blocked_uids))
     and (
+      po.type != 'Event'
+      or po.every_day = true
+      or (po.repeat_days is not null and array_length(po.repeat_days, 1) > 0)
+      or po.date >= current_date
+      or (po.end_date is not null and po.end_date >= current_date)
+    )
+    and (
       viewer_loc is null
-      or pr.location is null
+      or po.geom is null
       or st_dwithin(
-           pr.location::geography,
+           po.geom::geography,
            viewer_loc::geography,
            radius_m
          )

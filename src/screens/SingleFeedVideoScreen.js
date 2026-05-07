@@ -17,6 +17,7 @@ import { Image as ExpoImage } from "expo-image";
 
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 const PUBLIC_BUCKET = "public";
@@ -51,10 +52,27 @@ function VideoPlayer({ videoUrl }) {
   );
 }
 
+function parseMentions(text, navigation) {
+  return text.split(/(@\w[\w.]*)/g).map((part, i) => {
+    if (/^@\w/.test(part)) {
+      const username = part.slice(1);
+      return (
+        <Text key={i} style={{ fontFamily: "PoppinsBold", color: "#fff" }}
+          onPress={() => navigation.navigate("Profile", { username })}>
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
+}
+
 export default function SingleFeedVideoScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const { theme, isDark } = useAlbaTheme();
+  const { t } = useAlbaLanguage();
+  const [showFull, setShowFull] = useState(false);
 
   const postId = route?.params?.postId ?? null;
 
@@ -160,9 +178,26 @@ export default function SingleFeedVideoScreen() {
             <Text style={styles.username}>@{video.username || "alba_user"}</Text>
           </TouchableOpacity>
           {!!video.caption && (
-            <Text style={styles.caption} numberOfLines={3}>
-              {video.caption}
-            </Text>
+            showFull ? (
+              <Text style={styles.caption}>
+                {parseMentions(video.caption, navigation)}
+                <Text onPress={() => setShowFull(false)} style={{ fontFamily: "PoppinsBold" }}>
+                  {" "}{t("caption_read_less") || "less"}
+                </Text>
+              </Text>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "flex-end" }}>
+                <Text style={[styles.caption, { flex: 1 }]} numberOfLines={3}>
+                  {parseMentions(video.caption, navigation)}
+                </Text>
+                <Text
+                  onPress={() => setShowFull(true)}
+                  style={[styles.caption, { fontFamily: "PoppinsBold", marginLeft: 4, flexShrink: 0 }]}
+                >
+                  {t("caption_read_more") || "more"}
+                </Text>
+              </View>
+            )
           )}
         </SafeAreaView>
       )}

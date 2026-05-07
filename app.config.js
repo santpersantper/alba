@@ -18,7 +18,7 @@ export default {
   expo: {
     name: "Alba",
     slug: "Alba",
-    version: "1.2.1",
+    version: "1.2.2",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",
@@ -56,6 +56,8 @@ export default {
           "Alba uses your microphone to record audio when you create video posts or send voice messages in chats.",
         NSLocationWhenInUseUsageDescription:
           "Alba uses your location to detect your city during sign-up so your profile shows the right region, and to suggest nearby events and communities. For example, when you create an account, Alba reads your approximate location to pre-fill your city field. Your precise location is never stored or shared with other users.",
+        NSCalendarsUsageDescription:
+          "Alba adds events to your calendar when you purchase or register for a ticket, so you never miss an event you've signed up for.",
       },
       // FamilyControls + App Group entitlements — auto-written to ios/Alba/Alba.entitlements
       // by `npx expo prebuild`. No manual Xcode entitlements step needed for the main target.
@@ -133,6 +135,7 @@ export default {
           return c;
         });
       },
+      "expo-calendar",
       "expo-apple-authentication",
       "expo-iap",
       "expo-image",

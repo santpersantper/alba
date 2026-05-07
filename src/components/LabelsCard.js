@@ -20,7 +20,7 @@ const TRAILING_W = (PLUS_BTN_ESTIMATE_W + CHIP_GAP) + (SEE_ALL_ESTIMATE_W + CHIP
 export default function LabelsCard({
   labels = [],
   colors = [],
-  activeLabel,
+  activeLabels = [],
   onSelect,
   onChangeLabels,
   loading = false,
@@ -42,7 +42,7 @@ export default function LabelsCard({
   const handleRemove = (label) => {
     const next = labels.filter((l) => l !== label);
     onChangeLabels?.(next);
-    if (activeLabel === label) onSelect?.(null);
+    if (activeLabels.includes(label)) onSelect?.(label);
   };
 
   const commitAdd = () => {
@@ -68,13 +68,12 @@ export default function LabelsCard({
 
   const getLabelDisplay = (label) => {
     switch (label) {
+      case "Parties":         return t("label_parties");
       case "Sports":          return t("label_sports");
-      case "Party":           return t("label_parties");
-      case "Cultural events": return t("label_cultural");
       case "Music":           return t("label_music");
+      case "Health":          return t("label_health");
+      case "Movies":          return t("label_movies");
       case "Science & Tech":  return t("label_science_tech");
-      case "Culinary":        return t("label_culinary");
-      case "English-speaking":return t("label_english_speaking");
       default:                return displayLabel(label);
     }
   };
@@ -158,8 +157,8 @@ export default function LabelsCard({
       }}
     >
       {visibleLabels.map((label, i) => {
-        const isActive = activeLabel === label;
-        const bg = colors[i] || "#2F91FF";
+        const isActive = activeLabels.includes(label);
+        const bg = colors.length > 0 ? colors[i % colors.length] : "#2F91FF";
         const shown = getLabelDisplay(label);
 
         return (
@@ -173,7 +172,7 @@ export default function LabelsCard({
                 borderColor: isActive ? "#0C1A4B" : "transparent",
               },
             ]}
-            onPress={() => onSelect?.(isActive ? null : label)}
+            onPress={() => onSelect?.(label)}
             onLayout={(e) => {
               const mw = e.nativeEvent.layout.width;
               if (chipWidths.current[label] !== mw) {
@@ -214,15 +213,15 @@ export default function LabelsCard({
             onSubmitEditing={commitAdd}
             onBlur={commitAdd}
             placeholder={t("labels_new_label_placeholder")}
-            placeholderTextColor="#d0d8e4"
-            style={styles.addInput}
+            placeholderTextColor={isDark ? "#888" : "#d0d8e4"}
+            style={[styles.addInput, { color: isDark ? "#fff" : "#111" }]}
             returnKeyType="done"
           />
         </View>
       ) : (
         <TouchableOpacity
           activeOpacity={0.85}
-          style={[styles.tagChip, { backgroundColor: isDark ? theme.gray : "rgba(47,145,255,0.12)", borderWidth: 1, borderColor: "#2F91FF" }]}
+          style={[styles.plusBtn, { backgroundColor: isDark ? theme.gray : "rgba(47,145,255,0.12)", borderWidth: 1, borderColor: "#2F91FF" }]}
           onPress={() => setAdding(true)}
         >
           <Text style={styles.addText}>+</Text>
@@ -260,9 +259,9 @@ const styles = StyleSheet.create({
   tagChip: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 8,
+    paddingVertical: 5,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: 999,
     marginRight: CHIP_GAP,
     marginBottom: 8,
   },
@@ -279,6 +278,15 @@ const styles = StyleSheet.create({
     color: "#2F91FF",
     fontFamily: "Poppins",
   },
+  plusBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: CHIP_GAP,
+    marginBottom: 8,
+  },
   addText: {
     fontSize: 14,
     color: "#2F91FF",
@@ -289,7 +297,6 @@ const styles = StyleSheet.create({
     padding: 0,
     margin: 0,
     fontSize: 14,
-    color: "#111",
     fontFamily: "Poppins",
   },
 });

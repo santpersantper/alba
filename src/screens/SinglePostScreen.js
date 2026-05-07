@@ -1,6 +1,6 @@
 // screens/SinglePostScreen.js
 import React, { useEffect, useMemo, useState } from "react";
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useNavigation, useRoute } from "@react-navigation/native";
@@ -133,25 +133,32 @@ export default function SinglePostScreen() {
             <ActivityIndicator color={isDark ? "#FFFFFF" : "#111111"} />
           </View>
         ) : effectivePost ? (
-          <Post
-            key={postKey}
-            post={effectivePost}
-            postId={effectivePost.id}
-            authorId={effectivePost.author_id}
-            user={effectivePost.user}
-            userPicUri={effectivePost.userpicuri || "https://placehold.co/48x48"}
-            title={effectivePost.title}
-            description={effectivePost.description}
-            type={effectivePost.type}
-            date={effectivePost.date}
-            time={effectivePost.time}
-            location={effectivePost.location}
-            actions={effectivePost.actions || []}
-            postMediaUri={effectivePost.postmediauri}
-            postMediaUriHint={effectivePost.postmediauri}
-            isActive={true}
-            colors={["#56d1f0", "#00a4e6", "#60affe"]}
-          />
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Post
+              key={postKey}
+              post={effectivePost}
+              postId={effectivePost.id}
+              authorId={effectivePost.author_id}
+              user={effectivePost.user}
+              userPicUri={effectivePost.userpicuri || "https://placehold.co/48x48"}
+              title={effectivePost.title}
+              description={effectivePost.description}
+              type={effectivePost.type}
+              date={effectivePost.date}
+              time={effectivePost.time}
+              location={effectivePost.location}
+              actions={effectivePost.actions || []}
+              postMediaUri={effectivePost.postmediauri}
+              postMediaUriHint={effectivePost.postmediauri}
+              isActive={true}
+              colors={["#56d1f0", "#00a4e6", "#60affe"]}
+            />
+          </ScrollView>
         ) : (
           <View style={styles.center}>
             <ThemedText style={{ opacity: 0.8 }}>Post not found.</ThemedText>

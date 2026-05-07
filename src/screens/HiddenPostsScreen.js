@@ -78,7 +78,7 @@ export default function HiddenPostsScreen({ navigation }) {
   if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: isDark ? "#222" : "#FFFFFF" }} />;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
+    <SafeAreaView edges={["top", "left", "right"]} style={[styles.safe, { backgroundColor: theme.gray }]}>
       {/* Header */}
       <ThemedView variant="gray" style={styles.header}>
         <TouchableOpacity

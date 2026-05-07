@@ -57,6 +57,7 @@ export default function MyTicketsScreen({ navigation }) {
   const [collapsed, setCollapsed] = useState({}); // true = hidden
   const [myUid, setMyUid] = useState(null);
   const [myUsername, setMyUsername] = useState(null);
+  const [myIsGuest, setMyIsGuest] = useState(false);
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
   const [cancelEventId, setCancelEventId] = useState(null);
   const [cancelError, setCancelError] = useState(null);
@@ -84,12 +85,13 @@ export default function MyTicketsScreen({ navigation }) {
 
       const { data: prof } = await supabase
         .from(PROFILES_TABLE)
-        .select("username")
+        .select("username, is_guest")
         .eq("id", uid)
         .maybeSingle();
 
       const uname = cleanUsername(prof?.username);
       setMyUsername(uname);
+      setMyIsGuest(prof?.is_guest === true);
 
       // Source of truth: tickets owned by this user (works even if ticket_holders is stale)
       const { data: myTickets } = await supabase
@@ -303,11 +305,11 @@ export default function MyTicketsScreen({ navigation }) {
 
                 {!isCollapsed &&
                   (list.length ? (
-                    list.map((tk) => {
-                      const label = [
-                        tk.product_type,
-                        tk.holder_display ? `@${tk.holder_display}` : null,
-                      ]
+                    list.map((tk, tkIdx) => {
+                      const holderLabel = myIsGuest
+                        ? `guest ${tkIdx + 1}`
+                        : (tk.holder_display ? `@${tk.holder_display}` : null);
+                      const label = [tk.product_type, holderLabel]
                         .filter(Boolean)
                         .join(" — ");
                       return (

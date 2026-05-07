@@ -35,6 +35,7 @@ export default function EventPanel({ onState }) {
   const [ticketNumber, setTicketNumber] = useState("");
   const [manuallyApprove, setManuallyApprove] = useState(false);
   const [approvalInfoPlaceholder, setApprovalInfoPlaceholder] = useState("");
+  const [allowGuests, setAllowGuests] = useState(true);
 
   const ticketIdRef = useRef(3);
   const optionIdRef = useRef(100);
@@ -94,8 +95,9 @@ export default function EventPanel({ onState }) {
       enableGroupChat, allowTicketing, isAgeRestricted,
       tickets: normalizedTickets, allowSubgroups, allowInvites,
       fixedTicketCount, ticketNumber, manuallyApprove, approvalInfoPlaceholder,
+      allowGuests,
     });
-  }, [enableGroupChat, allowTicketing, isAgeRestricted, tickets, sameRequiredInfo, allowSubgroups, allowInvites, fixedTicketCount, ticketNumber, manuallyApprove, approvalInfoPlaceholder, onState]);
+  }, [enableGroupChat, allowTicketing, isAgeRestricted, tickets, sameRequiredInfo, allowSubgroups, allowInvites, fixedTicketCount, ticketNumber, manuallyApprove, approvalInfoPlaceholder, allowGuests, onState]);
 
   return (
     <View style={[styles.panel, { backgroundColor: theme.background }]}>
@@ -104,6 +106,7 @@ export default function EventPanel({ onState }) {
 
       {allowTicketing && (
         <>
+          <CheckboxRow label={t("event_allow_guests") || "Allow guest accounts to buy tickets"} checked={allowGuests} onToggle={() => setAllowGuests((v) => !v)} style={{ marginTop: 10 }} theme={theme} isDark={isDark} />
           <CheckboxRow label={t("event_age_restricted") || "+18 only event"} checked={isAgeRestricted} onToggle={() => setIsAgeRestricted((v) => !v)} style={{ marginTop: 10 }} theme={theme} isDark={isDark} />
 
           <CheckboxRow

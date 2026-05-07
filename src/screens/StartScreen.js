@@ -13,6 +13,7 @@ import {
   Modal,
   ActivityIndicator,
   KeyboardAvoidingView,
+  ScrollView,
   Platform,
 } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
@@ -42,6 +43,18 @@ export default function StartScreen({ navigation }) {
     PoppinsBold: require('../../assets/fonts/Poppins-Bold.ttf'),
   });
 
+  const scrollRef = useRef(null);
+  const ticketInputFocusedRef = useRef(false);
+
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      if (ticketInputFocusedRef.current) {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,6 +78,9 @@ export default function StartScreen({ navigation }) {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotDone, setForgotDone] = useState(false);
+
+  const [ticketCode, setTicketCode] = useState('');
+  const [ticketCodeLoading, setTicketCodeLoading] = useState(false);
 
   const [alertConfig, setAlertConfig] = useState(null);
   const showAlert = (title, message) => setAlertConfig({ title, message });
@@ -108,7 +124,7 @@ export default function StartScreen({ navigation }) {
 
   const onLogin = async () => {
     if (!identifier || !password) {
-      showAlert('Missing info', 'Please enter your email/username and password.');
+      showAlert(t('start_missing_info_title'), t('start_missing_info_body'));
       return;
     }
 
@@ -157,7 +173,7 @@ export default function StartScreen({ navigation }) {
         }).catch(() => {});
       }
     } catch (e) {
-      showAlert('Login failed', userErrorMessage(e, 'Try again.'));
+      showAlert(t('start_login_failed_title'), userErrorMessage(e, t('start_try_again')));
     } finally {
       setLoading(false);
     }
@@ -192,7 +208,7 @@ export default function StartScreen({ navigation }) {
       setDeviceOtpVisible(false);
       await completeLogin();
     } catch (e) {
-      showAlert('Verification failed', userErrorMessage(e, 'Please try again.'));
+      showAlert(t('start_verify_failed_title'), userErrorMessage(e, t('start_please_try_again')));
     } finally {
       setVerifyingDevice(false);
     }
@@ -212,7 +228,7 @@ export default function StartScreen({ navigation }) {
       }
       showAlert(t('signup_code_resent_title'), t('signup_code_resent_body'));
     } catch (e) {
-      showAlert('Error', userErrorMessage(e, 'Could not resend code.'));
+      showAlert(t('start_error_title'), userErrorMessage(e, t('start_resend_error_body')));
     } finally {
       setResendingOtp(false);
     }
@@ -248,7 +264,7 @@ export default function StartScreen({ navigation }) {
         }
         throw new Error('Authentication failed. Please try again.');
       } catch (e) {
-        showAlert('Google sign in failed', userErrorMessage(e, 'Please try again.'));
+        showAlert(t('start_google_failed_title'), userErrorMessage(e, t('start_please_try_again')));
       } finally {
         setGoogleLoading(false);
       }
@@ -280,7 +296,7 @@ export default function StartScreen({ navigation }) {
     } catch (e) {
       if (!settled) {
         settled = true;
-        showAlert('Google sign in failed', userErrorMessage(e, 'Please try again.'));
+        showAlert(t('start_google_failed_title'), userErrorMessage(e, t('start_please_try_again')));
         setGoogleLoading(false);
       }
     }
@@ -319,7 +335,7 @@ export default function StartScreen({ navigation }) {
       // Auth state change in AppNavigator handles navigation automatically.
     } catch (e) {
       if (e.code !== 'ERR_REQUEST_CANCELED') {
-        showAlert('Apple sign in failed', userErrorMessage(e, 'Please try again.'));
+        showAlert(t('start_apple_failed_title'), userErrorMessage(e, t('start_please_try_again')));
       }
     } finally {
       setAppleLoading(false);
@@ -338,15 +354,9 @@ export default function StartScreen({ navigation }) {
       if (!data?.allowed) {
         const reason = data?.reason;
         if (reason === 'device_limit') {
-          showAlert(
-            'Account limit reached',
-            'This device already has 2 Alba accounts. You cannot create another account from this device.'
-          );
+          showAlert(t('start_account_limit_title'), t('start_account_limit_device_body'));
         } else {
-          showAlert(
-            'Account limit reached',
-            'Too many accounts have been created from your network. You cannot create another account at this time.'
-          );
+          showAlert(t('start_account_limit_title'), t('start_account_limit_network_body'));
         }
         return;
       }
@@ -363,7 +373,7 @@ export default function StartScreen({ navigation }) {
   const onForgotPassword = async () => {
     const email = forgotEmail.trim();
     if (!email) {
-      showAlert('Missing email', 'Please enter your email address.');
+      showAlert(t('start_missing_email_title'), t('start_missing_email_body'));
       return;
     }
     setForgotLoading(true);
@@ -385,98 +395,117 @@ export default function StartScreen({ navigation }) {
       }
       setForgotDone(true);
     } catch (e) {
-      showAlert('Error', userErrorMessage(e, 'Could not send reset email. Please try again.'));
+      showAlert(t('start_error_title'), userErrorMessage(e, t('start_reset_error_body')));
     } finally {
       setForgotLoading(false);
     }
   };
 
+  // ── Ticket code redemption ────────────────────────────────────────────────
+
+  const handleTicketCode = async (raw) => {
+    const code = raw.trim().toUpperCase();
+    if (code.length !== 19) return;
+    setTicketCodeLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('redeem-guest-ticket', {
+        body: { code },
+      });
+      if (error) throw error;
+      if (!data?.ok) {
+        showAlert(
+          'Redeem failed [debug]',
+          'reason: ' + (data?.reason ?? 'none') + '\ndata: ' + JSON.stringify(data)
+        );
+        return;
+      }
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+      if (sessionError) throw sessionError;
+      setTicketCode('');
+      navigation.getParent()?.reset({ index: 0, routes: [{ name: 'App' }] });
+    } catch (e) {
+      showAlert(
+        'Redeem error [debug]',
+        (e?.message ?? String(e)) + '\n\ndata: ' + JSON.stringify(e)
+      );
+    } finally {
+      setTicketCodeLoading(false);
+    }
+  };
+
+  const onTicketCodeChange = (raw) => {
+    // Auto-insert dashes: XXXX-XXXX-XXXX-XXXX
+    const stripped = raw.replace(/-/g, '').toUpperCase().slice(0, 16);
+    let formatted = '';
+    for (let i = 0; i < stripped.length; i++) {
+      if (i > 0 && i % 4 === 0) formatted += '-';
+      formatted += stripped[i];
+    }
+    setTicketCode(formatted);
+    if (formatted.length === 19) handleTicketCode(formatted);
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <View style={[styles.container, { backgroundColor: isDark ? theme.gray : '#FFFFFF' }]}>
+    <KeyboardAvoidingView
+      style={[styles.kav, { backgroundColor: isDark ? theme.gray : '#FFFFFF' }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+
+    >
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={[styles.container, { backgroundColor: isDark ? theme.gray : '#FFFFFF' }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
-        <Image source={require('../../assets/icon.png')} style={styles.logo} />
+        <Image source={isDark ? require('../../assets/icon_white.png') : require('../../assets/icon.png')} style={styles.logo} />
 
         <TextInput
-          style={[styles.input, { borderColor: accent, color: accent }]}
-          placeholder="email or username"
-          placeholderTextColor={accent}
+          style={[styles.input, { backgroundColor: isDark ? '#555' : '#00A9FF', color: '#fff' }]}
+          placeholder={t('start_identifier_placeholder')}
+          placeholderTextColor="rgba(255,255,255,0.7)"
           autoCapitalize="none"
-          value={identifier}
+          autoCorrect={false}
           onChangeText={setIdentifier}
         />
 
         <TextInput
-          style={[styles.input, { borderColor: accent, color: accent }]}
-          placeholder="password"
-          placeholderTextColor={accent}
+          style={[styles.input, { backgroundColor: isDark ? '#555' : '#00A9FF', color: '#fff' }]}
+          placeholder={t('start_password_placeholder')}
+          placeholderTextColor="rgba(255,255,255,0.7)"
           secureTextEntry
-          value={password}
           onChangeText={setPassword}
         />
 
-        <TouchableOpacity
-          onPress={onLogin}
-          disabled={loading}
-          style={[
-            styles.nextBtn,
-            isDark && { backgroundColor: theme.gray, borderWidth: 1, borderColor: '#FFFFFF' },
-          ]}
-        >
-          <Text style={styles.btnText}>
-            {loading ? 'logging in…' : 'log in'}
+        <TouchableOpacity onPress={onLogin} disabled={loading} style={[styles.nextBtn, { marginTop: 20, borderColor: isDark ? '#FFFFFF' : '#00A9FF' }]}>
+          <Text style={[styles.btnText, { color: isDark ? '#FFFFFF' : '#00A9FF' }]}>
+            {loading ? t('start_logging_in') : t('start_login_btn')}
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={handleGoogleSignIn}
-          disabled={googleLoading}
-          style={[
-            styles.googleBtn,
-            isDark ? { borderColor: '#FFFFFF' } : { borderColor: '#00A9FF' },
-            { opacity: googleLoading ? 0.7 : 1 },
-          ]}
-        >
-          {googleLoading ? (
-            <ActivityIndicator color={accent} size="small" />
-          ) : (
-            <>
-              <Text style={[styles.socialIcon, styles.googleG, { color: accent }]}>G</Text>
-              <Text style={[styles.googleBtnText, { color: accent }]}>
-                continue with google
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        {Platform.OS === 'ios' && (
-          <TouchableOpacity
-            onPress={handleAppleSignIn}
-            disabled={appleLoading}
-            style={[
-              styles.googleBtn,
-              isDark ? { borderColor: '#FFFFFF' } : { borderColor: '#00A9FF' },
-              { opacity: appleLoading ? 0.7 : 1 },
-            ]}
-          >
-            {appleLoading ? (
-              <ActivityIndicator color={accent} size="small" />
-            ) : (
-              <>
-                <Ionicons name="logo-apple" size={18} color={accent} style={styles.socialIcon} />
-                <Text style={[styles.googleBtnText, { color: accent }]}>
-                  continue with apple
-                </Text>
-              </>
-            )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 24, marginTop: 20 }}>
+          <TouchableOpacity onPress={handleGoogleSignIn} disabled={googleLoading} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: googleLoading ? 0.7 : 1 }}>
+            {googleLoading
+              ? <ActivityIndicator color={accent} size="small" />
+              : <Ionicons name="logo-google" size={32} color={accent} />}
           </TouchableOpacity>
-        )}
+          {Platform.OS === 'ios' && (
+            <TouchableOpacity onPress={handleAppleSignIn} disabled={appleLoading} style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', opacity: appleLoading ? 0.7 : 1 }}>
+              {appleLoading
+                ? <ActivityIndicator color={accent} size="small" />
+                : <Ionicons name="logo-apple" size={36} color={accent} style={{ marginTop: -5 }} />}
+            </TouchableOpacity>
+          )}
+        </View>
 
         <Text style={{ marginTop: 24, color: accent, fontFamily: 'Poppins' }}>
-          don't have an account?{' '}
+          {t('start_no_account')}{' '}
           {signUpCheckLoading ? (
             <ActivityIndicator size="small" color={accent} style={{ marginLeft: 4 }} />
           ) : (
@@ -484,7 +513,7 @@ export default function StartScreen({ navigation }) {
               style={[styles.link, { color: accent }]}
               onPress={onSignUpPress}
             >
-              sign up
+              {t('start_sign_up')}
             </Text>
           )}
         </Text>
@@ -493,8 +522,35 @@ export default function StartScreen({ navigation }) {
           onPress={() => { setForgotEmail(''); setForgotDone(false); setForgotVisible(true); }}
           style={{ marginTop: 14 }}
         >
-          <Text style={[styles.forgotLink, { color: accent }]}>forgot your password?</Text>
+          <Text style={[styles.forgotLink, { color: accent }]}>{t('start_forgot_password')}</Text>
         </TouchableOpacity>
+
+        {/* ── Ticket code section ──────────────────────────────────────── */}
+        <View style={styles.ticketCodeSection}>
+          <Text style={styles.ticketCodeHint}>
+            {t('start_ticket_code_hint')}
+          </Text>
+          <TextInput
+            style={styles.ticketCodeInput}
+            placeholder={t('start_ticket_code_placeholder')}
+            placeholderTextColor="#aaa"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            value={ticketCode}
+            onChangeText={onTicketCodeChange}
+            onFocus={() => { ticketInputFocusedRef.current = true; }}
+            onBlur={() => { ticketInputFocusedRef.current = false; }}
+            onSubmitEditing={() => handleTicketCode(ticketCode)}
+            editable={!ticketCodeLoading}
+            maxLength={19}
+          />
+          {ticketCodeLoading && (
+            <Text style={styles.ticketCodeHint}>
+              {t('start_ticket_code_validating')}
+            </Text>
+          )}
+        </View>
+
 
         {/* ── Alert modal ──────────────────────────────────────────────── */}
         <Modal
@@ -512,7 +568,7 @@ export default function StartScreen({ navigation }) {
                 {alertConfig?.message}
               </Text>
               <TouchableOpacity style={styles.alertBtn} onPress={() => setAlertConfig(null)}>
-                <Text style={styles.alertBtnText}>OK</Text>
+                <Text style={styles.alertBtnText}>{t('start_alert_ok')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -562,7 +618,7 @@ export default function StartScreen({ navigation }) {
                   disabled={verifyingDevice}
                 >
                   <Text style={[styles.forgotBtnText, { color: isDark ? '#aaa' : '#6F7D95' }]}>
-                    Cancel
+                    {t('start_cancel')}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -611,22 +667,22 @@ export default function StartScreen({ navigation }) {
                     <Feather name="x" size={20} color={isDark ? '#aaa' : '#6F7D95'} />
                   </TouchableOpacity>
                   <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
-                    Check your inbox
+                    {t('start_forgot_inbox_title')}
                   </Text>
                   <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
-                    If that email is registered with Alba, you'll receive a temporary password shortly. Use it to log in, then change it from Settings.
+                    {t('start_forgot_inbox_body')}
                   </Text>
                   <TouchableOpacity style={styles.forgotBtn} onPress={() => setForgotVisible(false)}>
-                    <Text style={styles.forgotBtnText}>Done</Text>
+                    <Text style={styles.forgotBtnText}>{t('start_forgot_done_btn')}</Text>
                   </TouchableOpacity>
                 </>
               ) : (
                 <>
                   <Text style={[styles.forgotTitle, { color: isDark ? '#FFFFFF' : '#111' }]}>
-                    Reset your password
+                    {t('start_forgot_reset_title')}
                   </Text>
                   <Text style={[styles.forgotCaption, { color: isDark ? '#aaa' : '#555' }]}>
-                    Enter the email address associated with your Alba account. We'll send you a temporary password you can use to log back in.
+                    {t('start_forgot_reset_body')}
                   </Text>
                   <TextInput
                     style={[
@@ -637,7 +693,7 @@ export default function StartScreen({ navigation }) {
                         backgroundColor: isDark ? '#1a1a1a' : '#f5f6fa',
                       },
                     ]}
-                    placeholder="your email"
+                    placeholder={t('start_forgot_email_placeholder')}
                     placeholderTextColor={isDark ? '#888' : '#9fa5b3'}
                     autoCapitalize="none"
                     keyboardType="email-address"
@@ -652,7 +708,7 @@ export default function StartScreen({ navigation }) {
                       disabled={forgotLoading}
                     >
                       <Text style={[styles.forgotBtnText, { color: isDark ? '#aaa' : '#6F7D95' }]}>
-                        Cancel
+                        {t('start_cancel')}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -662,7 +718,7 @@ export default function StartScreen({ navigation }) {
                     >
                       {forgotLoading
                         ? <ActivityIndicator color="#fff" />
-                        : <Text style={styles.forgotBtnText}>Send</Text>}
+                        : <Text style={styles.forgotBtnText}>{t('start_forgot_send_btn')}</Text>}
                     </TouchableOpacity>
                   </View>
                 </>
@@ -670,17 +726,23 @@ export default function StartScreen({ navigation }) {
             </View>
           </KeyboardAvoidingView>
         </Modal>
-      </View>
-    </TouchableWithoutFeedback>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  kav: {
+    flex: 1,
+  },
   container: {
-    height,
+    flexGrow: 1,
+    minHeight: height,
     alignItems: 'center',
     paddingHorizontal: 24,
     justifyContent: 'center',
+    paddingTop: 40,
+    paddingBottom: 0,
   },
   backBtn: {
     position: 'absolute',
@@ -694,30 +756,30 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   input: {
-    width: '78%',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    alignSelf: 'center',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 20,
     fontFamily: 'Poppins',
     marginBottom: 14,
   },
   nextBtn: {
-    backgroundColor: '#00A9FF',
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 40,
+    borderRadius: 100,
+    borderColor: '#00A9FF',
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 18,
     marginTop: 20,
+    marginBottom: 10
   },
   btnText: {
     color: '#FFFFFF',
     fontFamily: 'Poppins',
-    fontSize: 16,
+    fontSize: 15,
   },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
     borderRadius: 8,
     paddingVertical: 11,
     paddingHorizontal: 28,
@@ -815,7 +877,6 @@ const styles = StyleSheet.create({
   },
   forgotInput: {
     height: 44,
-    borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 12,
     fontFamily: 'Poppins',
@@ -824,7 +885,6 @@ const styles = StyleSheet.create({
   },
   otpInput: {
     height: 56,
-    borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 12,
     fontFamily: 'Poppins',
@@ -847,12 +907,35 @@ const styles = StyleSheet.create({
   },
   forgotCancelBtn: {
     backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: '#d0d7e2',
   },
   forgotBtnText: {
     fontFamily: 'PoppinsBold',
     fontSize: 14,
     color: '#fff',
+  },
+  ticketCodeSection: {
+    marginTop: 36,
+    marginBottom: 0,
+    alignItems: 'center',
+    width: '78%',
+  },
+  ticketCodeHint: {
+    fontFamily: 'Poppins',
+    fontSize: 12,
+    color: '#aaa',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  ticketCodeInput: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#aaa',
+    paddingVertical: 6,
+    paddingHorizontal: 18,
+    fontFamily: 'Poppins',
+    fontSize: 15,
+    color: '#aaa',
+    textAlign: 'center',
   },
 });

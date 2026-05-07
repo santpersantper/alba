@@ -81,7 +81,7 @@ async function uploadGroupImage(localUri, supabase) {
 const isVideoUrl = (u = "") =>
   /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(String(u).split("?")[0] || "");
 
-function Header({ title, onBack, onNewGroup, theme }) {
+function Header({ onBack, onNewGroup, theme, isDark, q, onSearchChange }) {
   return (
     <View
       style={[
@@ -93,20 +93,25 @@ function Header({ title, onBack, onNewGroup, theme }) {
         },
       ]}
     >
-      <TouchableOpacity onPress={onBack} style={styles.backBtn} hitSlop={8}>
-        <Feather name="chevron-left" size={26} color={theme.text} />
+      <TouchableOpacity onPress={onBack} style={styles.headerIconBtn} hitSlop={8}>
+        <Feather name="chevron-left" size={28} color={theme.text} />
       </TouchableOpacity>
 
-      <View style={styles.headerCenter}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.title, { color: theme.text }]} numberOfLines={1}>
-            {title}
-          </Text>
-        </View>
+      <View style={[styles.headerCenter, styles.headerSearchWrap, { borderColor: theme.text, marginHorizontal: 8 }]}>
+        <Feather name="search" size={16} color="#A0A4AE" />
+        <TextInput
+          style={[styles.headerSearchInput, { color: theme.text }]}
+          placeholder="Search"
+          placeholderTextColor="#A0A4AE"
+          value={q}
+          onChangeText={onSearchChange}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
       </View>
 
-      <TouchableOpacity onPress={onNewGroup} hitSlop={8} style={{ paddingLeft: 8 }}>
-        <Feather name="plus-circle" size={24} color={theme.text} />
+      <TouchableOpacity onPress={onNewGroup} hitSlop={8} style={styles.headerIconBtn}>
+        <Feather name="plus" size={24} color={theme.text} />
       </TouchableOpacity>
     </View>
   );
@@ -138,6 +143,11 @@ export default function ChatListScreen({ navigation }) {
   const [ready, setReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [chatMenu, setChatMenu] = useState(null); // { item } | null
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState(null);
+  const [deletingChat, setDeletingChat] = useState(false);
+  const [reportChatItem, setReportChatItem] = useState(null);
+  const [reportChatText, setReportChatText] = useState("");
+  const [reportChatSending, setReportChatSending] = useState(false);
   const [mutedGroups, setMutedGroups] = useState([]); // group IDs the current user has muted
   const [muteModalVisible, setMuteModalVisible] = useState(false);
   const [pendingMuteItem, setPendingMuteItem] = useState(null); // item captured when mute modal opens
@@ -287,6 +297,9 @@ export default function ChatListScreen({ navigation }) {
     for (const th of threads || []) {
       const chatId = th.chat_id;
       const isGroup = !!th.is_group;
+
+      // Don't show DMs with no messages — only groups show up with no activity
+      if (!isGroup && !th.last_sent_at) continue;
 
       const dmMeta = !isGroup ? dmMap[th.peer_profile_id] || {} : {};
       const groupMeta = isGroup ? groupMap[chatId] || {} : {};
@@ -594,96 +607,8 @@ export default function ChatListScreen({ navigation }) {
   const noMatchText = t("chat_search_no_matching_users") || "No matching users nearby";
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
-      <Header title={t("chats_title")} onBack={onPressBack} onNewGroup={openNewGroupModal} theme={theme} />
-
-      <View
-        style={[
-          styles.searchWrap,
-          {
-            backgroundColor: isDark ? "#1f1f1f" : "#F4F6F9",
-            borderColor: isDark ? "#444" : "transparent",
-          },
-        ]}
-      >
-        <Feather name="search" size={18} color={isDark ? "#A0A4AE" : "#B8B8B8"} />
-        <TextInput
-          style={[styles.searchInput, { color: theme.text }]}
-          placeholder="Search"
-          placeholderTextColor={isDark ? "#A0A4AE" : "#B8B8B8"}
-          value={q}
-          onChangeText={handleSearchChange}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
-
-      {isSearching && (
-        <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
-          <View style={styles.membersHeaderRow}>
-            <Text style={[styles.membersTitle, { color: theme.text }]}>
-              {t("chat_search_people_title") || "People near you"}
-            </Text>
-            <Text style={[styles.membersCount, { color: theme.subtleText || theme.text }]}>
-              {searchLoading ? "…" : searchResults.length}
-            </Text>
-          </View>
-
-          <View
-            style={[
-              styles.membersList,
-              { borderColor: theme.border, backgroundColor: theme.card },
-            ]}
-          >
-            {searchLoading ? (
-              <View style={{ paddingVertical: 12, paddingHorizontal: 8 }}>
-                <Text style={{ fontFamily: "Poppins", fontSize: 14, textAlign: "center", color: theme.subtleText || theme.text }}>
-                  {t("loading_text") || "Loading..."}
-                </Text>
-              </View>
-            ) : searchResults.length > 0 ? (
-              <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 4 }}>
-                {searchResults.map((item) => {
-                  const displayName = item.name || item.username || "User";
-                  const username = item.username || "";
-                  const key = item.id?.toString() || username;
-
-                  return (
-                    <View key={key} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
-                      {item.avatar_url ? (
-                        <Image source={{ uri: item.avatar_url }} style={styles.memberAvatar} />
-                      ) : (
-                        <View style={[styles.memberAvatar, { backgroundColor: theme.card, alignItems: "center", justifyContent: "center" }]}>
-                          <Text style={[styles.memberInitials, { color: theme.text }]}>
-                            {displayName[0]?.toUpperCase() || "?"}
-                          </Text>
-                        </View>
-                      )}
-
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.memberName, { color: theme.text }]}>{displayName}</Text>
-                        {!!username && (
-                          <Text style={[styles.memberUsername, { color: theme.subtleText || theme.text }]}>@{username}</Text>
-                        )}
-                      </View>
-
-                      <TouchableOpacity style={styles.subgroupButton} onPress={() => handleMessageUser(item)}>
-                        <Text style={styles.subgroupButtonText}>{t("chat_search_message_button") || "Message"}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            ) : (
-              <View style={{ paddingVertical: 12, paddingHorizontal: 8 }}>
-                <Text style={{ fontFamily: "Poppins", fontSize: 14, textAlign: "center", color: theme.subtleText || theme.text }}>
-                  {noMatchText}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-      )}
+    <SafeAreaView edges={["top", "left", "right"]} style={[styles.safe, { backgroundColor: theme.gray }]}>
+      <Header onBack={onPressBack} onNewGroup={openNewGroupModal} theme={theme} isDark={isDark} q={q} onSearchChange={handleSearchChange} />
 
       {/* Diffusion List — compose box (sender) and received cards (recipient) */}
       <DiffusionComposeBox
@@ -694,6 +619,7 @@ export default function ChatListScreen({ navigation }) {
         onMessageSent={() => updatePrefs({ premiumDiffusionList: false })}
       />
 
+      <View style={{ flex: 1, position: "relative" }}>
       {!ready ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator />
@@ -725,13 +651,64 @@ export default function ChatListScreen({ navigation }) {
               onLongPress={() => setChatMenu({ item })}
             />
           )}
-          ItemSeparatorComponent={() => <View style={[styles.sep, { backgroundColor: theme.border }]} />}
+
           contentContainerStyle={{ paddingBottom: 16 }}
           showsVerticalScrollIndicator={false}
           onRefresh={handleRefresh}
           refreshing={refreshing}
         />
       )}
+
+      {/* Search results overlay */}
+      {isSearching && (
+        <View style={[styles.searchOverlay, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <View style={styles.membersHeaderRow}>
+            <Text style={[styles.membersTitle, { color: theme.text }]}>
+              {t("chat_search_people_title") || "People near you"}
+            </Text>
+            <Text style={[styles.membersCount, { color: theme.subtleText || theme.text }]}>
+              {searchResults.length || (searchLoading ? "…" : 0)}
+            </Text>
+          </View>
+          {searchResults.length > 0 ? (
+            <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 4 }}>
+              {searchResults.map((item) => {
+                const displayName = item.name || item.username || "User";
+                const username = item.username || "";
+                const key = item.id?.toString() || username;
+                return (
+                  <View key={key} style={[styles.memberRow, { borderBottomColor: theme.border }]}>
+                    {item.avatar_url ? (
+                      <Image source={{ uri: item.avatar_url }} style={styles.memberAvatar} />
+                    ) : (
+                      <View style={[styles.memberAvatar, { backgroundColor: theme.gray, alignItems: "center", justifyContent: "center" }]}>
+                        <Text style={[styles.memberInitials, { color: theme.text }]}>{displayName[0]?.toUpperCase() || "?"}</Text>
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.memberName, { color: theme.text }]}>{displayName}</Text>
+                      {!!username && <Text style={[styles.memberUsername, { color: theme.subtleText || theme.text }]}>@{username}</Text>}
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 8, marginRight: 8 }}>
+                      <TouchableOpacity style={styles.searchIconBtn} onPress={() => handleMessageUser(item)}>
+                        <Feather name="message-circle" size={16} color="#59A7FF" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          ) : searchLoading ? null : (
+            <View style={{ paddingVertical: 12, paddingHorizontal: 8 }}>
+              <Text style={{ fontFamily: "Poppins", fontSize: 14, textAlign: "center", color: theme.subtleText || theme.text }}>
+                {t("chat_search_no_matching_users") || "No matching users nearby"}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+      </View>
+
       {/* Chat context menu modal */}
       <Modal
         visible={!!chatMenu}
@@ -770,26 +747,11 @@ export default function ChatListScreen({ navigation }) {
             {/* Report */}
             <TouchableOpacity
               style={styles.chatMenuItem}
-              onPress={async () => {
+              onPress={() => {
                 const item = chatMenu?.item;
                 setChatMenu(null);
-                try {
-                  const convLabel = item?.type === "group"
-                    ? `Group: ${item?.name}`
-                    : `DM with ${item?.name}`;
-                  await supabase.functions.invoke("send-report", {
-                    body: {
-                      type: "conversation",
-                      reported_by_id: currentUserId || null,
-                      reported_by_username: myUsername || null,
-                      context: {
-                        chat_id: item?.chatId || null,
-                        conversation_label: convLabel,
-                      },
-                    },
-                  });
-                } catch {}
-                Alert.alert("Reported", "Thanks, we'll review this conversation.");
+                setReportChatText("");
+                setReportChatItem(item);
               }}
             >
               <Feather name="alert-triangle" size={18} color={isDark ? "#fff" : "#333"} style={{ marginRight: 12 }} />
@@ -804,63 +766,7 @@ export default function ChatListScreen({ navigation }) {
               onPress={() => {
                 const item = chatMenu?.item;
                 setChatMenu(null);
-                Alert.alert(
-                  "Delete chat",
-                  `Delete your conversation with ${item?.name}? This removes all your messages permanently.`,
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Delete",
-                      style: "destructive",
-                      onPress: async () => {
-                        try {
-                          if (!currentUserId) return;
-                          // Delete all my message rows for this chat
-                          await supabase
-                            .from("messages")
-                            .delete()
-                            .eq("chat", item?.chatId)
-                            .eq("owner_id", currentUserId);
-                          // Delete the thread entry
-                          await supabase
-                            .from("chat_threads")
-                            .delete()
-                            .eq("chat_id", item?.chatId)
-                            .eq("owner_id", currentUserId);
-                          // For groups: leave by removing self from members array.
-                          // This covers groups with no messages (no chat_threads row)
-                          // so the group stops reappearing after app restart.
-                          if (item?.type === "group" && myUsername) {
-                            const { data: grp } = await supabase
-                              .from("groups")
-                              .select("members")
-                              .eq("id", item?.chatId)
-                              .maybeSingle();
-                            if (grp?.members) {
-                              await supabase
-                                .from("groups")
-                                .update({ members: grp.members.filter((u) => u !== myUsername) })
-                                .eq("id", item?.chatId);
-                            }
-                          }
-                          // Remove from cache + UI — deletedIds in chatListCache ensures
-                          // this thread never comes back even if DB refresh re-fetches it
-                          removeChatFromCache(item?.chatId, currentUserId);
-                          setThreads((prev) => prev.filter((t) => String(t.chat_id) !== String(item?.chatId)));
-                          if (item?.type === "group") {
-                            setGroupMap((prev) => {
-                              const next = { ...prev };
-                              delete next[item?.chatId];
-                              return next;
-                            });
-                          }
-                        } catch (e) {
-                          Alert.alert("Error", "Could not delete chat.");
-                        }
-                      },
-                    },
-                  ]
-                );
+                setDeleteConfirmItem(item);
               }}
             >
               <Feather name="trash-2" size={18} color="#d23b3b" style={{ marginRight: 12 }} />
@@ -874,6 +780,108 @@ export default function ChatListScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Delete chat confirmation modal */}
+      <Modal visible={!!deleteConfirmItem} transparent animationType="fade" onRequestClose={() => setDeleteConfirmItem(null)}>
+        <View style={styles.albaModalOverlay}>
+          <View style={[styles.albaModalCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.albaModalTitle, { color: isDark ? "#fff" : "#111" }]}>Delete chat</Text>
+            <Text style={[styles.albaModalBody, { color: isDark ? "#ccc" : "#444" }]}>
+              {`Delete your conversation with ${deleteConfirmItem?.name}? This removes all your messages permanently.`}
+            </Text>
+            <View style={styles.albaModalRow}>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { borderWidth: 1, borderColor: "#3D8BFF" }]}
+                onPress={() => setDeleteConfirmItem(null)}
+                disabled={deletingChat}
+              >
+                <Text style={[styles.albaModalBtnText, { color: "#3D8BFF" }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { backgroundColor: "#d23b3b", opacity: deletingChat ? 0.6 : 1 }]}
+                disabled={deletingChat}
+                onPress={async () => {
+                  const item = deleteConfirmItem;
+                  if (!currentUserId || !item) return;
+                  setDeletingChat(true);
+                  try {
+                    await supabase.from("messages").delete().eq("chat", item.chatId).eq("owner_id", currentUserId);
+                    await supabase.from("chat_threads").delete().eq("chat_id", item.chatId).eq("owner_id", currentUserId);
+                    if (item.type === "group" && myUsername) {
+                      const { data: grp } = await supabase.from("groups").select("members").eq("id", item.chatId).maybeSingle();
+                      if (grp?.members) {
+                        await supabase.from("groups").update({ members: grp.members.filter((u) => u !== myUsername) }).eq("id", item.chatId);
+                      }
+                    }
+                    removeChatFromCache(item.chatId, currentUserId);
+                    setThreads((prev) => prev.filter((t) => String(t.chat_id) !== String(item.chatId)));
+                    if (item.type === "group") setGroupMap((prev) => { const next = { ...prev }; delete next[item.chatId]; return next; });
+                    setDeleteConfirmItem(null);
+                  } catch {
+                    setDeleteConfirmItem(null);
+                  } finally {
+                    setDeletingChat(false);
+                  }
+                }}
+              >
+                {deletingChat ? <ActivityIndicator color="#fff" size="small" /> : <Text style={[styles.albaModalBtnText, { color: "#fff" }]}>Delete</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Report chat modal */}
+      <Modal visible={!!reportChatItem} transparent animationType="fade" onRequestClose={() => setReportChatItem(null)}>
+        <View style={styles.albaModalOverlay}>
+          <View style={[styles.albaModalCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.albaModalTitle, { color: isDark ? "#fff" : "#111" }]}>{t("menu_report") || "Report"}</Text>
+            <TextInput
+              style={[styles.albaModalInput, { borderColor: isDark ? "#444" : "#E5E7EB", color: isDark ? "#fff" : "#111" }]}
+              placeholder={t("report_group_placeholder") || "Tell us briefly what is wrong"}
+              placeholderTextColor={isDark ? "#777" : "#9CA3AF"}
+              value={reportChatText}
+              onChangeText={setReportChatText}
+              multiline
+              maxLength={300}
+            />
+            <View style={styles.albaModalRow}>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { borderWidth: 1, borderColor: isDark ? "#555" : "#ccc" }]}
+                onPress={() => setReportChatItem(null)}
+                disabled={reportChatSending}
+              >
+                <Text style={[styles.albaModalBtnText, { color: isDark ? "#ccc" : "#666" }]}>{t("confirm_no") || "Cancel"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.albaModalBtn, { backgroundColor: "#3D8BFF", opacity: (reportChatText.trim() && !reportChatSending) ? 1 : 0.5 }]}
+                disabled={!reportChatText.trim() || reportChatSending}
+                onPress={async () => {
+                  const item = reportChatItem;
+                  setReportChatSending(true);
+                  try {
+                    const convLabel = item?.type === "group" ? `Group: ${item?.name}` : `DM with ${item?.name}`;
+                    await supabase.functions.invoke("send-report", {
+                      body: {
+                        type: "conversation",
+                        reported_by_id: currentUserId || null,
+                        reported_by_username: myUsername || null,
+                        reason: reportChatText.trim(),
+                        context: { chat_id: item?.chatId || null, conversation_label: convLabel },
+                      },
+                    });
+                  } catch {}
+                  setReportChatSending(false);
+                  setReportChatItem(null);
+                  setReportChatText("");
+                }}
+              >
+                {reportChatSending ? <ActivityIndicator color="#fff" size="small" /> : <Text style={[styles.albaModalBtnText, { color: "#fff" }]}>{t("confirm_yes") || "Send"}</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* New Group modal */}
@@ -1027,12 +1035,14 @@ const styles = StyleSheet.create({
   headerWrap: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 8,
+    paddingVertical: 8,
   },
   backBtn: { paddingRight: 4, paddingVertical: 4 },
+  headerIconBtn: { width: 48, alignItems: "center", justifyContent: "center" },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
+  headerSearchWrap: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 4, height: 34, backgroundColor: "transparent" },
+  searchOverlay: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 20, elevation: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderRadius: 12, marginHorizontal: 16, marginTop: 4, maxHeight: 320, paddingHorizontal: 12, paddingTop: 8, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  headerSearchInput: { flex: 1, fontSize: 14, fontFamily: "Poppins", includeFontPadding: false, textAlignVertical: "center", paddingVertical: 0 },
   menuBtn: { paddingLeft: 8, paddingVertical: 4 },
 
   title: { fontSize: 15.5, fontFamily: "PoppinsBold", alignItems: "center" },
@@ -1094,6 +1104,66 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   subgroupButtonText: { fontFamily: "PoppinsBold", fontSize: 13, color: "#ffffff" },
+  searchIconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1.5,
+    borderColor: "#59A7FF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  albaModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  albaModalCard: {
+    width: "100%",
+    borderRadius: 16,
+    padding: 24,
+    elevation: 6,
+  },
+  albaModalTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 17,
+    marginBottom: 8,
+  },
+  albaModalBody: {
+    fontFamily: "Poppins",
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  albaModalRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  albaModalBtn: {
+    flex: 1,
+    height: 42,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  albaModalBtnText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 14,
+  },
+  albaModalInput: {
+    fontFamily: "Poppins",
+    fontSize: 14,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+    minHeight: 80,
+    textAlignVertical: "top",
+  },
 });
 
 const ngStyles = StyleSheet.create({

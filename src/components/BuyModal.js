@@ -10,14 +10,18 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
+  Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Calendar from "expo-calendar";
 import { decode } from "base-64";
 import { supabase } from "../lib/supabase";
 import { useAlbaTheme } from "../theme/ThemeContext";
 import { useAlbaLanguage } from "../theme/LanguageContext";
+import { useGuest } from "../theme/GuestContext";
 import { posthog } from "../lib/analytics";
 import * as Crypto from "expo-crypto";
 import {
@@ -71,11 +75,13 @@ const looksLikeUuid = (s) =>
 export default function BuyModal({ visible, onClose, postId }) {
   const { theme, isDark } = useAlbaTheme();
   const { t } = useAlbaLanguage();
+  const { isGuest } = useGuest();
 
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
-  const showFeedback = (title, message, onOk) =>
-    setFeedback({ title, message, onOk: onOk || null });
+  const [postCalendarData, setPostCalendarData] = useState(null);
+  const showFeedback = (title, message, onOk, showCalendar = false) =>
+    setFeedback({ title, message, onOk: onOk || null, showCalendar });
   const [types, setTypes] = useState([]);
   const [prices, setPrices] = useState([]);
   const [bools, setBools] = useState([]);
@@ -170,7 +176,7 @@ export default function BuyModal({ visible, onClose, postId }) {
         let data, fetchError;
         ({ data, error: fetchError } = await supabase
           .from(POSTS_TABLE)
-          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted, manually_approve_attendees, ticket_approval_info, is_ticket_number_fixed, ticket_number, pending_ticket_requests, user")
+          .select("type, product_types, product_prices, product_booleans, required_info, product_notes, product_required_info, product_options, is_age_restricted, manually_approve_attendees, ticket_approval_info, is_ticket_number_fixed, ticket_number, pending_ticket_requests, user, title, date, time, end_date, end_time, location")
           .eq("id", postId)
           .maybeSingle());
 
@@ -224,6 +230,14 @@ export default function BuyModal({ visible, onClose, postId }) {
         setApprovalPhoto(null);
         setFreeConfirmationVisible(false);
         setOrganizerUser(data.user || null);
+        setPostCalendarData({
+          title: data.title || "",
+          date: data.date || "",
+          time: String(data.time || "").slice(0, 5),
+          end_date: data.end_date || "",
+          end_time: String(data.end_time || "").slice(0, 5),
+          location: data.location || "",
+        });
 
         if (manApprove && buyerProfile?.username) {
           const uname = String(buyerProfile.username).toLowerCase();
@@ -609,30 +623,47 @@ export default function BuyModal({ visible, onClose, postId }) {
   const validateBeforePay = (units) => {
     if (!postId) return "Missing postId.";
     if (!units.length) return "Select at least one option.";
+    if (isGuest) return null; // guests skip required_info validation
 
     for (const u of units) {
       const rInfo = getRequiredInfoForIndex(u.productIndex);
-      const nameField = rInfo.find(fieldIsName);
-      if (nameField && !u.isMe && !u.usernameHint) {
-        const n = (u.manual?.[nameField] || "").toString().trim();
-        if (!n) return "Please fill in the name for each attendee (or add their @username).";
+      if (!rInfo.length) continue;
+
+      if (u.isMe) {
+        // Basic fields come from the user's profile automatically
+        for (const f of rInfo) {
+          const k = normKey(f);
+          if (k === "name" || k === "nome") {
+            if (!String(myProfile?.name || "").trim())
+              return "Please set your name in your profile to buy this ticket.";
+          } else if (k === "age" || k === "età" || k === "eta") {
+            if (myProfile?.age == null)
+              return "Please set your age in your profile to buy this ticket.";
+          } else if (k === "gender" || k === "sex") {
+            if (!String(myProfile?.gender || "").trim())
+              return "Please set your gender in your profile to buy this ticket.";
+          } else {
+            // Extra field: profile value takes precedence, then manually entered
+            const fromProf = String(profileValueForField(f, myProfile) || "").trim();
+            if (!fromProf) {
+              const state = items[u.productIndex] || {};
+              const det = state.details || {};
+              const fromDet = String(det[`ME__${f}`] || "").trim();
+              if (!fromDet) return `Please fill in: ${f}.`;
+            }
+          }
+        }
+      } else if (!u.usernameHint) {
+        // Manual entry for someone else — ALL required fields must be filled
+        for (const f of rInfo) {
+          const v = String(u.manual?.[f] || "").trim();
+          if (!v)
+            return `Please fill in "${f}" for each attendee (or add their Alba @username).`;
+        }
       }
+      // If an Alba username was provided, their profile will supply the info — skip validation
     }
 
-    for (const u of units) {
-      if (!u.isMe) continue;
-      const rInfo = getRequiredInfoForIndex(u.productIndex);
-      const unitExtraFields = rInfo.filter((f) => {
-        const k = normKey(f);
-        return !BASIC_KEYS.has(k);
-      });
-      const state = items[u.productIndex] || {};
-      const det = state.details || {};
-      for (const f of unitExtraFields) {
-        const v = (det[`ME__${f}`] || "").toString().trim();
-        if (!v) return `Please fill in: ${f} (for you).`;
-      }
-    }
     return null;
   };
 
@@ -689,16 +720,80 @@ export default function BuyModal({ visible, onClose, postId }) {
     }
   };
 
-  const handlePay = async () => {
-    if (loading) return;
-
-    if (hasPendingRequest) {
-      showFeedback(
-        t("ticket_request_already_pending_title") || "Already submitted",
-        t("ticket_request_already_pending") || "Your request is already pending. The event organizer will get back to you."
-      );
+  const handleAddToCalendar = async () => {
+    const cal = postCalendarData;
+    if (!cal?.date) {
+      Alert.alert("", t("calendar_no_date") || "This event has no date set.");
       return;
     }
+    try {
+      const [sy, sm, sd] = cal.date.split("-").map(Number);
+      const startDate = cal.time
+        ? (() => { const [h, mi] = cal.time.split(":").map(Number); return new Date(sy, sm - 1, sd, h, mi); })()
+        : new Date(sy, sm - 1, sd);
+
+      let endDate;
+      if (cal.end_date) {
+        const [ey, em, ed] = cal.end_date.split("-").map(Number);
+        endDate = cal.end_time
+          ? (() => { const [h, mi] = cal.end_time.split(":").map(Number); return new Date(ey, em - 1, ed, h, mi); })()
+          : new Date(ey, em - 1, ed);
+      } else {
+        endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+      }
+
+      if (Platform.OS === "android") {
+        // Opens the default calendar app (Google Calendar etc.) with the event pre-filled.
+        const title = encodeURIComponent(cal.title || "Event");
+        const location = encodeURIComponent(cal.location || "");
+        const allDayExtra = !cal.time ? ";l.allDay=1" : "";
+        await Linking.openURL(
+          `intent:#Intent;action=android.intent.action.INSERT;` +
+          `type=vnd.android.cursor.dir%2Fevent;` +
+          `S.title=${title};` +
+          `S.eventLocation=${location};` +
+          `l.beginTime=${startDate.getTime()};` +
+          `l.endTime=${endDate.getTime()}` +
+          `${allDayExtra};end`
+        );
+      } else {
+        // iOS: write the event directly into the native calendar store (which may sync to
+        // Google Calendar if the user has a Google account set up in iOS Settings > Calendar).
+        const { status } = await Calendar.requestCalendarPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert(
+            t("calendar_permission_title") || "Calendar Access",
+            t("calendar_permission_body") || "To add events, allow calendar access in Settings."
+          );
+          return;
+        }
+        const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+        const writable = calendars.filter((c) => c.allowsModifications);
+        const target = writable[0];
+        if (!target) {
+          Alert.alert("Error", "No writable calendar found on this device.");
+          return;
+        }
+        await Calendar.createEventAsync(target.id, {
+          title: cal.title || "Event",
+          startDate,
+          endDate,
+          allDay: !cal.time,
+          location: cal.location || undefined,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        });
+        Alert.alert(
+          t("calendar_added_title") || "Added to Calendar",
+          t("calendar_added_body") || "The event has been added to your calendar."
+        );
+      }
+    } catch (e) {
+      Alert.alert("Error", "Could not add to calendar.");
+    }
+  };
+
+  const handlePay = async () => {
+    if (loading) return;
 
     if (isSoldOut) {
       showFeedback("Sold out", "There are no more tickets available for this event.");
@@ -709,6 +804,22 @@ export default function BuyModal({ visible, onClose, postId }) {
     const err = validateBeforePay(units);
     if (err) {
       showFeedback("Missing info", err);
+      return;
+    }
+
+    if (manuallyApprove && postType !== "Ad" && !approvalInfo.trim() && !approvalPhoto) {
+      const prompt = approvalInfoPlaceholder || "approval info";
+      showFeedback("Missing info", `Please provide at least a message or photo: ${prompt}`);
+      return;
+    }
+
+    // Only block if this purchase includes a ticket for the buyer themselves
+    const buyingForSelf = units.some((u) => u.isMe);
+    if (hasPendingRequest && buyingForSelf) {
+      showFeedback(
+        t("ticket_request_already_pending_title") || "Already submitted",
+        t("ticket_request_already_pending") || "Your request is already pending. The event organizer will get back to you."
+      );
       return;
     }
 
@@ -1014,7 +1125,7 @@ export default function BuyModal({ visible, onClose, postId }) {
           product_names: units.map(u => u.productLabel).filter(Boolean),
           quantity: units.length,
         });
-        showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); });
+        showFeedback("Success", "Order confirmed.", () => { setFeedback(null); onClose?.(); }, false);
         return;
       }
 
@@ -1102,7 +1213,7 @@ export default function BuyModal({ visible, onClose, postId }) {
 
       ticketSuccess = true;
       posthog.capture('ticket_purchased', { post_id: postId });
-      showFeedback("Success", "Tickets bought successfully!", () => { setFeedback(null); onClose?.(); });
+      showFeedback("Success", "Tickets bought successfully!", () => { setFeedback(null); onClose?.(); }, true);
 
       if (additions.length > 0) {
         supabase.rpc("remove_from_unconfirmed", {
@@ -1129,12 +1240,23 @@ export default function BuyModal({ visible, onClose, postId }) {
         {(t("ticket_registered_body") || "Thanks for registering! Once @{organizer} approves it, your ticket will be available on My tickets.")
           .replace("{organizer}", organizerUser || "the organizer")}
       </Text>
-      <TouchableOpacity
-        style={[styles.feedbackOkBtn, { backgroundColor: "#4EBCFF" }]}
-        onPress={() => { setFreeConfirmationVisible(false); onClose?.(); }}
-      >
-        <Text style={styles.feedbackOkText}>OK</Text>
-      </TouchableOpacity>
+      <View style={styles.feedbackBtnRow}>
+        <TouchableOpacity
+          style={[styles.feedbackCalBtn, { borderColor: "#4EBCFF" }]}
+          onPress={handleAddToCalendar}
+        >
+          <Feather name="calendar" size={14} color="#4EBCFF" />
+          <Text style={[styles.feedbackBtnText, { color: "#4EBCFF" }]} numberOfLines={1}>
+            {t("add_to_calendar") || "Add to Calendar"}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.feedbackOkBtn, { backgroundColor: "#4EBCFF" }]}
+          onPress={() => { setFreeConfirmationVisible(false); onClose?.(); }}
+        >
+          <Text style={styles.feedbackOkText}>OK</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -1154,12 +1276,25 @@ export default function BuyModal({ visible, onClose, postId }) {
           <View style={[styles.feedbackCard, { backgroundColor: theme.gray }]}>
             <Text style={[styles.feedbackTitle, { color: theme.text }]}>{feedback.title}</Text>
             <Text style={[styles.feedbackMessage, { color: theme.text }]}>{feedback.message}</Text>
-            <TouchableOpacity
-              style={[styles.feedbackOkBtn, { backgroundColor: feedback.title === "Success" ? "#4EBCFF" : "#E55353" }]}
-              onPress={() => { const cb = feedback.onOk; setFeedback(null); cb?.(); }}
-            >
-              <Text style={styles.feedbackOkText}>OK</Text>
-            </TouchableOpacity>
+            <View style={styles.feedbackBtnRow}>
+              {feedback.showCalendar && (
+                <TouchableOpacity
+                  style={[styles.feedbackCalBtn, { borderColor: "#4EBCFF" }]}
+                  onPress={handleAddToCalendar}
+                >
+                  <Feather name="calendar" size={14} color="#4EBCFF" />
+                  <Text style={[styles.feedbackBtnText, { color: "#4EBCFF" }]} numberOfLines={1}>
+                    {t("add_to_calendar") || "Add to Calendar"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.feedbackOkBtn, { backgroundColor: feedback.title === "Success" ? "#4EBCFF" : "#E55353" }]}
+                onPress={() => { const cb = feedback.onOk; setFeedback(null); cb?.(); }}
+              >
+                <Text style={styles.feedbackOkText}>OK</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : freeConfirmationVisible ? renderConfirmation()
         : (
@@ -1278,7 +1413,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                                       style={[
                                         styles.unitInput,
                                         {
-                                          backgroundColor: isDark ? "#111827" : "#f5f6fa",
+                                          backgroundColor: "transparent",
                                           color: theme.text,
                                         },
                                       ]}
@@ -1299,7 +1434,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                                 style={[
                                   styles.qtyInput,
                                   {
-                                    backgroundColor: isDark ? "#111827" : "#f5f6fa",
+                                    backgroundColor: "transparent",
                                     color: theme.text,
                                   },
                                 ]}
@@ -1349,7 +1484,7 @@ export default function BuyModal({ visible, onClose, postId }) {
                                                   style={[
                                                     styles.unitInput,
                                                     {
-                                                      backgroundColor: isDark ? "#111827" : "#f5f6fa",
+                                                      backgroundColor: "transparent",
                                                       color: theme.text,
                                                     },
                                                   ]}
@@ -1478,7 +1613,7 @@ export default function BuyModal({ visible, onClose, postId }) {
               disabled={loading}
             >
               <Text style={[styles.actionText, { color: isDark ? "#9CA3AF" : "#8A96A3" }]}>
-                Cancel
+                {t("buy_modal_cancel")}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1626,10 +1761,34 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 20,
   },
+  feedbackBtnRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignSelf: "stretch",
+  },
+  feedbackCalBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  feedbackBtnText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13,
+    textAlign: "center",
+    flexShrink: 1,
+  },
   feedbackOkBtn: {
     paddingVertical: 10,
-    paddingHorizontal: 36,
+    paddingHorizontal: 20,
     borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
   },
   feedbackOkText: {
     color: "#fff",

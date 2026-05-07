@@ -15,6 +15,7 @@ import {
   TextInput,
   RefreshControl,
   Linking,
+  Dimensions,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import Post from "../components/Post";
@@ -80,7 +81,7 @@ async function fetchProfileById(id) {
   if (!id) return null;
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name, links, link_titles")
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
@@ -92,7 +93,7 @@ async function fetchProfileByUsername(username) {
   const uname = asAt(username);
   const { data, error } = await supabase
     .from("profiles")
-    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name")
+    .select("id, username, name, city, email, avatar_url, cover_url, bio, is_verified, allow_dms, display_full_name, links, link_titles")
     .eq("username", uname)
     .maybeSingle();
   if (error) throw error;
@@ -131,36 +132,55 @@ async function uploadImageToAlbaMedia(localUri, pathPrefix = "profiles") {
   return publicData.publicUrl;
 }
 
-const BIO_URL_RE = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)*\.(?:com|net|org|io|app|it|co|dev|me|eu|info|biz|edu|uk|de|fr|es|pt|nl|be|ch|at|se|no|dk|fi|pl|ru|jp|au|ca|br|mx)(?:\/[^\s]*)?/g;
+const BIO_EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+const BIO_SEGMENT_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}|https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)*\.(?:com|net|org|io|app|it|co|dev|me|eu|info|biz|edu|uk|de|fr|es|pt|nl|be|ch|at|se|no|dk|fi|pl|ru|jp|au|ca|br|mx)(?:\/[^\s]*)?/g;
 
-function renderBioWithLinks(text, baseStyle) {
+function renderBioWithLinks(text, baseStyle, emailColor) {
   const segments = [];
   let last = 0;
   let match;
-  BIO_URL_RE.lastIndex = 0;
-  while ((match = BIO_URL_RE.exec(text)) !== null) {
+  BIO_SEGMENT_RE.lastIndex = 0;
+  while ((match = BIO_SEGMENT_RE.exec(text)) !== null) {
     if (match.index > last) segments.push({ type: "text", value: text.slice(last, match.index) });
-    segments.push({ type: "link", value: match[0] });
+    const isEmail = BIO_EMAIL_RE.test(match[0]);
+    segments.push({ type: isEmail ? "email" : "link", value: match[0] });
     last = match.index + match[0].length;
   }
   if (last < text.length) segments.push({ type: "text", value: text.slice(last) });
 
-  return segments.map((seg, i) =>
-    seg.type === "link" ? (
-      <Text
-        key={i}
-        style={[baseStyle, { color: "#59A7FF" }]}
-        onPress={() => {
-          const url = seg.value.startsWith("http") ? seg.value : `https://${seg.value}`;
-          Linking.openURL(url).catch(() => {});
-        }}
-      >
-        {seg.value}
-      </Text>
-    ) : (
-      <Text key={i} style={baseStyle}>{seg.value}</Text>
-    )
-  );
+  return segments.map((seg, i) => {
+    if (seg.type === "email") {
+      return (
+        <Text
+          key={i}
+          style={[baseStyle, { color: emailColor || "#AAAAAA" }]}
+          onPress={() => Linking.openURL(`mailto:${seg.value}`).catch(() => {})}
+        >
+          {seg.value}
+        </Text>
+      );
+    }
+    if (seg.type === "link") {
+      const availableWidth = Dimensions.get("window").width - 40; // infoWrap paddingHorizontal: 20 each side
+      const charsPerLine = Math.floor(availableWidth / 6.8); // ~6.8px per char at 13pt Poppins for URL chars
+      const displayText = seg.value.length > charsPerLine
+        ? seg.value.slice(0, charsPerLine) + "…"
+        : seg.value;
+      return (
+        <Text
+          key={i}
+          style={[baseStyle, { color: "#59A7FF" }]}
+          onPress={() => {
+            const url = seg.value.startsWith("http") ? seg.value : `https://${seg.value}`;
+            Linking.openURL(url).catch(() => {});
+          }}
+        >
+          {displayText}
+        </Text>
+      );
+    }
+    return <Text key={i} style={baseStyle}>{seg.value}</Text>;
+  });
 }
 
 export default function ProfileScreen({ navigation, route }) {
@@ -191,6 +211,11 @@ export default function ProfileScreen({ navigation, route }) {
   const [editingBio, setEditingBio] = useState(false);
   const [bioEditValue, setBioEditValue] = useState("");
   const [savingBio, setSavingBio] = useState(false);
+
+  const [editingLinks, setEditingLinks] = useState(false);
+  const [linkEditValues, setLinkEditValues] = useState([{ url: "", title: "" }]);
+  const [savingLinks, setSavingLinks] = useState(false);
+  const [viewingLinks, setViewingLinks] = useState(false);
 
   // ✅ render sources can be remote OR file://
   const [coverRenderable, setCoverRenderable] = useState(null);
@@ -359,6 +384,8 @@ export default function ProfileScreen({ navigation, route }) {
       email: fetched?.email ?? null,
       isVerified: fetched?.is_verified ?? false,
       displayFullName: fetched?.display_full_name ?? false,
+      links: fetched?.links ?? [],
+      linkTitles: fetched?.link_titles ?? [],
     };
   }, [fetched, params]);
 
@@ -508,6 +535,37 @@ export default function ProfileScreen({ navigation, route }) {
       showToast(t("profile_couldnt_save_bio"));
     } finally {
       setSavingBio(false);
+    }
+  };
+
+  const openEditLinks = () => {
+    const profileLinks = display.links || [];
+    const profileTitles = display.linkTitles || [];
+    const vals = profileLinks.length > 0
+      ? profileLinks.map((url, i) => ({ url, title: profileTitles[i] || "" }))
+      : [{ url: "", title: "" }];
+    setLinkEditValues(vals);
+    setEditingLinks(true);
+  };
+
+  const handleSaveLinks = async () => {
+    if (!display.id) return;
+    setSavingLinks(true);
+    try {
+      const filtered = linkEditValues.filter((e) => e.url.trim());
+      const urls = filtered.map((e) => e.url.trim());
+      const titles = filtered.map((e) => e.title.trim());
+      const { error } = await supabase
+        .from("profiles")
+        .update({ links: urls, link_titles: titles })
+        .eq("id", display.id);
+      if (error) throw error;
+      setFetched((prev) => prev ? { ...prev, links: urls, link_titles: titles } : prev);
+      setEditingLinks(false);
+    } catch {
+      showToast(t("profile_links_couldnt_save"));
+    } finally {
+      setSavingLinks(false);
     }
   };
 
@@ -863,7 +921,7 @@ export default function ProfileScreen({ navigation, route }) {
   const showBootSpinner = booting && !fetched;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: theme.gray }]}>
+    <SafeAreaView edges={["top", "left", "right"]} style={[styles.safe, { backgroundColor: theme.gray }]}>
       <Header
         title={display.username}
         onBack={() => navigation?.goBack?.()}
@@ -942,8 +1000,6 @@ export default function ProfileScreen({ navigation, route }) {
                 <Feather name="check-circle" size={18} color="#3D8BFF" style={{ marginLeft: 6 }} />
               )}
             </View>
-            <Text style={[styles.location, { color: theme.secondaryText }]}>{locationText}</Text>
-
             {isSelf ? (
               editingBio ? (
                 <View style={{ marginTop: 8 }}>
@@ -979,7 +1035,7 @@ export default function ProfileScreen({ navigation, route }) {
                     <Text
                       style={[styles.bio, { color: theme.secondaryText, marginTop: 0, flex: 1 }]}
                     >
-                      {renderBioWithLinks(displayedBio, { color: theme.secondaryText })}
+                      {renderBioWithLinks(displayedBio, { color: theme.secondaryText }, isDark ? "#AAAAAA" : "#0D2B6B")}
                       {!showFullBio && shouldShowReadMore && (
                         <Text style={[styles.readMore, { color: theme.text }]} onPress={() => setShowFullBio(true)}>{" "}{t("profile_bio_read_more")}</Text>
                       )}
@@ -1003,13 +1059,68 @@ export default function ProfileScreen({ navigation, route }) {
                 <Text
                   style={[styles.bio, { color: theme.secondaryText }]}
                 >
-                  {renderBioWithLinks(displayedBio, { color: theme.secondaryText })}
+                  {renderBioWithLinks(displayedBio, { color: theme.secondaryText }, isDark ? "#AAAAAA" : "#0D2B6B")}
                   {!showFullBio && shouldShowReadMore && (
                     <Text style={[styles.readMore, { color: theme.text }]} onPress={() => setShowFullBio(true)}>{" "}{t("profile_bio_read_more")}</Text>
                   )}
                 </Text>
               )
             )}
+
+            {/* Profile links */}
+            {(() => {
+              const profileLinks = display.links || [];
+              const profileTitles = display.linkTitles || [];
+              const hasLinks = profileLinks.length > 0;
+              const cleanUrl = (url) => url.replace(/^https?:\/\//, "").replace(/^www\./, "");
+
+              if (!hasLinks) {
+                if (!isSelf) return null;
+                return (
+                  <TouchableOpacity onPress={openEditLinks} style={{ marginTop: 6, alignSelf: "center" }}>
+                    <Text style={{ color: theme.secondaryText, opacity: 0.6, fontFamily: "Poppins", fontSize: 13 }}>
+                      {t("profile_links_add")}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }
+
+              // links col = human-readable title; link_titles col = actual URL
+              const linkContent = profileLinks.length === 1 ? (
+                <TouchableOpacity onPress={() => {
+                  const rawUrl = profileLinks[0] || "";
+                  const u = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+                  Linking.openURL(u).catch(() => {});
+                }}>
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={{ color: "#59A7FF", fontFamily: "PoppinsBold", fontSize: 13 }}
+                  >
+                    {profileTitles[0] || cleanUrl(profileLinks[0] || "")}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity onPress={() => setViewingLinks(true)}>
+                  <Text style={{ color: "#59A7FF", fontFamily: "PoppinsBold", fontSize: 13 }}>{t("profile_links_see")}</Text>
+                </TouchableOpacity>
+              );
+
+              return (
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 6 }}>
+                  {linkContent}
+                  {isSelf && (
+                    <TouchableOpacity
+                      onPress={openEditLinks}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={{ paddingLeft: 6 }}
+                    >
+                      <Feather name="edit-2" size={11} color={theme.secondaryText} style={{ opacity: 0.6 }} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })()}
 
             {/* Actions — only shown when viewing another user's profile */}
             {!isSelf && (
@@ -1262,6 +1373,123 @@ export default function ProfileScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* Edit links modal */}
+      <Modal
+        visible={editingLinks}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingLinks(false)}
+      >
+        <View style={styles.centeredOverlay}>
+          <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+            <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111" }]}>
+              {t("profile_links_modal_title")}
+            </Text>
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {linkEditValues.map((item, idx) => (
+                <View key={idx} style={{ marginBottom: 14 }}>
+                  <TextInput
+                    style={[styles.reportInput, { color: isDark ? "#fff" : "#111", borderColor: isDark ? "#555" : "#ddd", backgroundColor: isDark ? "#1a1a1a" : "#f9f9f9", minHeight: 40, marginBottom: 6 }]}
+                    placeholder={`${t("profile_link_placeholder")} ${idx + 1}`}
+                    placeholderTextColor={isDark ? "#666" : "#aaa"}
+                    value={item.url}
+                    onChangeText={(v) => {
+                      const updated = [...linkEditValues];
+                      updated[idx] = { ...updated[idx], url: v };
+                      setLinkEditValues(updated);
+                    }}
+                    autoCapitalize="none"
+                    keyboardType="url"
+                  />
+                  <TextInput
+                    style={[styles.reportInput, { color: isDark ? "#fff" : "#111", borderColor: isDark ? "#555" : "#ddd", backgroundColor: isDark ? "#1a1a1a" : "#f9f9f9", minHeight: 40, marginBottom: 0 }]}
+                    placeholder={`${t("profile_link_title_placeholder")} ${idx + 1}`}
+                    placeholderTextColor={isDark ? "#666" : "#aaa"}
+                    value={item.title}
+                    onChangeText={(v) => {
+                      const updated = [...linkEditValues];
+                      updated[idx] = { ...updated[idx], title: v };
+                      setLinkEditValues(updated);
+                    }}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              onPress={() => setLinkEditValues((prev) => [...prev, { url: "", title: "" }])}
+              style={{ marginTop: 10, marginBottom: 14, alignSelf: "flex-start" }}
+            >
+              <Text style={{ color: "#59A7FF", fontFamily: "Poppins", fontSize: 13 }}>
+                + {t("profile_links_add_more")}
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.dialogBtns}>
+              <TouchableOpacity
+                style={styles.dialogBtnCancel}
+                onPress={() => setEditingLinks(false)}
+                disabled={savingLinks}
+              >
+                <Text style={[styles.dialogBtnCancelText, { color: theme.text }]}>{t("cancel_button")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.dialogBtnSubmit, savingLinks && { opacity: 0.6 }]}
+                onPress={handleSaveLinks}
+                disabled={savingLinks}
+              >
+                {savingLinks
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={styles.dialogBtnSubmitText}>OK</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* View links modal */}
+      <Modal
+        visible={viewingLinks}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewingLinks(false)}
+      >
+        <TouchableOpacity style={styles.centeredOverlay} activeOpacity={1} onPress={() => setViewingLinks(false)}>
+          <TouchableOpacity activeOpacity={1} style={{ width: "100%" }}>
+            <View style={[styles.dialogCard, { backgroundColor: isDark ? "#2a2a2a" : "#fff" }]}>
+              <Text style={[styles.dialogTitle, { color: isDark ? "#fff" : "#111" }]}>
+                {t("profile_links_view_title")}
+              </Text>
+              {(display.links || []).map((displayTitle, idx) => {
+                // links col = human-readable title; link_titles col = actual URL
+                const rawUrl = (display.linkTitles || [])[idx] || "";
+                const cleanedUrl = rawUrl.replace(/^https?:\/\//, "").replace(/^www\./, "");
+                const openUrl = rawUrl.startsWith("http") ? rawUrl : `https://${rawUrl}`;
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    onPress={() => { if (rawUrl) { setViewingLinks(false); Linking.openURL(openUrl).catch(() => {}); } }}
+                    style={{ marginBottom: 14 }}
+                  >
+                    {!!displayTitle && (
+                      <Text style={{ color: isDark ? "#aaa" : "#888", fontFamily: "Poppins", fontSize: 11, marginBottom: 2 }}>
+                        {displayTitle}
+                      </Text>
+                    )}
+                    <Text style={{ color: "#59A7FF", fontFamily: "PoppinsBold", fontSize: 14 }}>
+                      {cleanedUrl || displayTitle}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <View style={[styles.dialogBtns, { justifyContent: "center", marginTop: 4 }]}>
+                <TouchableOpacity style={styles.dialogBtnCancel} onPress={() => setViewingLinks(false)}>
+                  <Text style={[styles.dialogBtnCancelText, { color: theme.text }]}>{t("cancel_button")}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* DM blocked modal */}

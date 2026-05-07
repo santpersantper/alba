@@ -35,6 +35,10 @@ const EVENTS_COLS =
 
 const POSTS_TABLE = "posts";
 const POSTS_COLS = "id, user, date";
+const POSTS_FULL_COLS =
+  "title, description, time, end_time, all_day, every_day, online, location, type, postmediauri, collaborators, repeat_days, " +
+  "product_types, product_prices, is_ticket_number_fixed, ticket_number, required_info, " +
+  "manually_approve_attendees, ticket_approval_info, is_age_restricted";
 /* ---------------------------------------------- */
 
 function safeObj(x) {
@@ -65,6 +69,7 @@ export default function PastEventsScreen() {
   const targetEventId = route.params?.eventId || null; // current event
   const targetPostId = route.params?.postId || null; // current post
   const targetGroupId = route.params?.groupId || null; // current group chat
+  const fromCreatePost = !!(route.params?.fromCreatePost); // shows Repeat button
 
   const [fontsLoaded] = useFonts({
     Poppins: require("../../assets/fonts/Poppins-Regular.ttf"),
@@ -320,6 +325,61 @@ export default function PastEventsScreen() {
     setDmVisible(true);
   };
 
+  /* ---------------- repeat (copy to CreatePost) ---------------- */
+  const handleRepeat = useCallback(async (eventRow) => {
+    const postId = eventRow?.post_id;
+    console.log("[Repeat] tapped — eventRow:", JSON.stringify(eventRow));
+    console.log("[Repeat] postId:", postId);
+    if (!postId) {
+      console.warn("[Repeat] no post_id on eventRow, aborting");
+      return;
+    }
+    try {
+      console.log("[Repeat] querying posts for id:", postId);
+      const { data: post, error } = await supabase
+        .from(POSTS_TABLE)
+        .select(POSTS_FULL_COLS)
+        .eq("id", postId)
+        .maybeSingle();
+      console.log("[Repeat] query result — post:", JSON.stringify(post), "error:", error);
+      if (error) {
+        console.error("[Repeat] Supabase error:", error.message, error.details);
+        return;
+      }
+      if (!post) {
+        console.warn("[Repeat] no post found for id:", postId);
+        return;
+      }
+      const prefillPost = {
+        _ts: Date.now(), // ensures useEffect fires even on repeated presses
+        title: post.title || "",
+        description: post.description || "",
+        time: post.time || null,
+        endTime: post.end_time || null,
+        all_day: post.all_day ?? false,
+        every_day: post.every_day ?? false,
+        online: post.online ?? false,
+        location: post.location || "",
+        type: post.type || "Event",
+        mediaUrls: Array.isArray(post.postmediauri) ? post.postmediauri : [],
+        collaborators: Array.isArray(post.collaborators) ? post.collaborators : [],
+        repeat_days: Array.isArray(post.repeat_days) ? post.repeat_days : [],
+        product_types: Array.isArray(post.product_types) ? post.product_types : [],
+        product_prices: Array.isArray(post.product_prices) ? post.product_prices : [],
+        is_ticket_number_fixed: post.is_ticket_number_fixed ?? false,
+        ticket_number: post.ticket_number || null,
+        required_info: Array.isArray(post.required_info) ? post.required_info : [],
+        manually_approve_attendees: post.manually_approve_attendees ?? false,
+        ticket_approval_info: post.ticket_approval_info || "",
+        is_age_restricted: post.is_age_restricted ?? false,
+      };
+      console.log("[Repeat] navigating to CreatePost with prefill:", prefillPost.title);
+      navigation.navigate("CreatePost", { prefillPost });
+    } catch (err) {
+      console.error("[Repeat] unexpected error:", err?.message, err);
+    }
+  }, [navigation]);
+
   /* ---------------- render row ---------------- */
   const renderUserRow = (user) => {
     const displayName = user?.name || "User";
@@ -458,14 +518,24 @@ export default function PastEventsScreen() {
                   </View>
                 </View>
 
-                <TouchableOpacity style={styles.seeBtn} onPress={() => toggleOpenEvent(e)}>
-                  <Feather name="menu" size={16} color="#fff" />
-                  <Text style={styles.seeBtnText}>
-                    {isOpen
-                      ? t("close_attendees_list") || "Close attendees list"
-                      : t("open_attendees_list") || "Open members list"}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  <TouchableOpacity style={styles.seeBtn} onPress={() => toggleOpenEvent(e)}>
+                    <Feather name="menu" size={16} color="#fff" />
+                    <Text style={styles.seeBtnText}>
+                      {isOpen
+                        ? t("close_attendees_list") || "Close attendees list"
+                        : t("open_attendees_list") || "Open members list"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {fromCreatePost && (
+                    <TouchableOpacity style={styles.seeBtn} onPress={() => handleRepeat(e)}>
+                      <Text style={styles.seeBtnText}>
+                        {t("create_post_repeat_button") || "Repeat"}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
 
                 {/* Inline unconfirmed list ONLY */}
                 {isOpen && (

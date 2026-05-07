@@ -29,6 +29,8 @@ import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
+import * as XLSX from "xlsx";
 import { decode } from "base-64";
 import * as Google from "expo-auth-session/providers/google";
 import { ResponseType } from "expo-auth-session";
@@ -55,11 +57,10 @@ const GOOGLE_REDIRECT_URI =
   Platform.OS === "ios"
     ? "com.googleusercontent.apps.1060018833152-6inqrhrvjj8e7ld7igvadjfmeikeebfi:/oauth2redirect"
     : "com.googleusercontent.apps.1060018833152-8viosmmkbi0a2719vu4kbjd774rsb1hq:/oauth2redirect";
-
 /* ─── Schema ────────────────────────────────────────────────────────────── */
 const POSTS_TABLE = "posts";
 const POSTS_COLS =
-  "id, title, description, date, time, end_date, end_time, all_day, every_day, location, author_id, group_id, actions, postmediauri, manually_approve_attendees, is_ticket_number_fixed, ticket_number, ticket_approval_info, pending_ticket_requests";
+  "id, title, description, date, time, end_date, end_time, all_day, every_day, online, location, author_id, group_id, actions, postmediauri, manually_approve_attendees, is_ticket_number_fixed, ticket_number, ticket_approval_info, pending_ticket_requests, allow_guests";
 
 const EVENTS_TABLE = "events";
 const EVENTS_COLS =
@@ -76,6 +77,11 @@ function safeObj(x) {
 }
 function safeArr(x) {
   return Array.isArray(x) ? x : [];
+}
+function parseJsonArr(x) {
+  if (Array.isArray(x)) return x;
+  if (typeof x === "string") { try { return JSON.parse(x); } catch { return []; } }
+  return [];
 }
 const stripAt = (s) => String(s || "").trim().replace(/^@+/, "");
 const uniqCI = (arr) => {
@@ -143,8 +149,8 @@ async function gFetchForms(accessToken) {
       "&fields=files(id%2Cname)&orderBy=modifiedTime+desc&pageSize=50",
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
-  if (!resp.ok) throw new Error(`Drive API ${resp.status}`);
   const data = await resp.json();
+  if (!resp.ok) throw new Error(`Drive API ${resp.status}: ${data?.error?.message || ""}`);
   return safeArr(data.files);
 }
 
@@ -219,11 +225,13 @@ export default function EventSettingsScreen() {
   const [draftEndTime, setDraftEndTime] = useState("");
   const [draftAllDay, setDraftAllDay] = useState(false);
   const [draftEveryDay, setDraftEveryDay] = useState(false);
+  const [draftOnline, setDraftOnline] = useState(false);
   const [draftLocation, setDraftLocation] = useState("");
   const [draftMedia, setDraftMedia] = useState([]);
 
   /* ── ticket controls ── */
   const [purchasesActive, setPurchasesActive] = useState(true);
+  const [allowGuests, setAllowGuests] = useState(true);
   const [ticketsPaused, setTicketsPaused] = useState(false);
   const [manuallyApprove, setManuallyApprove] = useState(false);
   const [fixedTicketCount, setFixedTicketCount] = useState(false);
@@ -249,6 +257,7 @@ export default function EventSettingsScreen() {
   const [expandedUserInfo, setExpandedUserInfo] = useState(new Set());
   // keyed by pending request username
   const [expandedPendingInfo, setExpandedPendingInfo] = useState(new Set());
+  const [lightboxUri, setLightboxUri] = useState(null);
 
   /* ── menus / modals ── */
   const [menuVisible, setMenuVisible] = useState(false);
@@ -268,6 +277,9 @@ export default function EventSettingsScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const scanLockRef = useRef(false);
 
+  /* ── Excel export ── */
+  const [exportingExcel, setExportingExcel] = useState(false);
+
   /* ── Google Forms ── */
   const [googleIntegration, setGoogleIntegration] = useState(null);
   const [formsModalVisible, setFormsModalVisible] = useState(false);
@@ -286,6 +298,7 @@ export default function EventSettingsScreen() {
       "openid",
       "profile",
       "email",
+      "https://www.googleapis.com/auth/forms.body.readonly",
       "https://www.googleapis.com/auth/forms.responses.readonly",
       "https://www.googleapis.com/auth/drive.metadata.readonly",
     ],
@@ -332,25 +345,34 @@ export default function EventSettingsScreen() {
   ══════════════════════════════════════════════════════════════════════ */
   const loadEventModel = useCallback(async () => {
     try {
+      console.log("[ESS] loadEventModel start, routeEventId:", routeEventId, "routePostId:", routePostId);
+      const { data: sess, error: sessErr } = await supabase.auth.getSession();
+      console.log("[ESS] session uid:", sess?.session?.user?.id, "sessErr:", sessErr?.message);
       let ev = null;
       if (routeEventId) {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from(EVENTS_TABLE).select(EVENTS_COLS).eq("id", routeEventId).maybeSingle();
+        console.log("[ESS] event by eventId:", data?.id, "err:", error?.message);
         ev = data || null;
       } else if (routePostId) {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from(EVENTS_TABLE).select(EVENTS_COLS).eq("post_id", routePostId).maybeSingle();
+        console.log("[ESS] event by postId:", data?.id, "err:", error?.message);
         ev = data || null;
       }
-      if (!ev?.post_id && !routePostId) { setModel(null); return; }
+      if (!ev?.post_id && !routePostId) { console.log("[ESS] no ev.post_id and no routePostId, aborting"); setModel(null); return; }
 
       const postId = ev?.post_id || routePostId;
       const { data: post, error: pErr } = await supabase
         .from(POSTS_TABLE).select(POSTS_COLS).eq("id", postId).maybeSingle();
+      console.log("[ESS] post:", post?.id, "pErr:", pErr?.message);
       if (pErr || !post) { setModel(null); return; }
 
       setModel({ event: ev, post, group: null });
-    } catch {}
+      console.log("[ESS] model set OK");
+    } catch (e) {
+      console.warn("[ESS] loadEventModel error:", e);
+    }
   }, [routeEventId, routePostId]);
 
   useFocusEffect(useCallback(() => { loadEventModel(); }, [loadEventModel]));
@@ -372,6 +394,7 @@ export default function EventSettingsScreen() {
     setDraftEndTime((postRow?.end_time || "").toString().slice(0, 5) || "");
     setDraftAllDay(postRow?.all_day ?? false);
     setDraftEveryDay(postRow?.every_day ?? false);
+    setDraftOnline(postRow?.online ?? false);
     setDraftLocation(postRow?.location || "");
     const existingMedia = Array.isArray(postRow?.postmediauri)
       ? postRow.postmediauri.map((uri) => ({
@@ -383,7 +406,7 @@ export default function EventSettingsScreen() {
     setDraftMedia(existingMedia);
   }, [
     postRow?.title, postRow?.description, postRow?.date, postRow?.time,
-    postRow?.end_date, postRow?.end_time, postRow?.all_day, postRow?.every_day,
+    postRow?.end_date, postRow?.end_time, postRow?.all_day, postRow?.every_day, postRow?.online,
     postRow?.location, postRow?.postmediauri,
   ]);
 
@@ -394,6 +417,7 @@ export default function EventSettingsScreen() {
   }, [eventRow?.id, eventRow?.purchases_active]);
 
   useEffect(() => {
+    setAllowGuests(postRow?.allow_guests !== false);
     setManuallyApprove(!!postRow?.manually_approve_attendees);
     setFixedTicketCount(!!postRow?.is_ticket_number_fixed);
     setTicketNumber(postRow?.ticket_number != null ? String(postRow.ticket_number) : "");
@@ -476,24 +500,36 @@ export default function EventSettingsScreen() {
   /* ── handle Google OAuth response ── */
   useEffect(() => {
     if (googleResponse?.type !== "success") return;
+
+    const directToken = googleResponse.params?.access_token || null;
     const code = googleResponse.params?.code;
     const codeVerifier = googleRequest?.codeVerifier;
     const redirectUri = googleRequest?.redirectUri;
-    if (!code || !codeVerifier || !redirectUri) return;
 
     (async () => {
       setGoogleAuthLoading(true);
       try {
-        const tokens = await gExchangeCode(code, codeVerifier, redirectUri);
-        tempTokensRef.current = {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-        };
-        const forms = await gFetchForms(tokens.access_token);
-        setAvailableForms(forms);
+        let accessToken, refreshToken;
+
+        if (directToken) {
+          // Android native OAuth clients return the access token directly in the redirect.
+          // The accompanying code is a server-auth-code not usable with PKCE exchange.
+          accessToken = directToken;
+          refreshToken = null;
+        } else if (code && codeVerifier && redirectUri) {
+          const tokens = await gExchangeCode(code, codeVerifier, redirectUri);
+          accessToken = tokens.access_token;
+          refreshToken = tokens.refresh_token || null;
+        } else {
+          return;
+        }
+
+        tempTokensRef.current = { access_token: accessToken, refresh_token: refreshToken };
+        const forms = await gFetchForms(accessToken);
+         setAvailableForms(forms);
         setSelectedFormIdInModal(null);
         setFormsModalVisible(true);
-      } catch {
+      } catch (err) {
         Alert.alert("Error", t("google_forms_connect_error") || "Could not connect to Google.");
       } finally {
         setGoogleAuthLoading(false);
@@ -507,22 +543,19 @@ export default function EventSettingsScreen() {
 
   // Sync form responses into ticket_holders + attendees_info
   const syncGoogleFormResponses = async (integration, ev) => {
-    if (!integration?.form_id || !ev?.id) return;
+     if (!integration?.form_id || !ev?.id) return;
     setFormsSyncing(true);
     try {
       let accessToken = integration.access_token;
 
-      // Helper: fetch with automatic token refresh on 401
       const gGet = async (url) => {
         let resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
         if (resp.status === 401 && integration.refresh_token) {
           const newToken = await gRefreshToken(integration.refresh_token);
           if (newToken) {
             accessToken = newToken;
-            // persist the new access token
             const updated = { ...integration, access_token: newToken };
-            await supabase
-              .from(EVENTS_TABLE).update({ google_integration: updated }).eq("id", ev.id);
+            await supabase.from(EVENTS_TABLE).update({ google_integration: updated }).eq("id", ev.id);
             setGoogleIntegration(updated);
             setModel((prev) =>
               prev ? { ...prev, event: { ...prev.event, google_integration: updated } } : prev
@@ -530,37 +563,35 @@ export default function EventSettingsScreen() {
             resp = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
           }
         }
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!resp.ok) {
+          const errBody = await resp.json().catch(() => ({}));
+           throw new Error(`HTTP ${resp.status}: ${errBody?.error?.message || ""}`);
+        }
         return resp.json();
       };
 
-      // 1. Get form structure (question ID → title map)
-      const formData = await gGet(
-        `https://forms.googleapis.com/v1/forms/${integration.form_id}`
-      );
+      const formData = await gGet(`https://forms.googleapis.com/v1/forms/${integration.form_id}`);
       const fieldMap = {};
       safeArr(formData.items).forEach((item) => {
         const qId = item.questionItem?.question?.questionId;
         if (qId) fieldMap[qId] = item.title || qId;
       });
 
-      // 2. Get all responses
       const responsesData = await gGet(
         `https://forms.googleapis.com/v1/forms/${integration.form_id}/responses`
       );
       const responses = safeArr(responsesData.responses);
 
-      // 3. Build existing dedup sets
       const existingRespondentIds = new Set(safeArr(ev.google_forms_respondent_ids));
-      const currentAttendeesInfo = safeObj(ev.attendees_info);
+      const currentAttendeesArr = parseJsonArr(ev.attendees_info);
       const existingEmails = new Set(
-        Object.values(currentAttendeesInfo)
-          .map((info) => String(safeObj(info).email || "").toLowerCase())
+        currentAttendeesArr
+          .map((item) => String(item?.extra?.email || item?.respondentEmail || "").toLowerCase())
           .filter(Boolean)
       );
 
       const newTicketHolders = [...safeArr(ev.ticket_holders)];
-      const newAttendeesInfo = { ...currentAttendeesInfo };
+      const newAttendeesArr = [...currentAttendeesArr];
       const newRespondentIds = [...existingRespondentIds];
       let changed = false;
 
@@ -568,65 +599,68 @@ export default function EventSettingsScreen() {
         const responseId = response.responseId;
         if (!responseId || existingRespondentIds.has(responseId)) continue;
 
-        // Build field map from answers
         const answers = safeObj(response.answers);
-        const respondentData = { source: "google_forms", response_id: responseId };
+        const extra = {};
+        let displayName = null;
 
         for (const [questionId, answerObj] of Object.entries(answers)) {
           const label = fieldMap[questionId] || questionId;
           const value = answerObj?.textAnswers?.answers?.[0]?.value || "";
-          respondentData[label] = value;
-
+          extra[label] = value;
           const labelLc = label.toLowerCase();
-          if ((labelLc.includes("email") || labelLc === "e-mail") && !respondentData.email) {
-            respondentData.email = value;
+          if ((labelLc.includes("email") || labelLc === "e-mail") && !extra.email) {
+            extra.email = value;
           }
-          if (labelLc.includes("name") && !labelLc.includes("last") && !respondentData.name) {
-            respondentData.name = value;
+          if (labelLc.includes("name") && !labelLc.includes("last") && !displayName) {
+            displayName = value;
           }
         }
 
-        // Also use respondentEmail if Google collected it
-        if (!respondentData.email && response.respondentEmail) {
-          respondentData.email = response.respondentEmail;
+        if (!extra.email && response.respondentEmail) extra.email = response.respondentEmail;
+
+        const emailLc = String(extra.email || "").toLowerCase();
+        if (emailLc && existingEmails.has(emailLc)) {
+          newRespondentIds.push(responseId);
+          continue;
         }
 
-        // Dedup by email
-        const emailLc = String(respondentData.email || "").toLowerCase();
-        if (emailLc && existingEmails.has(emailLc)) continue;
-
-        // Choose display key (name, or email, or responseId)
-        let displayKey = respondentData.name || response.respondentEmail || responseId;
-
-        // Avoid collisions with existing keys
-        if (newTicketHolders.includes(displayKey) || newAttendeesInfo[displayKey]) {
-          let suffix = 2;
-          while (
-            newTicketHolders.includes(`${displayKey} (${suffix})`) ||
-            newAttendeesInfo[`${displayKey} (${suffix})`]
-          ) {
-            suffix++;
-          }
-          displayKey = `${displayKey} (${suffix})`;
+        let finalName = displayName || extra.email || responseId;
+        let suffix = 2;
+        while (newTicketHolders.includes(finalName)) {
+          finalName = `${displayName || extra.email || responseId} (${suffix++})`;
         }
 
-        respondentData.name = respondentData.name || displayKey;
-        newTicketHolders.push(displayKey);
-        newAttendeesInfo[displayKey] = respondentData;
+        newAttendeesArr.push({
+          name: finalName,
+          username: null,
+          age: null,
+          gender: null,
+          extra,
+          source: "google_forms",
+          response_id: responseId,
+          post_id: ev.post_id || null,
+          event_id: ev.id,
+          product_type: "Google Forms",
+          purchased_by: null,
+          created_at: new Date().toISOString(),
+        });
+        newTicketHolders.push(finalName);
         newRespondentIds.push(responseId);
         if (emailLc) existingEmails.add(emailLc);
         changed = true;
       }
 
       if (changed) {
-        await supabase
+        const { data: syncData, error: syncErr } = await supabase
           .from(EVENTS_TABLE)
           .update({
             ticket_holders: newTicketHolders,
-            attendees_info: newAttendeesInfo,
+            attendees_info: newAttendeesArr,
             google_forms_respondent_ids: newRespondentIds,
           })
-          .eq("id", ev.id);
+          .eq("id", ev.id)
+          .select("id, ticket_holders, google_forms_respondent_ids");
+         if (syncErr) throw syncErr;
 
         setModel((prev) =>
           prev
@@ -635,16 +669,15 @@ export default function EventSettingsScreen() {
                 event: {
                   ...prev.event,
                   ticket_holders: newTicketHolders,
-                  attendees_info: newAttendeesInfo,
+                  attendees_info: newAttendeesArr,
                   google_forms_respondent_ids: newRespondentIds,
                 },
               }
             : prev
         );
       }
-    } catch {
-      // Silent fail for auto-sync; user can pull-to-refresh to retry
-    } finally {
+    } catch (err) {
+     } finally {
       setFormsSyncing(false);
     }
   };
@@ -652,7 +685,9 @@ export default function EventSettingsScreen() {
   // Connect: save integration + immediately sync
   const connectGoogleForm = async () => {
     const formId = selectedFormIdInModal;
-    if (!formId || !eventRow?.id || !tempTokensRef.current) return;
+    if (!formId || !eventRow?.id || !tempTokensRef.current) {
+       return;
+    }
 
     const formName =
       availableForms.find((f) => f.id === formId)?.name || formId;
@@ -664,10 +699,12 @@ export default function EventSettingsScreen() {
     };
 
     try {
-      await supabase
+       const { data: saveData, error: saveErr } = await supabase
         .from(EVENTS_TABLE)
         .update({ google_integration: integration })
-        .eq("id", eventRow.id);
+        .eq("id", eventRow.id)
+        .select("id, google_integration");
+        if (saveErr) throw saveErr;
 
       setGoogleIntegration(integration);
       setModel((prev) =>
@@ -680,7 +717,7 @@ export default function EventSettingsScreen() {
       tempTokensRef.current = null;
 
       await syncGoogleFormResponses(integration, { ...eventRow, google_integration: integration });
-    } catch {
+    } catch (err) {
       Alert.alert("Error", t("google_forms_connect_error") || "Could not save integration.");
     }
   };
@@ -699,18 +736,18 @@ export default function EventSettingsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              const currentAttendeesInfo = safeObj(eventRow.attendees_info);
-              // Find keys added via Google Forms
-              const keysToRemove = new Set(
-                Object.entries(currentAttendeesInfo)
-                  .filter(([, v]) => safeObj(v).source === "google_forms")
-                  .map(([k]) => k)
+              const currentAttendeesArr = parseJsonArr(eventRow.attendees_info);
+              const namesToRemove = new Set(
+                currentAttendeesArr
+                  .filter((item) => item?.source === "google_forms")
+                  .map((item) => item?.name)
+                  .filter(Boolean)
               );
               const newTicketHolders = safeArr(eventRow.ticket_holders).filter(
-                (h) => !keysToRemove.has(h)
+                (h) => !namesToRemove.has(h)
               );
-              const newAttendeesInfo = Object.fromEntries(
-                Object.entries(currentAttendeesInfo).filter(([k]) => !keysToRemove.has(k))
+              const newAttendeesInfo = currentAttendeesArr.filter(
+                (item) => item?.source !== "google_forms"
               );
 
               await supabase
@@ -745,6 +782,66 @@ export default function EventSettingsScreen() {
         },
       ]
     );
+  };
+
+  /* ══════════════════════════════════════════════════════════════════════
+     EXCEL EXPORT
+  ══════════════════════════════════════════════════════════════════════ */
+  const handleExportExcel = async () => {
+    try {
+      setExportingExcel(true);
+      const { data: evData, error } = await supabase
+        .from(EVENTS_TABLE)
+        .select("attendees_info")
+        .eq("id", eventRow.id)
+        .maybeSingle();
+      if (error) throw error;
+
+      const attendees = parseJsonArr(evData?.attendees_info);
+
+      const extraKeys = new Set();
+      attendees.forEach((a) => {
+        if (a.extra && typeof a.extra === "object" && !Array.isArray(a.extra)) {
+          Object.keys(a.extra).forEach((k) => extraKeys.add(k));
+        }
+      });
+
+      const rows = attendees.map((a) => {
+        const row = {
+          username: a.username ?? "",
+          name: a.name ?? "",
+          age: a.age ?? "",
+          gender: a.gender ?? "",
+          product_type: a.product_type ?? "",
+          purchased_by: a.purchased_by ?? "",
+          created_at: a.created_at ?? "",
+        };
+        extraKeys.forEach((k) => {
+          row[k] = a.extra?.[k] ?? "";
+        });
+        return row;
+      });
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, "Attendees");
+
+      const wbOut = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+      const uri = FileSystem.cacheDirectory + "attendees.xlsx";
+      await FileSystem.writeAsStringAsync(uri, wbOut, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        UTI: "com.microsoft.excel.xlsx",
+        dialogTitle: t("export_to_excel") || "Export to Excel",
+      });
+      Alert.alert("", t("attendees_downloaded") || "Attendees data saved to your device.");
+    } catch (e) {
+      Alert.alert("Error", "Could not export attendees.");
+    } finally {
+      setExportingExcel(false);
+    }
   };
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -863,38 +960,59 @@ export default function EventSettingsScreen() {
   };
 
   /* ── pending ticket requests: approve / reject ── */
-  const approveTicketRequest = async (username) => {
-    if (!postRow?.id) return;
+  const approveTicketRequest = async (request_id, username) => {
+      if (!postRow?.id) return;
     try {
+      console.log("[ESS] approveTicketRequest →", { post_id: postRow.id, request_id, username });
       const { data, error } = await supabase.functions.invoke("approve-ticket-request", {
-        body: { post_id: postRow.id, username },
+        body: { post_id: postRow.id, request_id, username },
       });
-      if (error) throw error;
+      console.log("[ESS] approve-ticket-request response:", JSON.stringify(data), "error:", error?.message, error?.status);
+      if (error) {
+        // Try to read the body from FunctionsHttpError for the real server message
+        let body = null;
+        try { body = await error.context?.json?.(); } catch (_) {}
+        console.error("[ESS] approve FunctionsHttpError body:", JSON.stringify(body));
+        throw error;
+      }
       if (data?.error) throw new Error(data.error);
-      const nextPending = pendingRequests.filter((r) => r?.username !== username);
-      setPendingRequests(nextPending);
-      setModel((prev) =>
-        prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev
-      );
-    } catch {
+      await loadEventModel();
+    } catch (err) {
+      console.error("[ESS] approveTicketRequest caught:", err?.message, err);
       Alert.alert("Error", "Could not approve request.");
     }
   };
 
-  const rejectTicketRequest = async (username) => {
+  const rejectTicketRequest = async (request_id, username) => {
     if (!postRow?.id) return;
     try {
+      console.log("[ESS] rejectTicketRequest →", { post_id: postRow.id, request_id, username });
       const { data, error } = await supabase.functions.invoke("reject-ticket-request", {
-        body: { post_id: postRow.id, username },
+        body: { post_id: postRow.id, request_id, username },
       });
-      if (error) throw error;
+      console.log("[ESS] reject-ticket-request response:", JSON.stringify(data), "error:", error?.message, error?.status);
+      if (error) {
+        let body = null;
+        try { body = await error.context?.json?.(); } catch (_) {}
+        console.error("[ESS] reject FunctionsHttpError body:", JSON.stringify(body));
+        throw error;
+      }
       if (data?.error) throw new Error(data.error);
-      const nextPending = pendingRequests.filter((r) => r?.username !== username);
+      // Remove only the specific request that was rejected.
+      // For new requests use request_id; for legacy requests without one, remove
+      // only the first match by username so sibling requests are untouched.
+      let removed = false;
+      const nextPending = pendingRequests.filter((r) => {
+        if (request_id && r?.request_id === request_id) return false;
+        if (!request_id && r?.username === username && !removed) { removed = true; return false; }
+        return true;
+      });
       setPendingRequests(nextPending);
       setModel((prev) =>
         prev ? { ...prev, post: { ...prev.post, pending_ticket_requests: nextPending } } : prev
       );
-    } catch {
+    } catch (err) {
+      console.error("[ESS] rejectTicketRequest caught:", err?.message, err);
       Alert.alert("Error", "Could not reject request.");
     }
   };
@@ -926,11 +1044,12 @@ export default function EventSettingsScreen() {
       (draftLocation || "") !== baseLoc ||
       draftAllDay !== (postRow?.all_day ?? false) ||
       draftEveryDay !== (postRow?.every_day ?? false) ||
+      draftOnline !== (postRow?.online ?? false) ||
       mediaChanged
     );
   }, [
     postRow, draftTitle, draftDesc, draftDate, draftTime,
-    draftEndDate, draftEndTime, draftLocation, draftAllDay, draftEveryDay, draftMedia,
+    draftEndDate, draftEndTime, draftLocation, draftAllDay, draftEveryDay, draftOnline, draftMedia,
   ]);
 
   const onSave = async () => {
@@ -961,6 +1080,7 @@ export default function EventSettingsScreen() {
         postPatch.end_time = draftAllDay ? null : (draftEndTime || null);
       if (draftAllDay !== (postRow?.all_day ?? false)) postPatch.all_day = draftAllDay;
       if (draftEveryDay !== (postRow?.every_day ?? false)) postPatch.every_day = draftEveryDay;
+      if (draftOnline !== (postRow?.online ?? false)) postPatch.online = draftOnline;
       if ((draftLocation || "") !== (postRow?.location || "")) postPatch.location = draftLocation;
       if (mediaChanged) postPatch.postmediauri = finalMedia;
 
@@ -1086,8 +1206,8 @@ export default function EventSettingsScreen() {
   };
 
   const resolveUsernameFromDisplayName = (displayName) => {
-    const info = safeObj(eventRow?.attendees_info);
-    const rec = info?.[String(displayName || "")];
+    const arr = parseJsonArr(eventRow?.attendees_info);
+    const rec = arr.find((item) => item?.name === displayName || item?.username === displayName);
     const uname = rec?.username ? stripAt(rec.username) : null;
     return uname || null;
   };
@@ -1195,8 +1315,20 @@ export default function EventSettingsScreen() {
     const rowKey = user.id?.toString() || displayName;
     const isExpanded = expandedUserInfo.has(rowKey);
 
-    // Info from attendees_info (skip internal metadata keys)
-    const buyerInfo = safeObj(safeObj(eventRow?.attendees_info)?.[displayName]);
+    // attendees_info may be a JSONB array or a JSON string (TEXT column)
+    const attendeesArr = parseJsonArr(eventRow?.attendees_info);
+    const attendeeRec = attendeesArr.find(
+      (item) =>
+        (username && item?.username === username) ||
+        item?.name === displayName
+    );
+    const buyerInfo = attendeeRec
+      ? {
+          ...(attendeeRec.age != null ? { age: attendeeRec.age } : {}),
+          ...(attendeeRec.gender ? { gender: attendeeRec.gender } : {}),
+          ...safeObj(attendeeRec.extra),
+        }
+      : {};
     const infoFields = Object.entries(buyerInfo).filter(
       ([k]) => k !== "username" && k !== "source" && k !== "response_id"
     );
@@ -1235,7 +1367,7 @@ export default function EventSettingsScreen() {
               <Text
                 style={[
                   styles.memberUsername,
-                  { color: isExternal ? "#8c97a8" : theme.text, flex: 1 },
+                  { color: isExternal ? "#8c97a8" : theme.text },
                 ]}
               >
                 {isExternal ? notOnAlbaLabel : `@${username}`}
@@ -1350,40 +1482,33 @@ export default function EventSettingsScreen() {
                 onChangeText={setDraftDesc}
                 placeholder={postRow?.description || "Event description"}
                 placeholderTextColor={theme.subtleText || "#8c97a8"}
-                style={[styles.input, { color: theme.text, height: 90 }]}
+                style={[styles.input, { color: theme.text, height: 60 }]}
                 multiline
               />
             </View>
 
-            {/* ── All day / Every day ── */}
-            <View style={styles.allDayRow}>
-              <Switch
-                value={draftAllDay}
-                onValueChange={(next) => {
-                  setDraftAllDay(next);
-                  if (next) { setDraftTime(""); setDraftEndTime(""); }
-                }}
-                trackColor={{ false: theme.border, true: "#3D8BFF" }}
-                thumbColor="#fff"
-              />
-              <Text style={[styles.allDayLabel, { color: theme.text }]}>
-                {t("event_all_day") || "All day"}
-              </Text>
-            </View>
-            <View style={styles.allDayRow}>
-              <Switch
-                value={draftEveryDay}
-                onValueChange={setDraftEveryDay}
-                trackColor={{ false: theme.border, true: "#3D8BFF" }}
-                thumbColor="#fff"
-              />
-              <Text style={[styles.allDayLabel, { color: theme.text }]}>
-                {t("event_every_day") || "Every day"}
-              </Text>
+            {/* ── All day / Every day / Online ── */}
+            <View style={styles.togglesRow}>
+              {[
+                { label: t("event_all_day") || "All day", value: draftAllDay, onToggle: (next) => { setDraftAllDay(next); if (next) { setDraftTime(""); setDraftEndTime(""); } } },
+                { label: t("event_every_day") || "Every day", value: draftEveryDay, onToggle: setDraftEveryDay },
+                { label: t("event_online") || "Online", value: draftOnline, onToggle: setDraftOnline },
+              ].map(({ label, value, onToggle }) => (
+                <TouchableOpacity key={label} style={styles.toggleItem} onPress={() => onToggle(!value)} activeOpacity={0.7}>
+                  <Text style={[styles.toggleLabel, { color: theme.subtleText || "#8c97a8" }]}>{label}</Text>
+                  <Switch
+                    value={value}
+                    onValueChange={onToggle}
+                    trackColor={{ false: isDark ? "#444" : "#d0d7e2", true: "#3D8BFF" }}
+                    thumbColor="#fff"
+                    style={{ alignSelf: "center" }}
+                  />
+                </TouchableOpacity>
+              ))}
             </View>
 
             {/* ── Start date/time ── */}
-            <Text style={[styles.sectionTitle, { color: theme.text }]}>
+            <Text style={[styles.sectionTitle, { color: theme.text, marginTop: 0 }]}>
               {t("change_date_time") || "Start date and time"}
             </Text>
             <View style={styles.dateTimeRow}>
@@ -1516,7 +1641,7 @@ export default function EventSettingsScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text }]}>
                     {t("event_purchases_active") || "Allow ticket purchases"}
                   </Text>
                   <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
@@ -1525,6 +1650,32 @@ export default function EventSettingsScreen() {
                 </View>
                 <View style={[styles.toggleTrack, { backgroundColor: purchasesActive ? "#3D8BFF" : (theme.border || "#ccc") }]}>
                   <View style={[styles.toggleThumb, { alignSelf: purchasesActive ? "flex-end" : "flex-start" }]} />
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {/* ── Allow guest accounts ── */}
+            {isAdmin && postRow?.id && (
+              <TouchableOpacity
+                style={[styles.toggleRow, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  if (!postRow?.id) return;
+                  const next = !allowGuests;
+                  setAllowGuests(next);
+                  await supabase.from(POSTS_TABLE).update({ allow_guests: next }).eq("id", postRow.id);
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text }]}>
+                    {t("event_allow_guests") || "Allow guest accounts to buy tickets"}
+                  </Text>
+                  <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
+                    {t("event_allow_guests_sub") || "People without an account can get tickets from the web"}
+                  </Text>
+                </View>
+                <View style={[styles.toggleTrack, { backgroundColor: allowGuests ? "#3D8BFF" : (theme.border || "#ccc") }]}>
+                  <View style={[styles.toggleThumb, { alignSelf: allowGuests ? "flex-end" : "flex-start" }]} />
                 </View>
               </TouchableOpacity>
             )}
@@ -1547,7 +1698,7 @@ export default function EventSettingsScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text }]}>
                     {ticketsPaused
                       ? (t("event_resume_tickets") || "Resume ticket selling")
                       : (t("event_pause_tickets") || "Pause ticket selling")}
@@ -1577,7 +1728,7 @@ export default function EventSettingsScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text }]}>
                     {t("event_manually_approve_buyers") || "Manually approve ticket buyers"}
                   </Text>
                   <Text style={[styles.toggleSub, { color: theme.subtleText || "#8c97a8" }]}>
@@ -1605,7 +1756,7 @@ export default function EventSettingsScreen() {
                 }}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.toggleLabel, { color: theme.text }]}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text }]}>
                     {t("event_sell_fixed_tickets") || "Sell fixed number of tickets"}
                   </Text>
                   {fixedTicketCount && (
@@ -1643,7 +1794,7 @@ export default function EventSettingsScreen() {
                   activeOpacity={0.7}
                   onPress={() => setPendingExpanded((v) => !v)}
                 >
-                  <Text style={[styles.toggleLabel, { color: theme.text, flex: 1 }]}>
+                  <Text style={[styles.toggleRowLabel, { color: theme.text, flex: 1 }]}>
                     {t("pending_ticket_requests_title") || "Pending ticket requests"}
                     {pendingRequests.length > 0 ? ` (${pendingRequests.length})` : ""}
                   </Text>
@@ -1661,36 +1812,47 @@ export default function EventSettingsScreen() {
                         {t("pending_ticket_requests_empty") || "No pending requests."}
                       </Text>
                     ) : (
-                      pendingRequests.map((req) => {
-                        const uname = req?.username || "";
+                      pendingRequests.map((req, reqIdx) => {
+                        const buyerUsername = req?.username || "";
+                        const reqRequestId = req?.request_id || null;
                         const info = req?.info || "";
                         const photoUrl = req?.photo_url || null;
-                        const prof = pendingRequestsProfiles[uname];
-                        const isExpanded = expandedPendingInfo.has(uname);
-                        const hasVettingInfo = !!(postRow?.ticket_approval_info && info) || !!info;
-                        const hasAnyExpandable = hasVettingInfo || !!photoUrl;
+                        const attendees = Array.isArray(req?.attendees_to_add) ? req.attendees_to_add : [];
+                        const reqKey = req?.request_id || req?.requested_at || `${buyerUsername}-${reqIdx}`;
+
+                        // Primary display: names of the people who need tickets
+                        const attendeeNames = attendees
+                          .map((a) => a?.name || (a?.username ? `@${a.username}` : ""))
+                          .filter(Boolean);
+                        const displayName = attendeeNames.length > 0
+                          ? attendeeNames.join(", ")
+                          : buyerUsername;
+                        const displayInitial = (attendeeNames[0] || buyerUsername).charAt(0).toUpperCase();
+
+                        const isExpanded = expandedPendingInfo.has(reqKey);
+                        const hasVettingInfo = !!info;
+                        const hasAttendeeInfo = attendees.some(
+                          (a) => a?.age != null || a?.gender || (a?.extra && Object.keys(a.extra).length > 0)
+                        );
+                        const hasAnyExpandable = hasVettingInfo || !!photoUrl || hasAttendeeInfo;
 
                         return (
-                          <View key={uname}>
+                          <View key={reqKey}>
                             <View style={[styles.memberRow, { borderBottomColor: theme.border }]}>
-                              {prof?.avatar_url ? (
-                                <Image source={{ uri: prof.avatar_url }} style={styles.memberAvatar} />
-                              ) : (
-                                <View
-                                  style={[
-                                    styles.memberAvatar,
-                                    { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" },
-                                  ]}
-                                >
-                                  <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>
-                                    {(prof?.name || uname).charAt(0).toUpperCase()}
-                                  </Text>
-                                </View>
-                              )}
+                              <View
+                                style={[
+                                  styles.memberAvatar,
+                                  { backgroundColor: "#3D8BFF", alignItems: "center", justifyContent: "center" },
+                                ]}
+                              >
+                                <Text style={{ color: "#fff", fontFamily: "PoppinsBold", fontSize: 14 }}>
+                                  {displayInitial}
+                                </Text>
+                              </View>
 
                               <View style={{ flex: 1, marginLeft: 10 }}>
-                                <Text style={[styles.memberName, { color: theme.text }]}>
-                                  {prof?.name || uname}
+                                <Text style={[styles.memberName, { color: theme.text }]} numberOfLines={1}>
+                                  {displayName}
                                 </Text>
                                 <TouchableOpacity
                                   style={styles.infoToggleRow}
@@ -1698,19 +1860,14 @@ export default function EventSettingsScreen() {
                                     if (!hasAnyExpandable) return;
                                     setExpandedPendingInfo((prev) => {
                                       const next = new Set(prev);
-                                      next.has(uname) ? next.delete(uname) : next.add(uname);
+                                      next.has(reqKey) ? next.delete(reqKey) : next.add(reqKey);
                                       return next;
                                     });
                                   }}
                                   hitSlop={{ top: 4, bottom: 4, left: 4, right: 10 }}
                                 >
-                                  <Text
-                                    style={[
-                                      styles.memberUsername,
-                                      { color: theme.subtleText || "#8c97a8", flex: 1 },
-                                    ]}
-                                  >
-                                    {uname ? `@${uname}` : ""}
+                                  <Text style={[styles.memberUsername, { color: theme.subtleText || "#8c97a8" }]}>
+                                    {buyerUsername ? `by @${buyerUsername}` : ""}
                                   </Text>
                                   {hasAnyExpandable && (
                                     <Feather
@@ -1726,20 +1883,19 @@ export default function EventSettingsScreen() {
                               <View style={{ flexDirection: "row", gap: 8 }}>
                                 <TouchableOpacity
                                   style={[styles.pendingIconBtn, { backgroundColor: "#2BB673" }]}
-                                  onPress={() => approveTicketRequest(uname)}
+                                  onPress={() => approveTicketRequest(reqRequestId, buyerUsername)}
                                 >
                                   <Feather name="check" size={16} color="#fff" />
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                   style={[styles.pendingIconBtn, { backgroundColor: "#EF4444" }]}
-                                  onPress={() => rejectTicketRequest(uname)}
+                                  onPress={() => rejectTicketRequest(reqRequestId, buyerUsername)}
                                 >
                                   <Feather name="x" size={16} color="#fff" />
                                 </TouchableOpacity>
                               </View>
                             </View>
 
-                            {/* Expanded section: vetting info + photo */}
                             {isExpanded && (
                               <View
                                 style={[
@@ -1750,6 +1906,7 @@ export default function EventSettingsScreen() {
                                   },
                                 ]}
                               >
+                                {/* Approval text + photo the buyer submitted */}
                                 {hasVettingInfo && (
                                   <Text style={[styles.infoPanelLine, { color: theme.text }]}>
                                     {postRow?.ticket_approval_info ? (
@@ -1765,12 +1922,46 @@ export default function EventSettingsScreen() {
                                   </Text>
                                 )}
                                 {!!photoUrl && (
-                                  <Image
-                                    source={{ uri: photoUrl }}
-                                    style={[styles.pendingPhoto, { marginTop: hasVettingInfo ? 8 : 0 }]}
-                                    resizeMode="contain"
-                                  />
+                                  <TouchableOpacity
+                                    activeOpacity={0.85}
+                                    onPress={() => setLightboxUri(photoUrl)}
+                                    style={{ marginTop: hasVettingInfo ? 8 : 0 }}
+                                  >
+                                    <Image
+                                      source={{ uri: photoUrl }}
+                                      style={styles.pendingPhoto}
+                                      resizeMode="cover"
+                                    />
+                                  </TouchableOpacity>
                                 )}
+
+                                {/* Required info the buyer filled for each attendee */}
+                                {attendees.map((a, ai) => {
+                                  const lines = [];
+                                  if (a?.name) lines.push(`Name: ${a.name}`);
+                                  if (a?.age != null) lines.push(`Age: ${a.age}`);
+                                  if (a?.gender) lines.push(`Gender: ${a.gender}`);
+                                  if (a?.extra) {
+                                    Object.entries(a.extra).forEach(([k, v]) => {
+                                      if (v) lines.push(`${k}: ${v}`);
+                                    });
+                                  }
+                                  if (!lines.length) return null;
+                                  return (
+                                    <View key={ai} style={{ marginTop: 8 }}>
+                                      {attendees.length > 1 && (
+                                        <Text style={[styles.infoPanelKey, { color: theme.text, marginBottom: 2 }]}>
+                                          {a?.name || `Ticket ${ai + 1}`}
+                                        </Text>
+                                      )}
+                                      {lines.map((line, li) => (
+                                        <Text key={li} style={[styles.infoPanelLine, { color: theme.text }]}>
+                                          {line}
+                                        </Text>
+                                      ))}
+                                    </View>
+                                  );
+                                })}
                               </View>
                             )}
                           </View>
@@ -1782,19 +1973,20 @@ export default function EventSettingsScreen() {
               </View>
             )}
 
-            {/* ══ Google Forms integration button ══ */}
+            {/* ══ Google Forms + Export to Excel button row ══ */}
             {isAdmin && (
               <View style={{ marginTop: 14 }}>
-                {googleIntegration?.form_name ? (
-                  <View>
+                <View style={styles.adminBtnRow}>
+                  {/* Google Forms half */}
+                  {googleIntegration?.form_name ? (
                     <View
                       style={[
-                        styles.googleFormsBtn,
-                        { backgroundColor: isDark ? "#1a2e1a" : "#e8f5e9", borderColor: "#2BB673" },
+                        styles.adminBtnHalf,
+                        { flex: 1, backgroundColor: isDark ? "#1a2e1a" : "#e8f5e9", borderColor: "#2BB673" },
                       ]}
                     >
-                      <Feather name="check-circle" size={16} color="#2BB673" />
-                      <Text style={[styles.googleFormsBtnText, { color: "#2BB673" }]} numberOfLines={1}>
+                      <Feather name="check-circle" size={16} color="#2BB673" style={{ marginTop: 2 }} />
+                      <Text style={[styles.adminBtnText, { color: "#2BB673" }]}>
                         {(t("google_form_connected") || "Google Form connected: {name}").replace(
                           "{name}",
                           googleIntegration.form_name
@@ -1804,37 +1996,68 @@ export default function EventSettingsScreen() {
                         <ActivityIndicator size="small" color="#2BB673" style={{ marginLeft: 4 }} />
                       )}
                     </View>
+                  ) : (
                     <TouchableOpacity
-                      onPress={disconnectGoogleForm}
-                      style={styles.googleFormsDisconnect}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      style={[
+                        styles.adminBtnHalf,
+                        {
+                          flex: 1,
+                          backgroundColor: isDark ? "#111827" : "#fff",
+                          borderColor: theme.border,
+                          opacity: googleAuthLoading ? 0.6 : 1,
+                        },
+                      ]}
+                      onPress={() => { googlePromptAsync(); }}
+                      disabled={googleAuthLoading || !googleRequest}
+                      activeOpacity={0.85}
                     >
-                      <Text style={styles.googleFormsDisconnectText}>
-                        {t("disconnect_google_form") || "Disconnect"}
+                      {googleAuthLoading ? (
+                        <ActivityIndicator size="small" color="#59A7FF" style={{ marginTop: 2 }} />
+                      ) : (
+                        <Feather name="link" size={16} color="#59A7FF" style={{ marginTop: 2 }} />
+                      )}
+                      <Text style={[styles.adminBtnText, { color: "#59A7FF" }]}>
+                        {t("integrate_google_forms") || "Connect to Google Forms"}
                       </Text>
                     </TouchableOpacity>
-                  </View>
-                ) : (
+                  )}
+
+                  {/* Export to Excel half */}
                   <TouchableOpacity
                     style={[
-                      styles.googleFormsBtn,
+                      styles.adminBtnHalf,
                       {
+                        flex: 1,
+                        alignItems: "center",
                         backgroundColor: isDark ? "#111827" : "#fff",
                         borderColor: theme.border,
-                        opacity: googleAuthLoading ? 0.6 : 1,
+                        opacity: exportingExcel ? 0.6 : 1,
                       },
                     ]}
-                    onPress={() => googlePromptAsync()}
-                    disabled={googleAuthLoading || !googleRequest}
+                    onPress={handleExportExcel}
+                    disabled={exportingExcel}
                     activeOpacity={0.85}
                   >
-                    {googleAuthLoading ? (
-                      <ActivityIndicator size="small" color="#59A7FF" />
+                    {exportingExcel ? (
+                      <ActivityIndicator size="small" color="#22a84b" />
                     ) : (
-                      <Feather name="link" size={16} color="#59A7FF" />
+                      <Feather name="download" size={16} color="#22a84b" />
                     )}
-                    <Text style={[styles.googleFormsBtnText, { color: "#59A7FF" }]}>
-                      {t("integrate_google_forms") || "Integrate Google Forms"}
+                    <Text style={[styles.adminBtnText, { color: "#22a84b" }]}>
+                      {t("export_to_excel") || "Export to Excel"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Disconnect — below both buttons, left-aligned */}
+                {googleIntegration?.form_name && (
+                  <TouchableOpacity
+                    onPress={disconnectGoogleForm}
+                    style={styles.googleFormsDisconnect}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Text style={styles.googleFormsDisconnectText}>
+                      {t("disconnect_google_form") || "Disconnect"}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -2172,6 +2395,16 @@ export default function EventSettingsScreen() {
       </Modal>
 
       <DMUsersModal visible={dmVisible} onClose={() => setDmVisible(false)} users={dmUsers} title={dmTitle} />
+
+      <Modal visible={!!lightboxUri} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
+        <Pressable style={styles.lightboxBackdrop} onPress={() => setLightboxUri(null)}>
+          <Image
+            source={{ uri: lightboxUri }}
+            style={styles.lightboxImage}
+            resizeMode="contain"
+          />
+        </Pressable>
+      </Modal>
     </ThemedView>
   );
 }
@@ -2193,8 +2426,10 @@ const styles = StyleSheet.create({
   input: { fontFamily: "Poppins", fontSize: 14 },
 
   dateTimeRow: { flexDirection: "row", gap: 12 },
-  allDayRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  allDayLabel: { fontFamily: "Poppins", fontSize: 14, marginLeft: 10 },
+  togglesRow: { flexDirection: "row", alignItems: "flex-start", marginTop: 14, marginBottom: 10, width: "100%" },
+  toggleItem: { width: "33.33%", alignItems: "center", justifyContent: "flex-start", gap: 6 },
+  toggleLabel: { fontFamily: "Poppins", fontSize: 11, textAlign: "center" },
+  toggleRowLabel: { fontFamily: "PoppinsBold", fontSize: 14 },
   pill: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   pillInput: { fontFamily: "Poppins", fontSize: 14 },
 
@@ -2207,7 +2442,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginTop: 14,
   },
-  toggleLabel: { fontFamily: "PoppinsBold", fontSize: 14 },
   toggleSub: { fontFamily: "Poppins", fontSize: 12, marginTop: 2 },
   toggleTrack: { width: 40, height: 22, borderRadius: 11, padding: 2, justifyContent: "center" },
   toggleThumb: { width: 18, height: 18, borderRadius: 9, backgroundColor: "#fff" },
@@ -2237,17 +2471,18 @@ const styles = StyleSheet.create({
   cancelEditsBtn: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10, borderWidth: 1 },
   cancelEditsText: { fontFamily: "PoppinsBold", fontSize: 14 },
 
-  /* Google Forms button */
-  googleFormsBtn: {
+  /* Google Forms + Excel row */
+  adminBtnRow: { flexDirection: "row", gap: 8 },
+  adminBtnHalf: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     borderRadius: 12,
     borderWidth: 1,
     paddingVertical: 12,
-    paddingHorizontal: 14,
-    gap: 8,
+    paddingHorizontal: 10,
+    gap: 6,
   },
-  googleFormsBtnText: { fontFamily: "PoppinsBold", fontSize: 14, flex: 1 },
+  adminBtnText: { fontFamily: "PoppinsBold", fontSize: 13, flex: 1 },
   googleFormsDisconnect: { alignSelf: "flex-start", marginTop: 4, marginLeft: 2, paddingVertical: 2 },
   googleFormsDisconnectText: { fontFamily: "Poppins", fontSize: 12, color: "#ff4d4f" },
 
@@ -2311,6 +2546,13 @@ const styles = StyleSheet.create({
 
   pendingIconBtn: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   pendingPhoto: { width: "100%", height: 200, borderRadius: 10 },
+  lightboxBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.92)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lightboxImage: { width: "100%", height: "100%" },
 
   dmWholeBtn: {
     alignSelf: "center", flexDirection: "row", gap: 8,

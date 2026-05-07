@@ -72,6 +72,21 @@ function resolveVideoUrl(storagePath) {
   return data?.publicUrl ?? null;
 }
 
+function parseMentions(text, navigation) {
+  return text.split(/(@\w[\w.]*)/g).map((part, i) => {
+    if (/^@\w/.test(part)) {
+      const username = part.slice(1);
+      return (
+        <Text key={i} style={{ fontFamily: "PoppinsBold", color: "#fff" }}
+          onPress={(e) => { e.stopPropagation?.(); navigation.navigate("Profile", { username }); }}>
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
+}
+
 function FeedItem({
   item,
   isActive,
@@ -83,6 +98,8 @@ function FeedItem({
   pausedByHold,
   overlayHiddenByHold,
   safeBottom,
+  linkedEventPostId,
+  avatarUrl,
   onShare,
   onToggleSave,
   onTap,
@@ -92,8 +109,10 @@ function FeedItem({
   onReportUser,
   onAvatarPress,
   onDelete,
+  onTicket,
 }) {
   const { t } = useAlbaLanguage();
+  const navigation = useNavigation();
   // Only create a loaded player for the active item and the one immediately after
   // (so swiping forward is instant). All other items get null — no buffering.
   const player = useVideoPlayer(
@@ -151,43 +170,37 @@ function FeedItem({
         onTextLayout={(e) => {
           if (!hasMeasuredCaption) {
             setHasMeasuredCaption(true);
-            if (e.nativeEvent.lines.length > 1) {
-              setIsLongCaption(true);
-            }
+            if (e.nativeEvent.lines.length > 1) setIsLongCaption(true);
           }
         }}
       >
-        {item.caption}
+        {parseMentions(item.caption, navigation)}
       </Text>
     );
   } else if (showFullCaption) {
     captionContent = (
-      <>
-        <Text style={styles.captionText}>{item.caption}</Text>
-        <Text style={styles.readMoreText} onPress={() => setShowFullCaption(false)}>
-          {t("caption_read_less") || "Read less"}
+      <Text style={styles.captionText}>
+        {parseMentions(item.caption, navigation)}
+        <Text style={{ fontFamily: "PoppinsBold" }} onPress={(e) => { e.stopPropagation?.(); setShowFullCaption(false); }}>
+          {" "}{t("caption_read_less") || "less"}
         </Text>
-      </>
+      </Text>
     );
   } else {
     captionContent = (
-      <>
-        <Text
-          style={styles.captionText}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {item.caption}
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Text style={[styles.captionText, { flexShrink: 1 }]} numberOfLines={1} ellipsizeMode="tail">
+          {parseMentions(item.caption, navigation)}
         </Text>
         {isLongCaption && (
           <Text
-            style={styles.readMoreText}
-            onPress={() => setShowFullCaption(true)}
+            style={[styles.captionText, { fontFamily: "PoppinsBold", marginLeft: 4, flexShrink: 0 }]}
+            onPress={(e) => { e.stopPropagation?.(); setShowFullCaption(true); }}
           >
             {t("caption_read_more")}
           </Text>
         )}
-      </>
+      </View>
     );
   }
 
@@ -224,7 +237,11 @@ function FeedItem({
               }}
               style={{ marginRight: 8 }}
             >
-              <View style={styles.avatarDot} />
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatarDot} />
+              ) : (
+                <View style={styles.avatarDot} />
+              )}
             </TouchableOpacity>
             <View style={styles.textBlock}>
               <TouchableOpacity
@@ -241,6 +258,17 @@ function FeedItem({
           </View>
 
           <View style={styles.actionsColumn}>
+            {linkedEventPostId && (
+              <TouchableOpacity
+                onPress={(e) => { stop(e); onTicket && onTicket(); }}
+                style={styles.actionButton}
+              >
+                <View style={styles.ticketBtn}>
+                  <Ionicons name="ticket-outline" size={18} color="#fff" />
+                </View>
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
               onPress={(e) => {
                 stop(e);
@@ -426,6 +454,12 @@ export default function FeedScreen() {
   // block confirm modal state
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [blockCandidateId, setBlockCandidateId] = useState(null);
+
+  // linked event post IDs per feed video { [feedVideoId]: eventPostId }
+  const [linkedEventMap, setLinkedEventMap] = useState({});
+
+  // avatar URLs per username { [username]: avatarUrl }
+  const [userAvatarMap, setUserAvatarMap] = useState({});
 
   // toast state
   const [toastMessage, setToastMessage] = useState("");
@@ -701,7 +735,7 @@ export default function FeedScreen() {
             if (!error && (!rows || rows.length === 0)) {
               const { data: fallbackRows, error: fallbackError } = await supabase
                 .from("feed_videos")
-                .select("id, user_id, username, caption, video_storage_path, created_at")
+                .select("id, user_id, username, caption, video_storage_path, created_at, linked_post_id")
                 .order("created_at", { ascending: false })
                 .limit(30);
               rows = fallbackRows;
@@ -710,7 +744,7 @@ export default function FeedScreen() {
           } else {
             const { data: tableRows, error: tableError } = await supabase
               .from("feed_videos")
-              .select("id, user_id, username, caption, video_storage_path, created_at")
+              .select("id, user_id, username, caption, video_storage_path, created_at, linked_post_id")
               .order("created_at", { ascending: false })
               .limit(30);
 
@@ -737,6 +771,7 @@ export default function FeedScreen() {
                   username: row.user_id || row.username || "user",
                   caption: row.caption || "",
                   videoUrl,
+                  rawLinkedPostId: row.linked_post_id || null,
                   canDelete: !!user?.id && row.user_id === user.id,
                 };
               })
@@ -784,6 +819,10 @@ export default function FeedScreen() {
 
           // Don't forcibly reset index here (avoids any extra jank)
           // setCurrentIndex(0);
+
+          // Resolve ticket-button event posts in the background
+          resolveLinkedEvents(mapped).catch(() => {});
+          resolveAvatars(mapped).catch(() => {});
 
           // ✅ warm first-video cache from Supabase first item (remote), if present
           if (mapped?.length) {
@@ -878,7 +917,7 @@ export default function FeedScreen() {
       if (!rows) {
         const { data: tableRows } = await supabase
           .from("feed_videos")
-          .select("id, user_id, username, caption, video_storage_path, created_at")
+          .select("id, user_id, username, caption, video_storage_path, created_at, linked_post_id")
           .order("created_at", { ascending: false })
           .limit(30);
         rows = tableRows;
@@ -895,16 +934,94 @@ export default function FeedScreen() {
             username: row.user_id || row.username || "user",
             caption: row.caption || "",
             videoUrl,
+            rawLinkedPostId: row.linked_post_id || null,
             canDelete: !!user?.id && row.user_id === user.id,
           };
         })
         .filter(Boolean);
 
       setData(mapped);
+      resolveLinkedEvents(mapped).catch(() => {});
+      resolveAvatars(mapped).catch(() => {});
       if (mapped.length) cacheFirstFeedVideoFromList(mapped[0]).catch(() => {});
     } finally {
       setRefreshing(false);
     }
+  }, []);
+
+  // For each feed video, resolve the community event post to open via the ticket button.
+  // If linked_post_id is set in the DB, always use it directly — no date validation.
+  // Dynamic lookup (closest future event by same user) only runs for videos with no link.
+  const resolveLinkedEvents = useCallback(async (items) => {
+    if (!items || items.length === 0) return;
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const nowTimeStr = now.toTimeString().slice(0, 5);
+    const resolved = {};
+
+    const withLinked    = items.filter((i) => i.rawLinkedPostId);
+    const withoutLinked = items.filter((i) => !i.rawLinkedPostId);
+
+    // 1. Explicit link — always use it as-is, regardless of event date
+    for (const item of withLinked) {
+      resolved[item.id] = item.rawLinkedPostId;
+    }
+
+    // 2. Dynamic lookup only for videos with no linked post
+    if (withoutLinked.length > 0) {
+      try {
+        const usernames = [...new Set(withoutLinked.map((i) => i.userId).filter(Boolean))];
+        if (usernames.length > 0) {
+          const { data: posts } = await supabase
+            .from("posts")
+            .select("id, user, date, time")
+            .eq("type", "Event")
+            .eq("isticketable", true)
+            .in("user", usernames)
+            .gte("date", todayStr)
+            .order("date", { ascending: true });
+
+          // Pick closest future event per username
+          const byUser = {};
+          for (const p of (posts || [])) {
+            if (!p.user) continue;
+            if (p.date === todayStr && p.time && p.time.slice(0, 5) < nowTimeStr) continue;
+            const curr = byUser[p.user];
+            if (!curr) { byUser[p.user] = p; continue; }
+            if (p.date < curr.date) { byUser[p.user] = p; continue; }
+            if (p.date === curr.date && curr.time && p.time && p.time < curr.time) {
+              byUser[p.user] = p;
+            }
+          }
+          for (const item of withoutLinked) {
+            if (item.userId && byUser[item.userId]) resolved[item.id] = byUser[item.userId].id;
+          }
+        }
+      } catch {}
+    }
+
+    if (Object.keys(resolved).length > 0) {
+      setLinkedEventMap((prev) => ({ ...prev, ...resolved }));
+    }
+  }, []);
+
+  const resolveAvatars = useCallback(async (items) => {
+    if (!items || items.length === 0) return;
+    const usernames = [...new Set(items.map((i) => i.username).filter(Boolean))];
+    if (!usernames.length) return;
+    try {
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("username, avatar_url")
+        .in("username", usernames);
+      const map = {};
+      for (const p of (profiles || [])) {
+        if (p.avatar_url) map[p.username] = p.avatar_url;
+      }
+      if (Object.keys(map).length > 0) {
+        setUserAvatarMap((prev) => ({ ...prev, ...map }));
+      }
+    } catch {}
   }, []);
 
   const handleDeleteVideo = useCallback(
@@ -1193,6 +1310,8 @@ export default function FeedScreen() {
                 pausedByHold={pausedByHold && index === currentIndex}
                 overlayHiddenByHold={overlayHiddenByHold && index === currentIndex}
                 safeBottom={insets.bottom}
+                linkedEventPostId={linkedEventMap[item.id] || null}
+                avatarUrl={userAvatarMap[item.username] || null}
                 onShare={() => setShareVisible(true)}
                 onToggleSave={() => handleToggleSave(item.id)}
                 onTap={handleTap}
@@ -1207,6 +1326,7 @@ export default function FeedScreen() {
                   })
                 }
                 onDelete={handleDeleteVideo}
+                onTicket={() => navigation.navigate("SinglePost", { postId: linkedEventMap[item.id] })}
               />
             )}
           />
@@ -1424,6 +1544,14 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     marginBottom: 18,
+  },
+  ticketBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#2F91FF",
+    alignItems: "center",
+    justifyContent: "center",
   },
   shareIcon: {
     width: 26,

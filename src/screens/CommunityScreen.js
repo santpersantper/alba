@@ -22,6 +22,9 @@ import {
   TextInput,
   Modal,
   Linking,
+  ScrollView,
+  Image,
+  ActivityIndicator,
 } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import * as Location from "expo-location";
@@ -51,16 +54,48 @@ const DEFAULT_RADIUS_KM = 50;
 const VISIBLE_TYPES = new Set(["Event", "Ad", "Article"]);
 
 const BASE_LABELS = [
-  "Sports",
-  "Science & Tech",
   "Parties",
+  "Sports",
   "Music",
-  "English-speaking",
+  "Health",
+  "Movies",
+  "Science & Tech",
 ];
 
-const LABEL_COLORS = ["#78C0E9", "#5BC4B8", "#7DB0FF", "#6BCB77", "#87A8FF"];
+const LABEL_COLORS = ["#78C0E9", "#5BC4B8", "#7DB0FF", "#6BCB77", "#87A8FF", "#3D8BFF"];
+
+// Expands each label into a richer semantic query so the embedding model has more
+// signal than a single word. User-defined labels fall back to the label name alone.
+const LABEL_EXPANSIONS: Record<string, string> = {
+  "Parties": "party celebration nightlife drinking social gathering birthday anniversary get-together bar club dance",
+  "Sports": "sports match game athletics fitness workout gym running cycling swimming football tennis basketball competition tournament outdoor activity",
+  "Music": "music concert live performance band DJ festival gig show singing instrument entertainment stage",
+  "Health": "health wellness fitness yoga meditation mindfulness nutrition mental health therapy workshop well-being self-care exercise pilates",
+  "Movies": "movie film cinema screening documentary short film festival preview premiere director actor screening room",
+  "Science & Tech": "technology science innovation startup coding programming developer AI machine learning software engineering hackathon STEM workshop",
+};
 
 const asAt = (s) => String(s || "").replace(/^@+/, "");
+
+const formatSearchDate = (dateStr) => {
+  if (!dateStr) return "";
+  const parts = String(dateStr).slice(0, 10).split("-");
+  if (parts.length !== 3) return String(dateStr).slice(0, 10);
+  const [year, month, day] = parts.map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
+
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * (Math.PI / 180)) *
+    Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
 const withTimeout = async (promise, ms) => {
   let t;
@@ -171,6 +206,8 @@ export default function CommunityScreen() {
   const [uid, setUid] = useState(null);
   const [savedMeta, setSavedMeta] = useState({});
   const [communityRadiusM, setCommunityRadiusM] = useState(DEFAULT_RADIUS_KM * 1000);
+  const [userLat, setUserLat] = useState(null);
+  const [userLon, setUserLon] = useState(null);
 
   const { prefs, reload: reloadPrefs } = useUserPreferences();
   const [travelBannerDismissed, setTravelBannerDismissed] = useState(false);
@@ -180,7 +217,10 @@ export default function CommunityScreen() {
   const [showLocalNews, setShowLocalNews] = useState(true);
 
   const [labels, setLabels] = useState(BASE_LABELS);
-  const [activeLabel, setActiveLabel] = useState(null);
+  const [activeLabels, setActiveLabels] = useState([]);
+  const labelExpansionCache = useRef({}); // session cache: label → expansion string
+  const perLabelResultsRef = useRef(new Map()); // label → [{id, similarity}] — cached search results
+  const postLabelMapRef = useRef(new Map()); // postId → which label matched it (for badge display)
   const [followedUserIds, setFollowedUserIds] = useState([]);
   const [followedUsernames, setFollowedUsernames] = useState([]);
   const [showFollowedPosts, setShowFollowedPosts] = useState(false);
@@ -188,14 +228,18 @@ export default function CommunityScreen() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [showDateDropdown, setShowDateDropdown] = useState(false);
 
-  const [timeFilter, setTimeFilter] = useState(null);
-  const [showTimeDropdown, setShowTimeDropdown] = useState(false);
-
   const [activePostId, setActivePostId] = useState(null);
+
+  const [communitySearchUsers, setCommunitySearchUsers] = useState([]);
+  const [communitySearchPosts, setCommunitySearchPosts] = useState([]);
+  const [communitySearchLoading, setCommunitySearchLoading] = useState(false);
+  const [communitySearchPostsVisible, setCommunitySearchPostsVisible] = useState(2);
+  const [communitySearchUsersVisible, setCommunitySearchUsersVisible] = useState(2);
   const [blockedUsers, setBlockedUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [semanticResults, setSemanticResults] = useState(null); // null = inactive; [{id, similarity}] = active
   const [semanticLoading, setSemanticLoading] = useState(false);
+  const [labelPosts, setLabelPosts] = useState(null); // full post records for semantic result IDs when label is active
   const [firstPostOverride, setFirstPostOverride] = useState(null);
 
   // Ad interest prompt — track rejected categories so we never ask again this session
@@ -273,6 +317,7 @@ export default function CommunityScreen() {
   const handlePostHidden = useCallback((id, newHidden) => {
     if (newHidden) setPosts((prev) => prev.filter((x) => x.id !== id));
   }, []);
+
 
   const fetchNearbyPosts = useCallback(async () => {
     try {
@@ -368,6 +413,9 @@ export default function CommunityScreen() {
 
         ({ latitude, longitude } = coords);
       }
+
+      setUserLat(latitude);
+      setUserLon(longitude);
 
       // ✅ IMPORTANT FIX: await the profile location update so nearby_posts uses the NEW location
       const { error: upErr } = await supabase
@@ -552,79 +600,148 @@ export default function CommunityScreen() {
       const cleaned = nextLabels.map((s) => s.trim()).filter(Boolean);
       setEventTags(cleaned);
 
-      // Detect newly added labels and also merge them into adTags
+      const nextLower = new Set(cleaned.map((s) => s.toLowerCase()));
+
+      // Detect removed labels so they can be purged from ad_tags too (prevents re-appearing on load)
+      const removedLower = new Set(
+        labels.map((s) => s.toLowerCase()).filter((s) => !nextLower.has(s))
+      );
+
+      // Detect newly added labels and merge them into adTags
       const addedItems = nextLabels.filter(
         (l) => !labels.some((existing) => existing.toLowerCase() === l.toLowerCase())
       );
 
-      if (addedItems.length > 0) {
-        setAdTags((prev) => {
-          const prevLower = new Set(prev.map((s) => s.toLowerCase()));
-          const toAdd = addedItems.filter((l) => !prevLower.has(l.toLowerCase()));
-          const nextAdTags = toAdd.length ? [...prev, ...toAdd] : prev;
-          if (uid) {
-            supabase
-              .from("profiles")
-              .update({ event_tags: cleaned, ad_tags: nextAdTags })
-              .eq("id", uid)
-              .then(() => {});
-          }
-          return nextAdTags;
-        });
-      } else {
+      setAdTags((prev) => {
+        const stripped = removedLower.size > 0
+          ? prev.filter((s) => !removedLower.has(s.toLowerCase()))
+          : prev;
+        const prevLower = new Set(stripped.map((s) => s.toLowerCase()));
+        const toAdd = addedItems.filter((l) => !prevLower.has(l.toLowerCase()));
+        const nextAdTags = toAdd.length ? [...stripped, ...toAdd] : stripped;
         if (uid) {
           supabase
             .from("profiles")
-            .update({ event_tags: cleaned })
+            .update({ event_tags: cleaned, ad_tags: nextAdTags })
             .eq("id", uid)
             .then(() => {});
         }
-      }
+        return nextAdTags;
+      });
     },
     [uid, labels]
   );
 
-  // Semantic search: debounce search query + active label → embed → call RPC
+  // Helpers to (re)compute semanticResults from the per-label cache, no API calls needed.
+  const recomputeFromLabelCache = useCallback((labelsToUse) => {
+    const mergedMap = new Map(); // postId → { similarity, label }
+    for (const label of labelsToUse) {
+      for (const r of (perLabelResultsRef.current.get(label) ?? [])) {
+        const id = String(r.id);
+        const existing = mergedMap.get(id);
+        if (!existing || r.similarity > existing.similarity) {
+          mergedMap.set(id, { similarity: r.similarity, label });
+        }
+      }
+    }
+    const merged = Array.from(mergedMap.entries()).map(([id, { similarity }]) => ({ id, similarity }));
+    postLabelMapRef.current = new Map(
+      Array.from(mergedMap.entries()).map(([id, { label }]) => [id, label])
+    );
+    setSemanticResults(merged.length > 0 ? merged : null);
+  }, []);
+
+  // Semantic search: active labels → embed → call RPC.
+  // Results are cached per label so deselecting a label is instant (no API call).
   useEffect(() => {
-    const combined = [searchQuery.trim(), activeLabel].filter(Boolean).join(" ");
+    const combined = [...activeLabels].filter(Boolean).join(" ");
     if (!combined || !uid) {
       setSemanticResults(null);
+      postLabelMapRef.current = new Map();
       return;
     }
+
+    const labelsToSearch = activeLabels.filter((l) => !perLabelResultsRef.current.has(l));
+
+    if (labelsToSearch.length === 0) {
+      recomputeFromLabelCache(activeLabels);
+      return;
+    }
+
+    const searchForLabel = async (label) => {
+      let expansion = LABEL_EXPANSIONS[label];
+      if (expansion === undefined) {
+        if (labelExpansionCache.current[label] !== undefined) {
+          expansion = labelExpansionCache.current[label];
+        } else {
+          const { data: expData } = await supabase.functions.invoke("expand-label", {
+            body: { label },
+          });
+          expansion = expData?.expansion ?? "";
+          labelExpansionCache.current[label] = expansion;
+        }
+      }
+      const expandedQuery = [label, expansion].filter(Boolean).join(" ");
+
+      const [mmResult, textResult] = await Promise.all([
+        supabase.functions.invoke("embed-multimodal", { body: { text: expandedQuery } })
+          .then(({ data }) => data?.embedding
+            ? supabase.rpc("search_community_posts_mm", { uid, query_embedding: data.embedding, radius_m: communityRadiusM, match_count: 60 })
+            : { data: null })
+          .catch(() => ({ data: null })),
+        supabase.functions.invoke("embed-text", { body: { text: expandedQuery } })
+          .then(({ data }) => data?.embedding
+            ? supabase.rpc("search_community_posts", { uid, query_embedding: data.embedding, radius_m: communityRadiusM, match_count: 60 })
+            : { data: null })
+          .catch(() => ({ data: null })),
+      ]);
+
+      const mergedMap = new Map();
+      for (const row of [...(mmResult?.data ?? []), ...(textResult?.data ?? [])]) {
+        const id = String(row.id);
+        if (!mergedMap.has(id) || row.similarity > mergedMap.get(id)) {
+          mergedMap.set(id, row.similarity);
+        }
+      }
+      const merged = Array.from(mergedMap.entries()).map(([id, similarity]) => ({ id, similarity }));
+      return { label, results: merged };
+    };
 
     const timer = setTimeout(async () => {
       setSemanticLoading(true);
       try {
-        const { data: embedData } = await supabase.functions.invoke("embed-text", {
-          body: { text: combined },
-        });
-        if (!embedData?.embedding) {
-          setSemanticResults(null);
-          return;
+        const newPerLabel = await Promise.all(labelsToSearch.map(searchForLabel));
+        for (const { label, results } of newPerLabel) {
+          perLabelResultsRef.current.set(label, results);
         }
-        const { data: results, error: rpcError } = await supabase.rpc("search_community_posts", {
-          uid,
-          query_embedding: embedData.embedding,
-          radius_m: communityRadiusM,
-          match_count: 60,
-        });
-        if (rpcError) {
-          setSemanticResults(null);
-          return;
-        }
-        // Only apply semantic filtering when there are actual results.
-        // Empty results (no embeddings yet, or nothing nearby) fall back to
-        // chronological display so Community never goes blank on a label click.
-        setSemanticResults(Array.isArray(results) && results.length > 0 ? results : null);
+        recomputeFromLabelCache(activeLabels);
       } catch (e) {
         setSemanticResults(null);
+        postLabelMapRef.current = new Map();
       } finally {
         setSemanticLoading(false);
       }
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, activeLabel, uid]);
+  }, [activeLabels, uid, recomputeFromLabelCache]);
+
+  // When a label is active and semantic results arrive, fetch the full post records
+  // for those IDs. This bypasses the nearby_posts limit so all semantically relevant
+  // posts are shown, not just the ones that happened to load in the initial feed.
+  useEffect(() => {
+    if (!activeLabels.length || !semanticResults || semanticResults.length === 0) {
+      setLabelPosts(null);
+      return;
+    }
+    const ids = semanticResults.map((r) => r.id);
+    supabase
+      .from("posts")
+      .select("*")
+      .in("id", ids)
+      .then(({ data }) => { setLabelPosts(data ?? []); })
+      .catch(() => { setLabelPosts([]); });
+  }, [semanticResults, activeLabels]);
 
   // Returns true if any of this ad post's labels match any of the user's ad_tags
   const adMatchesUserTags = useCallback((post, userAdTags) => {
@@ -638,12 +755,15 @@ export default function CommunityScreen() {
   }, []);
 
   const visiblePosts = useMemo(() => {
-    if (!posts.length) return [];
+    // When a label is active, use the fetched semantic posts as the source.
+    // Fall back to the nearby_posts feed while labelPosts is still loading.
+    const sourcePosts = (activeLabels.length > 0 && labelPosts !== null) ? labelPosts : posts;
+    if (!sourcePosts.length) return [];
 
     // Ad-Free: strip all Ad items before any processing so no ad_prompt cards are generated either
     const postsInput = prefs.premiumAdFree
-      ? posts.filter((p) => p.type !== "Ad")
-      : posts;
+      ? sourcePosts.filter((p) => p.type !== "Ad")
+      : sourcePosts;
 
     // Build list in original RPC order; ads become inline prompts when category unknown
     const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
@@ -660,15 +780,33 @@ export default function CommunityScreen() {
       if (type === "Article" && !showLocalNews) return acc;
       if (blockedUsers.length && blockedUsers.includes(asAt(p.user))) return acc;
       // Hide events whose date has already passed, unless end_date is today or future,
-      // or the event repeats every day (shown until deleted by the poster)
-      if (type === "Event" && !p.every_day && p.date && String(p.date).slice(0, 10) < todayStr) {
+      // or the event repeats every day / has specific periodic days (shown until deleted by the poster)
+      if (type === "Event" && !p.every_day && !(p.repeat_days?.length > 0) && p.date && String(p.date).slice(0, 10) < todayStr) {
         const endDate = p.end_date ? String(p.end_date).slice(0, 10) : null;
         if (!endDate || endDate < todayStr) return acc;
       }
 
+      // Location filter: both the post's stored coordinates (where the poster was at creation)
+      // and the event venue (what's displayed in the subtitle) are represented by p.lat/p.lon.
+      // Filter out posts whose venue is outside the user's max-event-distance radius.
+      // Posts with no coordinates (non-geotagged articles, etc.) pass through.
+      if (
+        userLat != null &&
+        userLon != null &&
+        typeof p.lat === "number" &&
+        typeof p.lon === "number" &&
+        haversineKm(userLat, userLon, p.lat, p.lon) * 1000 > communityRadiusM
+      ) return acc;
+
       if (type === "Ad") {
         // Creator always sees their own ad directly
         if (p.author_id && uid && p.author_id === uid) {
+          acc.push(p);
+          return acc;
+        }
+        // When labels are active, ads in labelPosts already passed semantic similarity —
+        // show them directly instead of going through the ad_tags gate.
+        if (activeLabels.length > 0 && labelPosts !== null) {
           acc.push(p);
           return acc;
         }
@@ -702,25 +840,12 @@ export default function CommunityScreen() {
       return acc;
     }, []);
 
-    if (selectedDate || timeFilter) {
+    if (selectedDate) {
       out = out.filter((p) => {
-        if (p.type === "ad_prompt") return true; // keep prompts through date/time filter
+        if (p.type === "ad_prompt") return true;
         const type = String(p.type);
         if (type !== "Event") return false;
-
-        if (selectedDate) {
-          if (String(p.date).slice(0, 10) !== selectedDate) return false;
-        }
-
-        if (timeFilter) {
-          const h = parseInt(String(p.time || "").split(":")[0], 10);
-          if (Number.isNaN(h)) return false;
-
-          if (timeFilter === "morning") return h >= 6 && h < 12;
-          if (timeFilter === "afternoon") return h >= 12 && h < 20;
-          if (timeFilter === "night") return h >= 20 || h < 6;
-        }
-
+        if (String(p.date).slice(0, 10) !== selectedDate) return false;
         return true;
       });
     }
@@ -728,9 +853,37 @@ export default function CommunityScreen() {
     if (semanticResults !== null) {
       // Semantic search active: filter + rank by embedding similarity
       const simMap = new Map(semanticResults.map((r) => [String(r.id), r.similarity]));
-      const SIM_THRESHOLD = 0.25;
+      const SIM_THRESHOLD = 0.35;
+
+      // Secondary keyword check for user-created labels (e.g. "Jazz", "Pizza").
+      // Uses the full expansion (from the expand-label edge function) so sibling
+      // sub-categories are filtered without over-restricting results.
+      // Base labels skip this check — their similarity score is sufficient.
+      const labelKeywordSets = new Map(); // label → Set<string>
+      for (const label of activeLabels) {
+        if (label in LABEL_EXPANSIONS) continue; // base labels: trust similarity alone
+        const expansion = labelExpansionCache.current[label] ?? "";
+        const terms = [label, ...expansion.split(/[\s,]+/)]
+          .map((s) => s.toLowerCase().trim())
+          .filter((s) => s.length > 2);
+        labelKeywordSets.set(label, new Set(terms));
+      }
+      const passesKeywordCheck = (p) => {
+        if (activeLabels.length === 0) return true;
+        const matchedLabel = postLabelMapRef.current.get(String(p.id));
+        const keyTerms = matchedLabel ? labelKeywordSets.get(matchedLabel) : null;
+        if (!keyTerms || keyTerms.size === 0) return true; // base label or unknown → pass
+        const haystack = [p.ai_caption, p.title, p.description]
+          .filter(Boolean).join(" ").toLowerCase();
+        return [...keyTerms].some((t) => haystack.includes(t));
+      };
+
       out = out
-        .filter((p) => p.type === "ad_prompt" || (simMap.has(String(p.id)) && simMap.get(String(p.id)) >= SIM_THRESHOLD))
+        .filter((p) => p.type === "ad_prompt" || (
+          simMap.has(String(p.id)) &&
+          simMap.get(String(p.id)) >= SIM_THRESHOLD &&
+          passesKeywordCheck(p)
+        ))
         .sort((a, b) => {
           if (a.type === "ad_prompt") return -1;
           if (b.type === "ad_prompt") return 1;
@@ -789,14 +942,18 @@ export default function CommunityScreen() {
     showLocalNews,
     blockedUsers,
     selectedDate,
-    timeFilter,
     semanticResults,
+    labelPosts,
+    activeLabels,
     showFollowedPosts,
     followedUserIds,
     followedUsernames,
     adMatchesUserTags,
     prefs.premiumAdFree,
     uid,
+    userLat,
+    userLon,
+    communityRadiusM,
   ]);
 
   const dateLabel = selectedDate
@@ -804,16 +961,7 @@ export default function CommunityScreen() {
         day: "2-digit",
         month: "short",
       })
-    : t("filter_any_date");
-
-  const timeLabel =
-    timeFilter === "morning"
-      ? t("filter_morning_range")
-      : timeFilter === "afternoon"
-      ? t("filter_afternoon_range")
-      : timeFilter === "night"
-      ? t("filter_night_range")
-      : t("filter_any_time");
+    : t("filter_date");
 
   const handleDateChange = (event, date) => {
     if (!date) return;
@@ -831,17 +979,59 @@ export default function CommunityScreen() {
     fetchNearbyPosts();
   };
 
-  const clearTime = () => {
-    setTimeFilter(null);
-    setShowTimeDropdown(false);
-    scrollToTop();
-    fetchNearbyPosts();
-  };
-
   const clearSearch = () => {
     setSearchQuery("");
+    setCommunitySearchUsers([]);
+    setCommunitySearchPosts([]);
     scrollToTop();
   };
+
+  // Text search for the community dropdown: profiles + posts
+  useEffect(() => {
+    const term = searchQuery.trim();
+    if (!term || !uid) {
+      setCommunitySearchUsers([]);
+      setCommunitySearchPosts([]);
+      setCommunitySearchLoading(false);
+      return;
+    }
+
+    setCommunitySearchLoading(true);
+    setCommunitySearchPostsVisible(2);
+    setCommunitySearchUsersVisible(2);
+    const safeTerm = term.replace(/%/g, "");
+
+    const timer = setTimeout(async () => {
+      try {
+        const [usersRes, postsRes] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select("id, username, name, avatar_url")
+            .or(`username.ilike.%${safeTerm}%,name.ilike.%${safeTerm}%`)
+            .not("username", "is", null)
+            .neq("id", uid)
+            .limit(8),
+          supabase
+            .from("posts")
+            .select("id, title, description, type, date, author_id")
+            .or(`title.ilike.%${safeTerm}%,description.ilike.%${safeTerm}%`)
+            .in("type", ["Event", "Ad", "Article"])
+            .or(`type.neq.Event,date.gte.${new Date().toISOString().slice(0, 10)}`)
+            .order("date", { ascending: false })
+            .limit(10),
+        ]);
+        setCommunitySearchUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+        setCommunitySearchPosts(Array.isArray(postsRes.data) ? postsRes.data : []);
+      } catch {
+        setCommunitySearchUsers([]);
+        setCommunitySearchPosts([]);
+      } finally {
+        setCommunitySearchLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, uid]);
 
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 90,
@@ -858,9 +1048,15 @@ export default function CommunityScreen() {
     if (item.type === "ad_prompt") return null; // kept in FlatList renderItem below
     const isActive = String(item.id) === String(activePostId);
     const matchLabel =
-      activeLabel && semanticResults !== null
-        ? semanticResults.some((r) => String(r.id) === String(item.id) && r.similarity >= 0.25)
+      activeLabels.length > 0 && semanticResults !== null
+        ? semanticResults.some((r) => String(r.id) === String(item.id) && r.similarity >= 0.20)
         : false;
+    const matchedLabelName = matchLabel
+      ? (postLabelMapRef.current.get(String(item.id)) ?? activeLabels[0])
+      : null;
+    const matchedLabelColor = matchedLabelName
+      ? LABEL_COLORS[labels.indexOf(matchedLabelName) % LABEL_COLORS.length]
+      : null;
     const isFirst = index === 0;
     const ovOk =
       isFirst &&
@@ -882,18 +1078,14 @@ export default function CommunityScreen() {
           onToggleSave={toggleSave}
           onDeleted={handlePostDeleted}
           onToggleHidden={handlePostHidden}
-          labelTag={matchLabel ? activeLabel : null}
-          labelColor={
-            activeLabel
-              ? LABEL_COLORS[labels.indexOf(activeLabel)] || LABEL_COLORS[LABEL_COLORS.length - 1]
-              : null
-          }
+          labelTag={matchedLabelName}
+          labelColor={matchedLabelColor}
           isActive={isActive}
           colors={["#56d1f0", "#00a4e6", "#60affe"]}
         />
       </ThemedView>
     );
-  }, [activePostId, savedMeta, firstPostOverride, activeLabel, semanticResults, labels, toggleSave, handlePostDeleted, handlePostHidden]);
+  }, [activePostId, savedMeta, firstPostOverride, activeLabels, semanticResults, labels, toggleSave, handlePostDeleted, handlePostHidden]);
 
   return (
     <ThemedView
@@ -953,6 +1145,7 @@ export default function CommunityScreen() {
         onRefresh={handleRefresh}
         refreshing={refreshing}
         removeClippedSubviews
+        keyboardShouldPersistTaps="handled"
         windowSize={3}
         maxToRenderPerBatch={3}
         initialNumToRender={3}
@@ -975,10 +1168,12 @@ export default function CommunityScreen() {
             <LabelsCard
               labels={labels}
               colors={LABEL_COLORS}
-              activeLabel={activeLabel}
+              activeLabels={activeLabels}
               loading={semanticLoading}
               onSelect={(name) => {
-                setActiveLabel((prev) => (prev === name ? null : name));
+                setActiveLabels((prev) =>
+                  prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]
+                );
                 scrollToTop();
               }}
               onChangeLabels={handleChangeLabels}
@@ -986,96 +1181,76 @@ export default function CommunityScreen() {
 
             <View style={styles.filtersContainer}>
               <View style={styles.filterRow}>
+                {/* Date chip */}
                 <TouchableOpacity
                   style={[
                     styles.filterChip,
-                    isDark
-                      ? { backgroundColor: theme.gray, borderColor: "#FFFFFF" }
-                      : {
-                          backgroundColor: "#FFFFFF",
-                          borderColor: "#d9e4f3",
-                        },
+                    selectedDate
+                      ? { backgroundColor: "#2F91FF", borderColor: "transparent" }
+                      : isDark
+                        ? { backgroundColor: "#555", borderColor: "transparent" }
+                        : { backgroundColor: "#FFFFFF", borderColor: "#d9e4f3" },
                   ]}
-                  onPress={() => {
-                    setShowDateDropdown((p) => !p);
-                    setShowTimeDropdown(false);
-                  }}
+                  onPress={() => setShowDateDropdown((p) => !p)}
                   activeOpacity={0.8}
                 >
                   <Feather
                     name="calendar"
                     size={16}
-                    color="#2F91FF"
+                    color={selectedDate ? "#FFFFFF" : (isDark ? "#FFFFFF" : "#2F91FF")}
                     style={{ marginRight: 6 }}
                   />
-                  <Text
-                    style={[
-                      styles.filterText,
-                      { color: isDark ? "#FFFFFF" : "#111111" },
-                    ]}
-                  >
+                  <Text style={[styles.filterText, { color: selectedDate ? "#FFFFFF" : (isDark ? "rgba(255,255,255,0.7)" : "#111111") }]}>
                     {dateLabel}
                   </Text>
-
                   {selectedDate && (
                     <TouchableOpacity
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        clearDate();
-                      }}
+                      onPress={(e) => { e.stopPropagation(); clearDate(); }}
                       style={{ paddingHorizontal: 4 }}
                     >
-                      <Text
-                        style={[
-                          styles.filterClear,
-                          { color: isDark ? "#E0E0E0" : "#9aa6b6" },
-                        ]}
-                      >
-                        ×
-                      </Text>
+                      <Text style={[styles.filterClear, { color: "rgba(255,255,255,0.8)" }]}>×</Text>
                     </TouchableOpacity>
                   )}
                 </TouchableOpacity>
 
-                <TouchableOpacity
+                {/* Search bar */}
+                <View
                   style={[
-                    styles.filterChip,
-                    { flex: 1 },
-                    isDark
-                      ? { backgroundColor: theme.gray, borderColor: "#FFFFFF" }
-                      : {
-                          backgroundColor: "#FFFFFF",
-                          borderColor: "#d9e4f3",
-                        },
+                    styles.searchBarContainer,
+                    {
+                      backgroundColor: isDark ? "#555" : "#FFFFFF",
+                      borderColor: isDark ? "transparent" : "#d9e4f3",
+                      borderWidth: isDark ? 0 : StyleSheet.hairlineWidth,
+                    },
                   ]}
-                  onPress={() => {
-                    setShowTimeDropdown((p) => !p);
-                    setShowDateDropdown(false);
-                  }}
-                  onLongPress={clearTime}
-                  activeOpacity={0.8}
                 >
                   <Feather
-                    name="clock"
+                    name="search"
                     size={16}
-                    color="#2F91FF"
+                    color={isDark ? "#FFFFFF" : "#2F91FF"}
                     style={{ marginRight: 6 }}
                   />
-                  <Text
+                  <TextInput
                     style={[
-                      styles.filterText,
-                      { color: isDark ? "#FFFFFF" : "#111111" },
+                      styles.searchInput,
+                      { color: isDark ? "#FFFFFF" : "#111111"},
                     ]}
-                  >
-                    {timeLabel}
-                  </Text>
-                  <Feather
-                    name={showTimeDropdown ? "chevron-up" : "chevron-down"}
-                    size={14}
-                    color={isDark ? "#FFFFFF" : "#6F7D95"}
-                    style={{ marginLeft: 4 }}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder={language === "it" ? "Cerca eventi e utenti" : "Search events and users"}
+                    placeholderTextColor={isDark ? "rgba(255,255,255,0.7)" : "#111111"}
+                    returnKeyType="search"
                   />
-                </TouchableOpacity>
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={clearSearch} hitSlop={8}>
+                      <Feather
+                        name="x"
+                        size={16}
+                        color={isDark ? "#9fb0c6" : "#6F7D95"}
+                      />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
 
               {showDateDropdown && (
@@ -1098,83 +1273,96 @@ export default function CommunityScreen() {
                 </View>
               )}
 
-              {showTimeDropdown && (
-                <ThemedView
-                  style={[
-                    styles.timeDropdown,
-                    {
-                      backgroundColor: isDark ? theme.gray : "#FFFFFF",
-                      borderColor: isDark ? "#FFFFFF" : "#d9e4f3",
-                    },
-                  ]}
-                >
-                  {[
-                    { key: null, label: t("filter_any_time") },
-                    { key: "morning", label: t("filter_morning_range") },
-                    { key: "afternoon", label: t("filter_afternoon_range") },
-                    { key: "night", label: t("filter_night_range") },
-                  ].map((opt) => (
-                    <TouchableOpacity
-                      key={String(opt.key)}
-                      style={styles.timeOption}
-                      onPress={() => {
-                        setTimeFilter(opt.key);
-                        setShowTimeDropdown(false);
-                        scrollToTop();
-                        fetchNearbyPosts();
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.timeOptionText,
-                          { color: isDark ? "#FFFFFF" : "#111111" },
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ThemedView>
+              {/* Community search dropdown */}
+              {searchQuery.trim().length > 0 && (
+                <View style={[styles.communitySearchDropdown, {
+                  backgroundColor: isDark ? theme.gray : "#FFFFFF",
+                  borderColor: isDark ? "#333" : "#d9e4f3",
+                }]}>
+                  {communitySearchLoading ? (
+                    <View style={{ paddingVertical: 14, alignItems: "center" }}>
+                      <ActivityIndicator size="small" color="#2F91FF" />
+                    </View>
+                  ) : (communitySearchUsers.length === 0 && communitySearchPosts.length === 0) ? (
+                    <Text style={{ fontFamily: "Poppins", fontSize: 13, color: isDark ? "#aaa" : "#888", textAlign: "center", paddingVertical: 12 }}>
+                      {language === "it" ? "Nessun risultato" : "No results"}
+                    </Text>
+                  ) : (
+                    <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 300 }}>
+                      {/* Events & Posts — shown first */}
+                      {communitySearchPosts.length > 0 && (
+                        <>
+                          <Text style={[styles.communitySearchSection, { color: isDark ? "#aaa" : "#888" }]}>
+                            {language === "it" ? "Eventi e post" : "Events & Posts"}
+                          </Text>
+                          {communitySearchPosts.slice(0, communitySearchPostsVisible).map((post) => {
+                            const postTitle = post.title || (post.description ? post.description.slice(0, 50) : null) || "Untitled";
+                            return (
+                              <View key={String(post.id)} style={[styles.communitySearchRow, { borderBottomColor: isDark ? "#333" : "#eee" }]}>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={{ fontFamily: "Poppins", fontSize: 14, color: isDark ? "#fff" : "#111" }} numberOfLines={1}>{postTitle}</Text>
+                                  <Text style={{ fontFamily: "Poppins", fontSize: 12, color: isDark ? "#aaa" : "#888" }}>
+                                    {post.type}{post.date ? ` · ${formatSearchDate(post.date)}` : ""}
+                                  </Text>
+                                </View>
+                                <TouchableOpacity style={styles.communitySearchBtn} onPress={() => navigation.navigate("SinglePost", { postId: post.id })}>
+                                  <Feather name="arrow-right" size={15} color="#59A7FF" />
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          })}
+                          {communitySearchPostsVisible < communitySearchPosts.length && (
+                            <TouchableOpacity
+                              style={styles.communitySearchMore}
+                              onPress={() => setCommunitySearchPostsVisible((v) => v + 3)}
+                            >
+                              <Text style={[styles.communitySearchMoreText, { color: isDark ? "#59A7FF" : "#2F91FF" }]}>More</Text>
+                            </TouchableOpacity>
+                          )}
+                        </>
+                      )}
+                      {/* People — shown second */}
+                      {communitySearchUsers.length > 0 && (
+                        <>
+                          <Text style={[styles.communitySearchSection, { color: isDark ? "#aaa" : "#888", marginTop: communitySearchPosts.length > 0 ? 8 : 0 }]}>
+                            {language === "it" ? "Utenti" : "People"}
+                          </Text>
+                          {communitySearchUsers.slice(0, communitySearchUsersVisible).map((user) => {
+                            const displayName = user.name || user.username || "User";
+                            return (
+                              <View key={user.id} style={[styles.communitySearchRow, { borderBottomColor: isDark ? "#333" : "#eee" }]}>
+                                {user.avatar_url ? (
+                                  <Image source={{ uri: user.avatar_url }} style={styles.communitySearchAvatar} />
+                                ) : (
+                                  <View style={[styles.communitySearchAvatar, { backgroundColor: isDark ? "#444" : "#d9e4f3", alignItems: "center", justifyContent: "center" }]}>
+                                    <Text style={{ fontFamily: "Poppins", fontSize: 14, color: isDark ? "#fff" : "#555" }}>{displayName[0]?.toUpperCase() || "?"}</Text>
+                                  </View>
+                                )}
+                                <View style={{ flex: 1 }}>
+                                  <Text style={{ fontFamily: "Poppins", fontSize: 14, color: isDark ? "#fff" : "#111" }} numberOfLines={1}>{displayName}</Text>
+                                  {!!user.username && <Text style={{ fontFamily: "Poppins", fontSize: 12, color: isDark ? "#aaa" : "#888" }}>@{user.username}</Text>}
+                                </View>
+                                <TouchableOpacity style={styles.communitySearchBtn} onPress={() => navigation.navigate("Profile", { username: user.username })}>
+                                  <Feather name="user" size={15} color="#59A7FF" />
+                                </TouchableOpacity>
+                              </View>
+                            );
+                          })}
+                          {communitySearchUsersVisible < communitySearchUsers.length && (
+                            <TouchableOpacity
+                              style={styles.communitySearchMore}
+                              onPress={() => setCommunitySearchUsersVisible((v) => v + 3)}
+                            >
+                              <Text style={[styles.communitySearchMoreText, { color: isDark ? "#59A7FF" : "#2F91FF" }]}>More</Text>
+                            </TouchableOpacity>
+                          )}
+                        </>
+                      )}
+                    </ScrollView>
+                  )}
+                </View>
               )}
 
-              <View
-                style={[
-                  styles.searchBarContainer,
-                  {
-                    backgroundColor: isDark ? theme.gray : "#FFFFFF",
-                    borderColor: isDark ? "#FFFFFF" : "#d9e4f3",
-                    borderWidth: 1,
-                  },
-                ]}
-              >
-                <Feather
-                  name="search"
-                  size={16}
-                  color="#2F91FF"
-                  style={{ marginRight: 6 }}
-                />
-                <TextInput
-                  style={[
-                    styles.searchInput,
-                    { color: isDark ? "#FFFFFF" : "#111111"},
-                  ]}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder={language === "it" ? "Cerca eventi" : "Search events"}
-                  placeholderTextColor={isDark ? "#FFFFFF" : "#111111"}
-                  returnKeyType="search"
-                />
-
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={clearSearch} hitSlop={8}>
-                    <Feather
-                      name="x"
-                      size={16}
-                      color={isDark ? "#9fb0c6" : "#6F7D95"}
-                    />
-                  </TouchableOpacity>
-                )}
-              </View>
             </View>
           </View>
         }
@@ -1328,7 +1516,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 999,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
@@ -1347,46 +1535,83 @@ const styles = StyleSheet.create({
     top: "100%",
     paddingTop: 4,
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     zIndex: 40,
     paddingLeft: 5,
     paddingRight: 5,
     fontFamily: "Poppins",
   },
 
-  timeDropdown: {
-    position: "absolute",
-    top: "100%",
-    right: 0,
-    paddingTop: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    zIndex: 40,
-  },
-  timeOption: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  timeOptionText: {
-    fontSize: 13,
-    fontFamily: "Poppins",
-  },
-
   searchBarContainer: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 10,
     borderRadius: 999,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 10,
-    paddingVertical: 6,    
-    fontFamily: "Poppins",
+    paddingVertical: 6,
   },
   searchInput: {
     flex: 1,
     fontSize: 13,
-    paddingVertical: 0,    
+    paddingVertical: 0,
     fontFamily: "Poppins",
+    letterSpacing: 0,
+  },
+
+  communitySearchDropdown: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    marginTop: 4,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    zIndex: 40,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 8,
+  },
+  communitySearchSection: {
+    fontFamily: "Poppins",
+    fontSize: 11,
+    paddingHorizontal: 2,
+    paddingBottom: 2,
+    paddingTop: 2,
+  },
+  communitySearchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  communitySearchAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    marginRight: 10,
+  },
+  communitySearchBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: "#59A7FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
+  },
+  communitySearchMore: {
+    paddingVertical: 7,
+    alignItems: "center",
+  },
+  communitySearchMoreText: {
+    fontFamily: "Poppins",
+    fontSize: 13,
   },
 
   noEventsText: {
@@ -1404,7 +1629,7 @@ const styles = StyleSheet.create({
     bottom: Platform.OS === "android" ? 104 : 86,
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
     zIndex: 999,

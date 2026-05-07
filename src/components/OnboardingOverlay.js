@@ -12,6 +12,8 @@ import {
 import { Feather } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../lib/supabase";
+import { useGuest } from "../theme/GuestContext";
+import { useAlbaLanguage } from "../theme/LanguageContext";
 
 // ── TESTING FLAG ──────────────────────────────────────────────────────────────
 // Set to true during QA to show the overlay on every launch.
@@ -42,41 +44,30 @@ const CONTENT = {
 const storageKey = (screenKey) => `onboarding_seen_${screenKey}`;
 
 export default function OnboardingOverlay({ screenKey }) {
+  const { isGuest } = useGuest();
+  const { t } = useAlbaLanguage();
   // Start visible immediately when always-show is on — no useEffect round-trip needed.
   const [visible, setVisible] = useState(ALWAYS_SHOW_ONBOARDING);
 
   useEffect(() => {
-    if (ALWAYS_SHOW_ONBOARDING) return; // already visible from initial state
+    if (ALWAYS_SHOW_ONBOARDING) return;
 
     let cancelled = false;
 
     async function check() {
-
-      // Fast local check first
+      // Don't show again if already dismissed on this device
       try {
         const local = await AsyncStorage.getItem(storageKey(screenKey));
         if (local) return;
       } catch {}
 
-      // DB check
+      // Only show for freshly created accounts (< 1 hour old)
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) {
-          if (!cancelled) setVisible(true);
-          return;
-        }
-        const { data } = await supabase
-          .from("onboarding_seen")
-          .select("id")
-          .eq("user_id", user.id)
-          .eq("screen_key", screenKey)
-          .maybeSingle();
-        if (!data && !cancelled) setVisible(true);
-      } catch {
-        if (!cancelled) setVisible(true);
-      }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const accountAgeMs = Date.now() - new Date(user.created_at).getTime();
+        if (accountAgeMs < 60 * 60 * 1000 && !cancelled) setVisible(true);
+      } catch {}
     }
 
     check();
@@ -86,26 +77,13 @@ export default function OnboardingOverlay({ screenKey }) {
   async function handleClose() {
     setVisible(false);
     if (ALWAYS_SHOW_ONBOARDING) return;
-
-    // Persist locally
+    // Remember dismissal locally so it never shows again on this device
     AsyncStorage.setItem(storageKey(screenKey), "1").catch(() => {});
-
-    // Persist to DB (best-effort)
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-      await supabase
-        .from("onboarding_seen")
-        .upsert(
-          { user_id: user.id, screen_key: screenKey },
-          { onConflict: "user_id,screen_key" }
-        );
-    } catch {}
   }
 
-  const content = CONTENT[screenKey];
+  const content = (isGuest && screenKey === "community")
+    ? { title: t("guest_welcome_title") || "Welcome to Alba!", body: t("guest_welcome_body") || "You can access the ticket by clicking on the small purple ticket button on the bottom right. If you like Alba, go to Settings and set up your account!" }
+    : CONTENT[screenKey];
   if (!content) return null;
 
   return (
