@@ -18,7 +18,7 @@ export default {
   expo: {
     name: "Alba",
     slug: "Alba",
-    version: "1.2.2",
+    version: "1.4.2",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",
@@ -77,6 +77,11 @@ export default {
       edgeToEdgeEnabled: true,
       package: "com.alba.app",
       googleServicesFile: process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
+      config: {
+        googleMaps: {
+          apiKey: process.env.GOOGLE_MAPS_ANDROID_KEY ?? "",
+        },
+      },
       // Reversed Android OAuth client ID — required so expo-auth-session can
       // register a custom-scheme redirect handler that Google recognises.
       // This is the Android equivalent of CFBundleURLSchemes on iOS.
